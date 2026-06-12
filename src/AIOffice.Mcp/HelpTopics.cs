@@ -33,9 +33,10 @@ public static class HelpTopics
             ["addressing"] = (
                 """
                 ## Addressing grammar (1-based indices everywhere)
-                docx:  /body/p[3]   /body/table[1]/tr[2]/tc[1]   /body/p[3]/run[2]   /header[1]/p[1]
-                xlsx:  /Sheet1/A1   /Sheet1/A1:C10   /Sheet1/row[3]   sheet names with spaces or specials are quoted: /'Q3 Data'/B2 (escape ' as '')
-                pptx:  /slide[2]   /slide[2]/shape[3]   /slide[2]/shape[3]/p[1]   (master/layout addressing is reserved for M1)
+                docx:  /body/p[3]   /body/table[1]/tr[2]/tc[1]   /body/p[3]/run[2]   /header[1]/p[1]   /footer[1]/p[1]
+                xlsx:  /Sheet1/A1   /Sheet1/A1:C10   /Sheet1/row[3]   /Sheet1/chart[1]   sheet names with spaces or specials are quoted: /'Q3 Data'/B2 (escape ' as '')
+                pptx:  /slide[2]   /slide[2]/shape[3]   /slide[2]/shape[@id=7] (stable-id form, canonical in results)   /slide[2]/shape[3]/p[1]
+                       /master[1]   /master[1]/layout[2]   /master[1]/shape[1]   (masters/layouts are read-only: get/query; editing them is M2)
                 "/" alone addresses document-level properties (office_get and office_edit set only).
                 office_query returns canonical paths; office_get / office_edit accept them verbatim.
                 Positional indices DRIFT after inserts/removes — re-run office_query instead of reusing old indices.

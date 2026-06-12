@@ -11,9 +11,10 @@ internal sealed record ResolvedNode(OpenXmlElement Element, string CanonicalPath
 
 /// <summary>
 /// Resolves the docx addressing grammar (/body/p[3], /body/table[1]/tr[2]/tc[1],
-/// /body/p[3]/run[2], /header[1]/p[1]) against a live document, and enumerates
-/// all addressable nodes with their canonical paths (the query backbone).
-/// Every resolution failure is <c>invalid_path</c> WITH nearest-match candidates.
+/// /body/p[3]/run[2], /header[1]/p[1], /footer[1]/p[1]) against a live document,
+/// and enumerates all addressable nodes with their canonical paths (the query
+/// backbone). Every resolution failure is <c>invalid_path</c> WITH nearest-match
+/// candidates.
 /// </summary>
 internal static class WordAddress
 {
@@ -22,6 +23,7 @@ internal static class WordAddress
     {
         ["body"] = ["p", "table"],
         ["header"] = ["p", "table"],
+        ["footer"] = ["p", "table"],
         ["p"] = ["run"],
         ["table"] = ["tr"],
         ["tr"] = ["tc"],
@@ -46,7 +48,7 @@ internal static class WordAddress
     {
         if (root.Kind != PathSegmentKind.Element)
         {
-            throw Invalid($"A docx path starts with /body or /header[n], not '{root.ToCanonicalString()}'.", RootCandidates(doc));
+            throw Invalid($"A docx path starts with /body, /header[n] or /footer[n], not '{root.ToCanonicalString()}'.", RootCandidates(doc));
         }
 
         switch (root.Name)
@@ -65,14 +67,17 @@ internal static class WordAddress
                 var index = root.Index ?? 1;
                 if (headers.Count == 0)
                 {
-                    throw Invalid("This document has no headers.", ["/body"]);
+                    throw Invalid(
+                        "This document has no headers. Create one with " +
+                        "{\"op\":\"add\",\"path\":\"/header[1]\",\"type\":\"header\",\"props\":{\"text\":\"…\"}}.",
+                        ["/body"]);
                 }
 
                 if (index > headers.Count)
                 {
                     throw Invalid(
                         $"/header[{index}] does not exist; the document has {headers.Count} header(s).",
-                        [.. Enumerable.Range(1, headers.Count).Select(n => Canon("/header", "header", n))]);
+                        [.. Enumerable.Range(1, headers.Count).Select(n => Canon(string.Empty, "header", n))]);
                 }
 
                 var header = headers[index - 1].Header ?? throw new AiofficeException(
@@ -82,8 +87,34 @@ internal static class WordAddress
                 return (header, $"/header[{index}]", "header");
             }
 
+            case "footer":
+            {
+                var footers = doc.MainDocumentPart?.FooterParts.ToList() ?? [];
+                var index = root.Index ?? 1;
+                if (footers.Count == 0)
+                {
+                    throw Invalid(
+                        "This document has no footers. Create one with " +
+                        "{\"op\":\"add\",\"path\":\"/footer[1]\",\"type\":\"footer\",\"props\":{\"text\":\"…\"}}.",
+                        ["/body"]);
+                }
+
+                if (index > footers.Count)
+                {
+                    throw Invalid(
+                        $"/footer[{index}] does not exist; the document has {footers.Count} footer(s).",
+                        [.. Enumerable.Range(1, footers.Count).Select(n => Canon(string.Empty, "footer", n))]);
+                }
+
+                var footer = footers[index - 1].Footer ?? throw new AiofficeException(
+                    ErrorCodes.FormatCorrupt,
+                    $"/footer[{index}] exists but its part is empty.",
+                    "Re-export the file from Word, or address /body instead.");
+                return (footer, $"/footer[{index}]", "footer");
+            }
+
             default:
-                throw Invalid($"Unknown docx root '{root.ToCanonicalString()}'; paths start at /body or /header[n].", RootCandidates(doc));
+                throw Invalid($"Unknown docx root '{root.ToCanonicalString()}'; paths start at /body, /header[n] or /footer[n].", RootCandidates(doc));
         }
     }
 
@@ -145,10 +176,14 @@ internal static class WordAddress
     private static IReadOnlyList<string> RootCandidates(WordprocessingDocument doc)
     {
         var candidates = new List<string> { "/body" };
-        var headerCount = doc.MainDocumentPart?.HeaderParts.Count() ?? 0;
-        if (headerCount > 0)
+        if (doc.MainDocumentPart?.HeaderParts.Any() == true)
         {
             candidates.Add("/header[1]");
+        }
+
+        if (doc.MainDocumentPart?.FooterParts.Any() == true)
+        {
+            candidates.Add("/footer[1]");
         }
 
         return candidates;
@@ -197,6 +232,56 @@ internal static class WordAddress
         foreach (var node in EnumerateContainer(body, "/body"))
         {
             yield return node;
+        }
+    }
+
+    /// <summary>
+    /// The header and footer roots of a document, with canonical paths
+    /// (/header[i], /footer[i]) in part order — the same order Resolve uses.
+    /// </summary>
+    public static IEnumerable<ResolvedNode> HeaderFooterRoots(WordprocessingDocument doc)
+    {
+        var headerIndex = 0;
+        foreach (var part in doc.MainDocumentPart?.HeaderParts ?? [])
+        {
+            headerIndex++;
+            if (part.Header is { } header)
+            {
+                yield return new ResolvedNode(header, Canon(string.Empty, "header", headerIndex), "header");
+            }
+        }
+
+        var footerIndex = 0;
+        foreach (var part in doc.MainDocumentPart?.FooterParts ?? [])
+        {
+            footerIndex++;
+            if (part.Footer is { } footer)
+            {
+                yield return new ResolvedNode(footer, Canon(string.Empty, "footer", footerIndex), "footer");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every addressable node in the document: body content first, then the
+    /// content of each header and footer under its /header[i] | /footer[i] path.
+    /// </summary>
+    public static IEnumerable<ResolvedNode> EnumerateAll(WordprocessingDocument doc)
+    {
+        if (doc.MainDocumentPart?.Document?.Body is { } body)
+        {
+            foreach (var node in EnumerateBody(body))
+            {
+                yield return node;
+            }
+        }
+
+        foreach (var root in HeaderFooterRoots(doc))
+        {
+            foreach (var node in EnumerateContainer(root.Element, root.CanonicalPath))
+            {
+                yield return node;
+            }
         }
     }
 

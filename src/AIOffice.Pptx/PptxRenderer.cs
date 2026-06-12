@@ -39,6 +39,11 @@ internal static class PptxRenderer
         return svg.ToString();
     }
 
+    /// <summary>
+    /// Emits one shape wrapped in a group carrying the data-aio-path render
+    /// contract: a browser click on any child maps back to the canonical
+    /// stable-id document path.
+    /// </summary>
     private static void AppendShape(StringBuilder svg, ShapeView shape, int slideIndex)
     {
         var geometry = PptxDoc.Geometry(shape.Element) ?? new GeometryEmu(0, 0, Units.CmToEmu(4), Units.CmToEmu(1.5));
@@ -49,42 +54,42 @@ internal static class PptxRenderer
         var fill = PptxDoc.FillHex(shape.Element);
         var dash = shape.Kind == "shape" ? string.Empty : " stroke-dasharray=\"4 3\"";
 
-        svg.Append(Units.Inv($"  <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
-        svg.Append(Units.Inv($"fill=\"{(fill is null ? "none" : "#" + fill)}\" stroke=\"#999999\"{dash} "));
-        svg.Append(Units.Inv($"data-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\"/>\n"));
+        svg.Append(Units.Inv($"  <g data-aio-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\">\n"));
+        svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
+        svg.Append(Units.Inv($"fill=\"{(fill is null ? "none" : "#" + fill)}\" stroke=\"#999999\"{dash}/>\n"));
 
-        if (shape.Element is not P.Shape textShape || textShape.TextBody is null)
+        if (shape.Element is P.Shape { TextBody: { } textBody })
         {
-            return;
-        }
-
-        var cursorY = y + 4;
-        foreach (var paragraph in textShape.TextBody.Elements<A.Paragraph>())
-        {
-            var text = PptxDoc.ParagraphText(paragraph);
-            var runProperties = paragraph.Elements<A.Run>().FirstOrDefault()?.RunProperties;
-            var fontPt = runProperties?.FontSize?.Value is { } size ? size / 100.0 : DefaultFontPt;
-            var fontPx = fontPt * 4.0 / 3.0;
-            var bold = runProperties?.Bold?.Value == true;
-            var color = runProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value ?? "111111";
-
-            var alignment = paragraph.ParagraphProperties?.Alignment;
-            var (anchor, textX) = alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Center
-                ? ("middle", x + (w / 2))
-                : alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Right
-                    ? ("end", x + w - 6)
-                    : ("start", x + 6);
-
-            var baseline = cursorY + fontPx;
-            if (text.Length > 0)
+            var cursorY = y + 4;
+            foreach (var paragraph in textBody.Elements<A.Paragraph>())
             {
-                svg.Append(Units.Inv($"  <text x=\"{textX:0.#}\" y=\"{baseline:0.#}\" font-size=\"{fontPx:0.#}\" "));
-                svg.Append(Units.Inv($"text-anchor=\"{anchor}\"{(bold ? " font-weight=\"bold\"" : string.Empty)} "));
-                svg.Append(Units.Inv($"fill=\"#{color}\">{Escape(text.Replace('\n', ' '))}</text>\n"));
-            }
+                var text = PptxDoc.ParagraphText(paragraph);
+                var runProperties = paragraph.Elements<A.Run>().FirstOrDefault()?.RunProperties;
+                var fontPt = runProperties?.FontSize?.Value is { } size ? size / 100.0 : DefaultFontPt;
+                var fontPx = fontPt * 4.0 / 3.0;
+                var bold = runProperties?.Bold?.Value == true;
+                var color = runProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value ?? "111111";
 
-            cursorY += fontPx * 1.35;
+                var alignment = paragraph.ParagraphProperties?.Alignment;
+                var (anchor, textX) = alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Center
+                    ? ("middle", x + (w / 2))
+                    : alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Right
+                        ? ("end", x + w - 6)
+                        : ("start", x + 6);
+
+                var baseline = cursorY + fontPx;
+                if (text.Length > 0)
+                {
+                    svg.Append(Units.Inv($"    <text x=\"{textX:0.#}\" y=\"{baseline:0.#}\" font-size=\"{fontPx:0.#}\" "));
+                    svg.Append(Units.Inv($"text-anchor=\"{anchor}\"{(bold ? " font-weight=\"bold\"" : string.Empty)} "));
+                    svg.Append(Units.Inv($"fill=\"#{color}\">{Escape(text.Replace('\n', ' '))}</text>\n"));
+                }
+
+                cursorY += fontPx * 1.35;
+            }
         }
+
+        svg.Append("  </g>\n");
     }
 
     public static string WrapHtml(IReadOnlyList<(string Path, string Svg)> slides, double widthPx)

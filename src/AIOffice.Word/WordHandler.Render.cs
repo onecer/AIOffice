@@ -1,6 +1,7 @@
 using System.Text;
 using AIOffice.Core;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace AIOffice.Word;
@@ -17,7 +18,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"docx render --to {to} is not implemented yet.",
-                "Use --to html (semantic HTML) or --to text; png/svg rendering arrives in M1.",
+                "Use --to html (semantic HTML with data-aio-path attributes) or --to text.",
                 candidates: ["html", "text"]);
         }
 
@@ -25,14 +26,17 @@ public sealed partial class WordHandler
         using (doc)
         using (ms)
         {
-            OpenXmlElement scopeRoot = GetBody(doc, file);
             string? scopePath = StringArg(ctx.Args, "scope");
+            string content;
             if (scopePath is not null)
             {
-                scopeRoot = WordAddress.Resolve(doc, DocPath.Parse(scopePath)).Element;
+                var node = WordAddress.Resolve(doc, DocPath.Parse(scopePath));
+                content = to == "html" ? RenderHtmlNode(node) : RenderText(node.Element);
             }
-
-            var content = to == "html" ? RenderHtml(scopeRoot) : RenderText(scopeRoot);
+            else
+            {
+                content = to == "html" ? RenderHtmlDocument(doc, file) : RenderText(GetBody(doc, file));
+            }
 
             string? outFile = null;
             if (StringArg(ctx.Args, "output") is { } outArg)
@@ -55,36 +59,79 @@ public sealed partial class WordHandler
 
     // ----------------------------------------------------------------- html
 
-    /// <summary>Clean semantic HTML: headings, paragraphs, bold/italic/underline, tables, basic lists.</summary>
-    internal static string RenderHtml(OpenXmlElement root)
+    /// <summary>
+    /// Clean semantic HTML under the data-aio-path render contract: every block
+    /// element that maps to an addressable node (p/headings/li, table, tr, td,
+    /// header/footer wrappers) carries its canonical document path, so a browser
+    /// click maps straight back to an address. Headers render first inside
+    /// &lt;header&gt; tags, footers last inside &lt;footer&gt; tags.
+    /// </summary>
+    internal static string RenderHtmlDocument(WordprocessingDocument doc, string file)
     {
         var sb = new StringBuilder();
-        switch (root)
+        var roots = WordAddress.HeaderFooterRoots(doc).ToList();
+
+        foreach (var header in roots.Where(r => r.Type == "header"))
+        {
+            AppendHeaderFooter(sb, header);
+        }
+
+        AppendContainer(sb, GetBody(doc, file), "/body");
+
+        foreach (var footer in roots.Where(r => r.Type == "footer"))
+        {
+            AppendHeaderFooter(sb, footer);
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>Scoped render of one resolved node, blocks tagged with canonical paths.</summary>
+    internal static string RenderHtmlNode(ResolvedNode node)
+    {
+        var sb = new StringBuilder();
+        switch (node.Element)
         {
             case Paragraph p:
-                AppendBlock(sb, p, listOpen: false);
+                AppendBlock(sb, p, listOpen: false, node.CanonicalPath);
                 break;
 
             case Table t:
-                AppendTable(sb, t);
+                AppendTable(sb, t, node.CanonicalPath);
+                break;
+
+            case Header or Footer:
+                AppendHeaderFooter(sb, node);
                 break;
 
             default:
-                AppendContainer(sb, root);
+                AppendContainer(sb, node.Element, node.CanonicalPath);
                 break;
         }
 
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static void AppendContainer(StringBuilder sb, OpenXmlElement container)
+    /// <summary>The html tag for a header/footer root is its type name, path on the wrapper.</summary>
+    private static void AppendHeaderFooter(StringBuilder sb, ResolvedNode root)
+    {
+        var tag = root.Type; // "header" | "footer"
+        sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(root.CanonicalPath).Append("\">\n");
+        AppendContainer(sb, root.Element, root.CanonicalPath);
+        sb.Append("</").Append(tag).Append(">\n");
+    }
+
+    private static void AppendContainer(StringBuilder sb, OpenXmlElement container, string path)
     {
         var listOpen = false;
+        var pIndex = 0;
+        var tableIndex = 0;
         foreach (var child in container.ChildElements)
         {
             switch (child)
             {
                 case Paragraph p:
+                    pIndex++;
                     var isListItem = p.ParagraphProperties?.NumberingProperties is not null;
                     if (isListItem && !listOpen)
                     {
@@ -97,17 +144,18 @@ public sealed partial class WordHandler
                         listOpen = false;
                     }
 
-                    AppendBlock(sb, p, listOpen);
+                    AppendBlock(sb, p, listOpen, $"{path}/p[{pIndex}]");
                     break;
 
                 case Table t:
+                    tableIndex++;
                     if (listOpen)
                     {
                         sb.Append("</ul>\n");
                         listOpen = false;
                     }
 
-                    AppendTable(sb, t);
+                    AppendTable(sb, t, $"{path}/table[{tableIndex}]");
                     break;
 
                 default:
@@ -121,7 +169,7 @@ public sealed partial class WordHandler
         }
     }
 
-    private static void AppendBlock(StringBuilder sb, Paragraph p, bool listOpen)
+    private static void AppendBlock(StringBuilder sb, Paragraph p, bool listOpen, string path)
     {
         var style = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
         var level = HeadingLevel(style);
@@ -131,7 +179,7 @@ public sealed partial class WordHandler
                 ? "h" + Math.Min(h, 6)
                 : "p";
 
-        sb.Append('<').Append(tag).Append('>');
+        sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(path).Append("\">");
         AppendInline(sb, p);
         sb.Append("</").Append(tag).Append(">\n");
     }
@@ -186,15 +234,20 @@ public sealed partial class WordHandler
         }
     }
 
-    private static void AppendTable(StringBuilder sb, Table table)
+    private static void AppendTable(StringBuilder sb, Table table, string path)
     {
-        sb.Append("<table>\n");
+        sb.Append("<table data-aio-path=\"").Append(path).Append("\">\n");
+        var rowIndex = 0;
         foreach (var row in table.ChildElements.OfType<TableRow>())
         {
-            sb.Append("<tr>");
+            rowIndex++;
+            var rowPath = $"{path}/tr[{rowIndex}]";
+            sb.Append("<tr data-aio-path=\"").Append(rowPath).Append("\">");
+            var cellIndex = 0;
             foreach (var cell in row.ChildElements.OfType<TableCell>())
             {
-                sb.Append("<td>");
+                cellIndex++;
+                sb.Append("<td data-aio-path=\"").Append(rowPath).Append("/tc[").Append(cellIndex).Append("]\">");
                 var first = true;
                 foreach (var p in cell.ChildElements.OfType<Paragraph>())
                 {

@@ -45,7 +45,9 @@ public sealed partial class ExcelHandler
     /// <summary>
     /// Used-range tables with number formats applied (display text, not raw
     /// values). Merged cells render their value in the anchor cell; spanned
-    /// cells appear empty in v0.
+    /// cells appear empty in v0. Every cell carries
+    /// <c>data-aio-path="/Sheet1/B2"</c> (and each table its sheet path) so a
+    /// browser click maps back to a canonical document path.
     /// </summary>
     private static string RenderHtml(List<(IXLWorksheet Sheet, IXLRange? Range)> sections)
     {
@@ -53,7 +55,8 @@ public sealed partial class ExcelHandler
         foreach (var (sheet, range) in sections)
         {
             sb.Append("<table data-sheet=\"");
-            ExcelValues.AppendEscaped(sb, sheet.Name).Append("\">\n<caption>");
+            ExcelValues.AppendEscaped(sb, sheet.Name).Append("\" data-aio-path=\"");
+            ExcelValues.AppendEscaped(sb, ExcelPaths.SheetPath(sheet)).Append("\">\n<caption>");
             ExcelValues.AppendEscaped(sb, sheet.Name).Append("</caption>\n");
             if (range is not null)
             {
@@ -64,7 +67,9 @@ public sealed partial class ExcelHandler
                     {
                         var bold = cell.Style.Font.Bold;
                         var italic = cell.Style.Font.Italic;
-                        sb.Append("<td>");
+                        sb.Append("<td data-aio-path=\"");
+                        ExcelValues.AppendEscaped(sb, ExcelPaths.CellPath(sheet, cell.Address));
+                        sb.Append("\">");
                         if (bold)
                         {
                             sb.Append("<strong>");

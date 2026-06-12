@@ -128,6 +128,8 @@ public sealed class NativeVerbs
                 snapshotOwner = h.SnapshotOwner,
             }),
             mcp = new { assembly = "AIOffice.Mcp", status = mcpStatus },
+            browser = AIOffice.Render.BrowserLocator.Probe(),
+            preview = PreviewLockDirInfo(),
             dependencies = new[]
             {
                 DependencyInfo("DocumentFormat.OpenXml"),
@@ -140,6 +142,26 @@ public sealed class NativeVerbs
                 capacityPerFile = SnapshotStore.Capacity,
             },
         });
+    }
+
+    /// <summary>Status of the preview lockfile directory (where running servers advertise their port).</summary>
+    private static object PreviewLockDirInfo()
+    {
+        var directory = AIOffice.Preview.PreviewLock.DefaultDirectory;
+        var lockfiles = 0;
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                lockfiles = Directory.EnumerateFiles(directory, "*.json").Count();
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Diagnostics stay best-effort; the directory is recreated on demand.
+        }
+
+        return new { lockDirectory = directory, exists = Directory.Exists(directory), lockfiles };
     }
 
     private static object DependencyInfo(string name, params string[] fallbackAssemblies)

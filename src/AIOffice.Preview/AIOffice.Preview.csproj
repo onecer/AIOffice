@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AIOffice.Preview</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AIOffice.Core/AIOffice.Core.csproj" />
+    <ProjectReference Include="../AIOffice.Word/AIOffice.Word.csproj" />
+    <ProjectReference Include="../AIOffice.Excel/AIOffice.Excel.csproj" />
+    <ProjectReference Include="../AIOffice.Pptx/AIOffice.Pptx.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AIOffice.Preview.Tests" />
+  </ItemGroup>
+</Project>

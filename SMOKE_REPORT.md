@@ -139,3 +139,132 @@ $ dist/osx-arm64/aioffice read ../nope.docx             → exit 4
 5. **pptx master/layout addressing** reserved M1.
 6. Cosmetic envelope drift: `validate` data shape differs per format (docx/pptx `{valid,count,issues}` vs xlsx `{valid,errors,warnings,issues}`). Functional, but worth unifying in M1.
 7. Snapshot ring lives at `~/.aioffice/snapshots` (user-level, outside the workspace by design); `--workspace` does not relocate it.
+
+---
+
+# AIOffice 0.2.0 (M1) — Integration Smoke Report
+
+Date: 2026-06-12 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0) · Chrome installed
+All commands below were actually executed; outputs are trimmed but real.
+
+## 1. Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+已成功生成。 0 个警告 0 个错误      (now 8 src + 7 test projects: + AIOffice.Render, AIOffice.Preview)
+```
+
+Integration drift found & fixed (each fix carries/updates a test):
+
+| Drift found | Fix |
+| --- | --- |
+| `tests/AIOffice.Core.Tests/EnvelopeTests.cs` pinned `meta.version == "0.1.0"` → failed on the 0.2.0 bump | Asserts `Meta.ToolVersion` (the same source the envelope writes), like the MCP tests already do |
+| `SchemaHelpStatusTests` expected a 13-verb surface → failed once `preview` joined `SurfaceSchema` | Updated to 14 (verb-name set equality was already asserted; only the count was stale) |
+| `PptxEditor.PickLayout` accepted **only JSON-number** `props.layout`, but the CLI `--ops`/sugar and the MCP `office_edit` schema (`additionalProperties:{type:"string"}`) deliver props **string-valued** → `{"layout":"1"}` was rejected with `invalid_args` (caught live in the pptx smoke below, FAIL → root-caused) | `PickLayout` now also parses string-backed integers (invariant culture); non-numeric strings like `"Blank"` still fail typed. Regression test `AddSlide_WithStringLayoutIndex_BindsThatLayout` added |
+
+## 2. Tests — PASS (383/383 across 7 projects)
+
+```
+$ dotnet test tests/<each>
+AIOffice.Core.Tests     104 passed
+AIOffice.Word.Tests      73 passed   (was 52: + header/footer, data-aio-path render contract)
+AIOffice.Excel.Tests     59 passed   (was 41: + charts bar/line/pie, td data-aio-path)
+AIOffice.Pptx.Tests      72 passed   (was 48: + master/layout read, g-wrap data-aio-path, layout-prop regression)
+AIOffice.Mcp.Tests       30 passed   (was 27: + preview tools, png image block; token budget ≤3500 unchanged)
+AIOffice.Preview.Tests   24 passed   (new)
+AIOffice.Render.Tests    21 passed   (new; includes real-browser screenshot tests against local Chrome)
+```
+
+## 3. End-to-end CLI smoke (temp workspace /tmp/aio-m1-smoke, `dotnet run --project src/AIOffice.Cli --`) — PASS
+
+### docx: header + structure + png — PASS
+```
+$ aioffice create report.docx --title "M1 Smoke"                       → ok, rev b06572e4c06f
+$ aioffice edit report.docx --ops '[{"op":"add","path":"/header[1]","type":"header","props":{"text":"机密"}}]'
+                                                                       → ok, applied:1, paragraph:/header[1]/p[1], snapshot:1
+$ aioffice read report.docx --view structure                           → data.headers:[{path:/header[1], text:"机密", children:[/header[1]/p[1]…]}]
+$ aioffice render report.docx --to png                                 → {format:"png", written:report.png, sizeBytes:8586}
+$ file report.png                                                      → PNG image data, 1280 x 720, 8-bit/color RGB
+```
+
+### xlsx: values + bar chart + validate + get — PASS
+```
+$ aioffice edit sales.xlsx --ops '[…6 set ops A1:B3…,
+   {"op":"add","path":"/Sheet1","type":"chart","props":{"kind":"bar","dataRange":"A1:B3","anchor":"D2","title":"Sales by Region"}}]'
+                                       → ok, applied:7, chart path /Sheet1/chart[1], series:1
+$ aioffice validate sales.xlsx         → {valid:true, errors:0, warnings:0}    (OpenXmlValidator over the hand-built ChartPart)
+$ aioffice get sales.xlsx '/Sheet1/chart[1]'
+                                       → {kind:"chart", chartKind:"bar", title:"Sales by Region", dataRange:"A1:B3", anchor:"D2", series:1}
+```
+
+### pptx: add slide (layout) + master + scoped png — PASS (after one real FAIL)
+```
+$ aioffice edit deck.pptx --ops '[{"op":"add","path":"/slide[2]","type":"slide","props":{"layout":"1","title":"第二页"}}]'
+   1st attempt → FAIL: invalid_args "props.layout is not a valid layout index: \"1\""   ← string-prop drift, see §1; fixed
+   after fix   → ok, slides:2
+$ aioffice get deck.pptx '/master[1]'  → {kind:"master", theme:"AIOffice", layoutCount:1,
+                                          layouts:[{path:/master[1]/layout[1], name:"Blank", type:"blank", usedBySlides:[1,2]}]}
+$ aioffice render deck.pptx --to png --scope '/slide[1]'
+                                       → {format:"png", scope:"/slide[1]", written:deck.png, sizeBytes:8662}
+```
+(Also probed: add slide path must be `/slide[N]` — `path:"/"` correctly returns `invalid_path` with grammar suggestion.)
+
+### preview: open → click-map → selection → close — PASS
+```
+$ aioffice preview open report.docx &    → envelope printed BEFORE blocking:
+   {url:"http://127.0.0.1:26500/", port:26500, pid:73942, lockfile:~/.aioffice/preview/cc461c558a01.json}
+$ curl :26500/                           → page contains data-aio-path="/header[1]/p[1]", "/body/p[1]", "/body/p[2]" …
+$ curl -X POST :26500/selection -d '{"paths":["/body/p[1]","/header[1]/p[1]"]}'
+                                         → {paths:[…2…], rev:"0308e51174dc", updatedAt:"2026-06-12T07:50:04Z"}
+$ aioffice preview selection report.docx → ok, same 2 paths + rev (matches the file's current rev)
+$ aioffice preview close report.docx     → {closed:true}; lock dir empty afterwards (verified with ls)
+```
+
+### doctor (new M1 sections) — PASS
+```
+$ aioffice doctor → browser:{found:true, kind:"chrome", path:"/Applications/Google Chrome.app/…"}
+                    preview:{lockDirectory:"~/.aioffice/preview", exists:true, lockfiles:0}
+$ aioffice schema → verbs: …, preview, … (14 verbs + mcp/version CLI extras)
+$ aioffice help addressing → covers /header[1]/p[1], /master[1]/layout[2], /Sheet1/chart[1]
+```
+
+## 4. MCP stdio server — PASS
+
+Spawned `dotnet run --project src/AIOffice.Cli -- mcp --workspace /tmp/aio-m1-smoke`, driven by a python JSON-RPC script:
+
+```
+initialize         → serverInfo {name:"aioffice", version:"0.2.0"}
+tools/list         → 14 tools (12 v0 + preview_open + preview_selection); schema budget test ≤3500 tokens still green
+preview_open       → spawned detached 'aioffice preview open' child, waited lockfile+health
+                     → {url:"http://127.0.0.1:26500/", port:26500, pid:85043}
+POST /selection ["/body/p[2]"] (simulating the human click)
+preview_selection  → {paths:["/body/p[2]"], rev:"0308e51174dc", updatedAt:…}
+office_render to=png → content[0] = envelope text {format:"png", written:…}
+                       content[1] = {type:"image", mimeType:"image/png"} — 8238 base64 chars, bytes verbatim (no downscale)
+```
+
+## 5. Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice    → 37,605,465 bytes (35.9 MiB), self-contained single file (was 35.8 MiB in 0.1.0; +Render/Preview ≈ +0.1 MiB)
+$ aioffice doctor                  → version 0.2.0; browser found:true kind:chrome; preview lock dir ok
+$ aioffice create/edit(+header 机密)/render --to png bin.docx
+                                   → ok / ok / {format:"png", sizeBytes:9437} — real 1280x720 PNG (file(1) verified)
+$ aioffice preview open bin.docx --port 26555 &  → envelope first, then blocks; GET / has 10 data-aio-path attrs
+$ aioffice preview close bin.docx  → {closed:true}, lockfile removed
+```
+
+## 6. M0 known-gaps status after M1
+
+| M0 gap | Status |
+| --- | --- |
+| 3. `render --to png` unsupported | **CLOSED** — native png via headless Chrome/Edge (AIOffice.Render); pptx is per-slide (`--scope`, default slide 1 + warning) |
+| 4. MCP tool count 12 (preview reserved) | **CLOSED** — 14 tools registered, inside the token budget reserved in docs/MCP.md §2.1 |
+| 5. pptx master/layout addressing reserved | **CLOSED (read-only)** — get/query/structure on `/master[1]`, `/master[1]/layout[2]`; **editing them is still `unsupported_feature` (M2)** |
+| 1. xlsx round-trip not byte-identical | unchanged (pinned in RoundTripLawTests) |
+| 2. formula engine coverage | unchanged (`formula_not_evaluated` warning path) |
+| 6. validate envelope shape drift | **still open** — punted again; carry to M2 |
+| 7. snapshot ring location | unchanged (by design) |
+
+New honest limits introduced in M1: png needs an installed Chrome/Edge (typed `unsupported_feature` + install suggestion otherwise — `doctor` shows what the probe found); pptx png renders exactly one slide per call (no grid yet); xlsx charts are bar/line/pie only (scatter/area → typed error naming the workaround); headers/footers are default-type only (first-page/even-odd variants → typed M2 error); preview serves one file per server process (one lockfile per file).

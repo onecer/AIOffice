@@ -15,6 +15,7 @@ paths that `get` and `edit` accept unchanged.
     /Sheet1/A1                  one cell
     /Sheet1/A1:C10              rectangular range
     /Sheet1/row[3]              whole row 3
+    /Sheet1/chart[1]            1st chart anchored on the sheet
     /'Q3 Data'/B2               sheet names with spaces use single quotes
                                 (escape a quote by doubling it: 'O''Brien')
 
@@ -22,10 +23,14 @@ paths that `get` and `edit` accept unchanged.
 
     /slide[2]                   2nd slide
     /slide[2]/shape[3]          3rd shape on it
+    /slide[2]/shape[@id=7]      same shape by stable id (canonical form in results)
     /slide[2]/shape[3]/p[1]     1st paragraph inside that shape
+    /master[1]                  1st slide master (read-only: get/query)
+    /master[1]/layout[2]        2nd layout under that master (read-only)
+    /master[1]/shape[1]         shape on the master (read-only)
 
-Master/layout addressing is reserved for M1 and currently answers
-`unsupported_feature`.
+Masters and layouts are readable (`get`, `query`); editing them and
+paragraph/run addressing beneath them stay `unsupported_feature` until M2.
 
 ## Rules
 

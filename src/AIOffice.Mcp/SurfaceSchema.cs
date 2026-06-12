@@ -5,7 +5,9 @@ namespace AIOffice.Mcp;
 /// <summary>
 /// The machine-readable description of the whole aioffice command surface —
 /// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
-/// 13 verbs, mirroring the 12 v0 MCP tools plus the <c>mcp</c> verb itself.
+/// 14 verbs, mirroring the 14 M1 MCP tools (the <c>preview</c> verb carries
+/// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
+/// verb itself.
 /// </summary>
 public static class SurfaceSchema
 {
@@ -73,14 +75,15 @@ public static class SurfaceSchema
             [("aioffice edit r.docx --set /body/p[1] style=Heading1", "single-op sugar"),
              ("aioffice edit r.docx --ops @ops.json --expect-rev a3f9c12be01d", "atomic batch with optimistic lock")]),
 
-        Verb("render", "Render the document (or a subtree) to html/svg/text for inspection; png is reserved for M1.", "office_render",
+        Verb("render", "Render the document (or a subtree) to html/svg/text/png for inspection.", "office_render",
             [("file", "document path"),
-             ("--to", "html|svg|text|png (default html; png -> unsupported_feature until M1)"),
-             ("--scope", "render only this subtree, e.g. /slide[3], /Sheet1/A1:F20"),
-             ("-o", "output file or directory inside the workspace")],
+             ("--to", "html|svg|text|png (default html; png screenshots via a local Chromium and is written to a file)"),
+             ("--scope", "render only this subtree, e.g. /slide[3], /Sheet1/A1:F20; png on a multi-slide pptx defaults to /slide[1] with a warning"),
+             ("-o", "output file or directory inside the workspace (png default: source path with .png)")],
             [ErrorCodes.UnsupportedFeature, ErrorCodes.InvalidPath, ErrorCodes.FileNotFound,
-             ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
-            [("aioffice render deck.pptx --to svg --scope /slide[3]", "one slide as svg, inlined when small")]),
+             ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.InternalError],
+            [("aioffice render deck.pptx --to svg --scope /slide[3]", "one slide as svg, inlined when small"),
+             ("aioffice render report.docx --to png -o look.png", "browser screenshot; needs Chrome/Edge/Chromium installed")]),
 
         Verb("validate", "OpenXmlValidator schema check plus lint; issues carry suggestions.", "office_validate",
             [("file", "document path")],
@@ -108,7 +111,7 @@ public static class SurfaceSchema
             [("aioffice doctor", "run when commands start failing oddly")]),
 
         Verb("schema", "Machine-readable JSON of this whole command surface.", "office_schema",
-            [("verb", "optional filter: one of the 13 verb names")],
+            [("verb", "optional filter: one of the 14 verb names")],
             [ErrorCodes.InvalidArgs],
             [("aioffice schema edit", "just the edit verb")]),
 
@@ -117,13 +120,22 @@ public static class SurfaceSchema
             [ErrorCodes.InvalidArgs],
             [("aioffice help selectors", "full selector grammar")]),
 
-        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (12 v0 tools).", null,
+        Verb("preview", "Live browser preview: open serves the document on localhost (click = select), selection reads the clicked paths, close stops the server.", "preview_open",
+            [("action", "open (blocking server; prints {url,port,pid} before blocking) | selection | close"),
+             ("file", "document to preview (.docx/.xlsx/.pptx)"),
+             ("--port", "fixed port for open (default: first free port in 26500-26600)")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.PreviewNotRunning, ErrorCodes.FileNotFound,
+             ErrorCodes.SandboxDenied, ErrorCodes.UnsupportedFeature],
+            [("aioffice preview open report.docx", "blocks; click elements in the browser, then read them"),
+             ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit")]),
+
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (14 tools).", null,
             [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
             [ErrorCodes.InternalError],
             [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),
     ];
 
-    /// <summary>The 13 verb names, in surface order.</summary>
+    /// <summary>The 14 verb names, in surface order.</summary>
     public static IReadOnlyList<string> VerbNames { get; } = [.. Verbs.Select(v => v.Name)];
 
     /// <summary>

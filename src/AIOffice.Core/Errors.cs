@@ -25,11 +25,14 @@ public static class ErrorCodes
 
     public const string InternalError = "internal_error";
 
+    /// <summary>No live preview server for the file. Suggestion MUST name the open command.</summary>
+    public const string PreviewNotRunning = "preview_not_running";
+
     /// <summary>All known codes, useful for validation and the schema command.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         InvalidArgs, FileNotFound, SandboxDenied, InvalidPath, UnsupportedFeature,
-        FormatCorrupt, StaleAddress, FormulaNotEvaluated, InternalError,
+        FormatCorrupt, StaleAddress, FormulaNotEvaluated, InternalError, PreviewNotRunning,
     ];
 }
 

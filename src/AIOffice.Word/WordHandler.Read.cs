@@ -35,7 +35,7 @@ public sealed partial class WordHandler
                 "text" => TextView(body, ctx.Args, warnings),
                 "outline" => OutlineView(body),
                 "stats" => StatsView(body),
-                _ => StructureView(body, IntArg(ctx.Args, "depth") ?? 3),
+                _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 
             return Envelope.Ok(data, MetaFor(file, Rev.OfBytes(bytes), warnings));
@@ -194,10 +194,25 @@ public sealed partial class WordHandler
 
     // ------------------------------------------------------------ structure
 
-    /// <summary>Depth-limited element tree of addressable nodes.</summary>
-    private static object StructureView(Body body, int maxDepth)
+    /// <summary>Depth-limited element tree of addressable nodes; headers/footers listed beside the body.</summary>
+    private static object StructureView(DocumentFormat.OpenXml.Packaging.WordprocessingDocument doc, Body body, int maxDepth)
     {
-        return new { view = "structure", root = Describe(body, "/body", "body", 0) };
+        var headers = WordAddress.HeaderFooterRoots(doc)
+            .Where(r => r.Type == "header")
+            .Select(r => Describe(r.Element, r.CanonicalPath, r.Type, 0))
+            .ToList();
+        var footers = WordAddress.HeaderFooterRoots(doc)
+            .Where(r => r.Type == "footer")
+            .Select(r => Describe(r.Element, r.CanonicalPath, r.Type, 0))
+            .ToList();
+
+        return new
+        {
+            view = "structure",
+            root = Describe(body, "/body", "body", 0),
+            headers = headers.Count > 0 ? headers : null,
+            footers = footers.Count > 0 ? footers : null,
+        };
 
         object Describe(OpenXmlElement element, string path, string type, int depth)
         {

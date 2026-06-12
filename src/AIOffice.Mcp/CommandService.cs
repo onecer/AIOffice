@@ -82,7 +82,26 @@ public sealed class CommandService
 
     public Envelope Get(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Get(ctx));
 
-    public Envelope Render(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Render(ctx));
+    public Envelope Render(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the document path (inside the workspace).");
+        var resolved = Workspace.Resolve(file, mustExist: true);
+        var handler = Handlers.Resolve(resolved);
+
+        // png is cross-format plumbing (handler artifact -> headless-browser
+        // screenshot); everything else goes straight to the handler.
+        if (OptionalString(a, "to") == "png")
+        {
+            if (OptionalString(a, "output") is { } output)
+            {
+                a["output"] = Workspace.Resolve(output); // PngRenderVerb expects a resolved path
+            }
+
+            return AIOffice.Render.PngRenderVerb.Execute(handler, Context(resolved, a));
+        }
+
+        return handler.Render(Context(resolved, a));
+    });
 
     public Envelope Validate(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Validate(ctx));
 
@@ -248,6 +267,10 @@ public sealed class CommandService
             checks,
         });
     });
+
+    public Envelope PreviewOpen(JsonObject args) => Run(args, a => PreviewTools.Open(Workspace, a));
+
+    public Envelope PreviewSelection(JsonObject args) => Run(args, a => PreviewTools.Selection(Workspace, a));
 
     public Envelope Help(JsonObject args) => Run(args, a => Envelope.Ok(HelpTopics.Get(OptionalString(a, "topic"))));
 

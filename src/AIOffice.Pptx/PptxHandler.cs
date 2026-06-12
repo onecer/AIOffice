@@ -92,6 +92,15 @@ public sealed partial class PptxHandler : IFormatHandler
         using var doc = PptxDoc.Open(stream, editable: false, file);
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
 
+        if (address.IsMaster)
+        {
+            return address.HasShape
+                ? PptxQueryEngine.MasterShapeDetail(presentation, address)
+                : address.LayoutIndex is null
+                    ? PptxQueryEngine.MasterDetail(presentation, address)
+                    : PptxQueryEngine.LayoutDetail(presentation, address);
+        }
+
         return address.HasShape
             ? PptxQueryEngine.ShapeDetail(presentation, address)
             : PptxQueryEngine.SlideDetail(presentation, address);
@@ -100,11 +109,18 @@ public sealed partial class PptxHandler : IFormatHandler
     public Envelope Query(CommandContext ctx) => Execute(ctx, file =>
     {
         var selector = Selector.Parse(RequireArg(ctx, "selector"));
+        var scope = J.Str(ctx.Args, "scope") is { } scopeRaw ? PptxAddress.Parse(scopeRaw) : null;
         using var stream = PptxDoc.LoadStream(file);
         using var doc = PptxDoc.Open(stream, editable: false, file);
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
-        var matches = PptxQueryEngine.Query(presentation, selector);
-        return new { Selector = selector.ToCanonicalString(), Count = matches.Count, Matches = matches };
+        var matches = PptxQueryEngine.Query(presentation, selector, scope);
+        return new
+        {
+            Selector = selector.ToCanonicalString(),
+            Scope = scope?.CanonicalContainerPath,
+            Count = matches.Count,
+            Matches = matches,
+        };
     });
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Execute(ctx, file =>
@@ -358,6 +374,14 @@ public sealed partial class PptxHandler : IFormatHandler
         }
 
         var address = PptxAddress.Parse(scope);
+        if (address.IsMaster)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"Master/layout rendering is not supported yet (planned M2): '{scope}'.",
+                "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
+        }
+
         if (address.HasShape)
         {
             throw new AiofficeException(
@@ -435,10 +459,27 @@ public sealed partial class PptxHandler : IFormatHandler
             View = "structure",
             SlideWidthCm = Units.EmuToCm(size?.Cx?.Value ?? PptxFactory.SlideWidthEmu),
             SlideHeightCm = Units.EmuToCm(size?.Cy?.Value ?? PptxFactory.SlideHeightEmu),
+            Masters = PptxDoc.Masters(presentation).Select(m =>
+            {
+                var masterPath = Units.Inv($"/master[{m.Index}]");
+                var layouts = PptxDoc.Layouts(m.Part);
+                return new
+                {
+                    Path = masterPath,
+                    Index = m.Index,
+                    Theme = m.Part.ThemePart?.Theme?.Name?.Value,
+                    ShapeCount = PptxDoc.Shapes(PptxDoc.RequireShapeTree(m.Part)).Count,
+                    LayoutCount = layouts.Count,
+                    Layouts = layouts
+                        .Select(l => (object)PptxQueryEngine.LayoutSummary(presentation, m.Index, l.Index, l.Part))
+                        .ToList(),
+                };
+            }).ToList<object>(),
             Slides = slides.Select(s => new
             {
                 Path = Units.Inv($"/slide[{s.Index}]"),
                 Index = s.Index,
+                Layout = PptxDoc.LayoutPathOf(presentation, s.Part),
                 Shapes = PptxDoc.Shapes(s.Part).Select(shape =>
                 {
                     var geometry = PptxDoc.Geometry(shape.Element);

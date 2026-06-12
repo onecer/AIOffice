@@ -118,10 +118,10 @@ public sealed class QueryGetTests : IDisposable
     }
 
     [Fact]
-    public void Get_MasterAddressing_IsReservedUnsupportedFeature()
+    public void Get_NotesAddressing_IsReservedUnsupportedFeature()
     {
         CreateDeckWithShapes();
-        var envelope = _handler.Get(_ws.Ctx("deck.pptx", ("path", "/master[1]")));
+        var envelope = _handler.Get(_ws.Ctx("deck.pptx", ("path", "/notes[1]")));
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
         Assert.Contains("/slide[", error.Suggestion, StringComparison.Ordinal);

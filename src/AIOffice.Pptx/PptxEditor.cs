@@ -20,18 +20,29 @@ internal static class PptxEditor
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
 
     /// <summary>Applies the op and returns the canonical path of the affected node.</summary>
-    public static string Apply(PresentationPart presentation, EditOp op) => op.Op switch
+    public static string Apply(PresentationPart presentation, EditOp op)
     {
-        "add" => ApplyAdd(presentation, op),
-        "set" => ApplySet(presentation, op),
-        "remove" => ApplyRemove(presentation, op),
-        "move" => ApplyMove(presentation, op),
-        _ => throw new AiofficeException(
-            ErrorCodes.InvalidArgs,
-            $"Unknown op '{op.Op}'.",
-            "Use set, add, remove or move.",
-            candidates: EditOp.Kinds),
-    };
+        if (PptxAddress.Parse(op.Path).IsMaster)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"Editing masters/layouts is not supported yet (planned M2): {op.Path}",
+                "Edit slides instead, or copy a layout-derived slide via 'add slide' with props {\"layout\": N}.");
+        }
+
+        return op.Op switch
+        {
+            "add" => ApplyAdd(presentation, op),
+            "set" => ApplySet(presentation, op),
+            "remove" => ApplyRemove(presentation, op),
+            "move" => ApplyMove(presentation, op),
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown op '{op.Op}'.",
+                "Use set, add, remove or move.",
+                candidates: EditOp.Kinds),
+        };
+    }
 
     private static string ApplyAdd(PresentationPart presentation, EditOp op)
     {
@@ -100,8 +111,7 @@ internal static class PptxEditor
                 candidates: [.. Enumerable.Range(1, Math.Min(count + 1, 10)).Select(i => Units.Inv($"/slide[{i}]"))]);
         }
 
-        var layoutPart = presentation.SlideMasterParts.FirstOrDefault()?.SlideLayoutParts.FirstOrDefault()
-            ?? throw CorruptPresentation("no slide layout part exists");
+        var layoutPart = PickLayout(presentation, props);
 
         var slidePart = presentation.AddNewPart<SlidePart>();
         slidePart.Slide = PptxFactory.BuildBlankSlide();
@@ -120,6 +130,58 @@ internal static class PptxEditor
         }
 
         return Units.Inv($"/slide[{target}]");
+    }
+
+    /// <summary>
+    /// The layout a new slide binds to: props.layout is a 1-based index into the
+    /// first master's layouts (read --view structure lists them); the default
+    /// stays the master's first layout.
+    /// </summary>
+    private static SlideLayoutPart PickLayout(PresentationPart presentation, JsonObject? props)
+    {
+        var masters = PptxDoc.Masters(presentation);
+        if (masters.Count == 0)
+        {
+            throw CorruptPresentation("no slide master part exists");
+        }
+
+        var layouts = PptxDoc.Layouts(masters[0].Part);
+        if (layouts.Count == 0)
+        {
+            throw CorruptPresentation("no slide layout part exists");
+        }
+
+        if (props is null || !props.TryGetPropertyValue("layout", out var layoutNode))
+        {
+            return layouts[0].Part;
+        }
+
+        // Props arrive string-valued through the CLI sugar and the MCP schema
+        // ({"layout":"2"}), and as JSON numbers from hand-written ops — accept both.
+        double number = 0;
+        var numeric = layoutNode is JsonValue value &&
+            (Units.TryNumber(value, out number) ||
+             (value.TryGetValue<string>(out var raw) &&
+              double.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out number)));
+        if (!numeric || number != Math.Floor(number) || number < 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"props.layout is not a valid layout index: {layoutNode?.ToJsonString() ?? "null"}",
+                "Use a 1-based integer index into the master's layouts; run 'aioffice read <file> --view structure' to list them.");
+        }
+
+        var index = (int)number;
+        if (index > layouts.Count)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"props.layout is {index} but master 1 has only {layouts.Count} layout(s)."),
+                "Run 'aioffice read <file> --view structure' to list the master's layouts.",
+                candidates: [.. layouts.Take(10).Select(l => Units.Inv($"/master[1]/layout[{l.Index}]"))]);
+        }
+
+        return layouts[index - 1].Part;
     }
 
     private static string ApplySet(PresentationPart presentation, EditOp op)
@@ -294,7 +356,7 @@ internal static class PptxEditor
         }
 
         var path = PptxAddress.Parse(text[prefix.Length..].Trim());
-        if (path.HasShape)
+        if (path.HasShape || path.IsMaster)
         {
             return false;
         }

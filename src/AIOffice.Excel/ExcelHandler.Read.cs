@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
         {
             "stats" => Envelope.Ok(ReadStats(workbook), MetaFor(file, sw)),
             "outline" => Envelope.Ok(ReadOutline(workbook), MetaFor(file, sw)),
-            "structure" => Envelope.Ok(ReadStructure(workbook), MetaFor(file, sw)),
+            "structure" => Envelope.Ok(ReadStructure(workbook, file), MetaFor(file, sw)),
             "text" => ReadText(ctx, workbook, file, sw),
             _ => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -78,33 +78,55 @@ public sealed partial class ExcelHandler
             .ToList(),
     };
 
-    private static object ReadStructure(XLWorkbook workbook) => new
+    private static object ReadStructure(XLWorkbook workbook, string file)
     {
-        kind = "xlsx",
-        sheets = workbook.Worksheets
-            .OrderBy(ws => ws.Position)
-            .Select(ws => new
-            {
-                name = ws.Name,
-                path = ExcelPaths.SheetPath(ws),
-                position = ws.Position,
-                visible = ws.Visibility == XLWorksheetVisibility.Visible,
-                usedRange = ws.RangeUsed()?.RangeAddress.ToString(),
-                tables = ws.Tables
-                    .Select(t => new
-                    {
-                        name = t.Name,
-                        range = t.RangeAddress.ToString(),
-                        columns = t.Fields.Select(f => f.Name).ToList(),
-                    })
-                    .ToList(),
-                mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
-            })
-            .ToList(),
-        definedNames = workbook.DefinedNames
-            .Select(n => new { name = n.Name, refersTo = n.RefersTo })
-            .ToList(),
-    };
+        // Charts live in parts ClosedXML cannot see; read them raw.
+        List<ChartInfo> allCharts;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            allCharts = ExcelCharts.Read(document);
+        }
+
+        var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
+        return new
+        {
+            kind = "xlsx",
+            sheets = workbook.Worksheets
+                .OrderBy(ws => ws.Position)
+                .Select(ws => new
+                {
+                    name = ws.Name,
+                    path = ExcelPaths.SheetPath(ws),
+                    position = ws.Position,
+                    visible = ws.Visibility == XLWorksheetVisibility.Visible,
+                    usedRange = ws.RangeUsed()?.RangeAddress.ToString(),
+                    tables = ws.Tables
+                        .Select(t => new
+                        {
+                            name = t.Name,
+                            range = t.RangeAddress.ToString(),
+                            columns = t.Fields.Select(f => f.Name).ToList(),
+                        })
+                        .ToList(),
+                    charts = chartsBySheet[ws.Name]
+                        .Select(c => new
+                        {
+                            path = c.Path,
+                            kind = c.Kind,
+                            title = c.Title,
+                            dataRange = c.DataRange,
+                            anchor = c.Anchor,
+                            series = c.Series,
+                        })
+                        .ToList(),
+                    mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
+                })
+                .ToList(),
+            definedNames = workbook.DefinedNames
+                .Select(n => new { name = n.Name, refersTo = n.RefersTo })
+                .ToList(),
+        };
+    }
 
     private Envelope ReadText(CommandContext ctx, XLWorkbook workbook, string file, System.Diagnostics.Stopwatch sw)
     {

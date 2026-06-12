@@ -23,9 +23,50 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet), MetaFor(file, sw)),
             ExcelTargetKind.Cell => Envelope.Ok(CellInfo(target.Sheet, target.Cell!), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
+            ExcelTargetKind.Chart => Envelope.Ok(ChartTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
+
+    /// <summary>One chart, read back from the raw package (ClosedXML cannot see charts).</summary>
+    private static object ChartTargetInfo(string file, ExcelTarget target)
+    {
+        List<ChartInfo> charts;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            charts = ExcelCharts.Read(document)
+                .Where(c => string.Equals(c.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var wanted = target.ChartIndex!.Value;
+        var info = charts.FirstOrDefault(c => c.Index == wanted);
+        if (info is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No chart[{wanted}] on sheet '{target.Sheet.Name}' ({charts.Count} chart(s) exist).",
+                charts.Count > 0
+                    ? "Chart indices are 1-based per sheet; pick one of the candidates."
+                    : "This sheet has no charts; add one with edit op {op:add, type:chart, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + ", props:{kind:\"bar\", dataRange:\"A1:B5\", anchor:\"D2\"}}.",
+                candidates: charts.Count > 0
+                    ? [.. charts.Select(c => c.Path)]
+                    : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return new
+        {
+            path = info.Path,
+            kind = "chart",
+            sheet = target.Sheet.Name,
+            chartKind = info.Kind,
+            title = info.Title,
+            dataRange = info.DataRange,
+            anchor = info.Anchor,
+            series = info.Series,
+        };
+    }
 
     private static object SheetInfo(IXLWorksheet sheet)
     {

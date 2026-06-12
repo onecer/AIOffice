@@ -12,6 +12,7 @@ internal enum ExcelTargetKind
     Cell,
     Range,
     Row,
+    Chart,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -29,12 +30,16 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based worksheet row number when <see cref="Kind"/> is Row.</summary>
     public int? RowNumber { get; init; }
+
+    /// <summary>1-based per-sheet chart index when <see cref="Kind"/> is Chart.</summary>
+    public int? ChartIndex { get; init; }
 }
 
 /// <summary>
 /// xlsx addressing: <c>/Sheet1/A1</c>, <c>/Sheet1/A1:C10</c>, <c>/Sheet1/row[3]</c>,
-/// <c>/'Q3 Data'/B2</c>. Resolution failures throw <c>invalid_path</c> with
-/// nearest-match candidates, as the envelope contract requires.
+/// <c>/Sheet1/chart[1]</c>, <c>/'Q3 Data'/B2</c>. Resolution failures throw
+/// <c>invalid_path</c> with nearest-match candidates, as the envelope contract
+/// requires.
 /// </summary>
 internal static partial class ExcelPaths
 {
@@ -115,11 +120,16 @@ internal static partial class ExcelPaths
                 segment.Index is { } rowNumber:
                 return new ExcelTarget { Kind = ExcelTargetKind.Row, Sheet = sheet, RowNumber = rowNumber };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "chart", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } chartIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Chart, Sheet = sheet, ChartIndex = chartIndex };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
-                    $"'{segment.ToCanonicalString()}' is not a cell, range or row[n] in: {pathText}",
-                    "After the sheet name use A1, A1:C10 or row[3]; column letters are uppercase.",
+                    $"'{segment.ToCanonicalString()}' is not a cell, range, row[n] or chart[n] in: {pathText}",
+                    "After the sheet name use A1, A1:C10, row[3] or chart[1]; column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
     }
@@ -170,7 +180,7 @@ internal static partial class ExcelPaths
     private static List<string> ExampleTargets(IXLWorksheet sheet)
     {
         var basePath = SheetPath(sheet);
-        return [basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]"];
+        return [basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/chart[1]"];
     }
 
     /// <summary>Classic Levenshtein edit distance, case-insensitive.</summary>

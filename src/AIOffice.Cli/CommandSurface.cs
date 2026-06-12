@@ -103,13 +103,13 @@ public static class CommandSurface
             "office_edit"),
 
         new("render",
-            "Render a document (or a scoped node) to html, svg or text.",
-            "aioffice render <file> [--to html|svg|text] [--scope <path>] [-o out]",
+            "Render a document (or a scoped node) to html, svg, text or png.",
+            "aioffice render <file> [--to html|svg|text|png] [--scope <path>] [-o out]",
             [new("file", true, "Document to render.")],
             [
-                new("to", "html|svg|text", "Output format. MVP: html for docx/xlsx, svg or html per slide for pptx; png lands in M1."),
+                new("to", "html|svg|text|png", "Output format. html for docx/xlsx, svg or html per slide for pptx; png screenshots via a local Chromium (pptx: one slide, default /slide[1] — use --scope)."),
                 new("scope", "<path>", "Render only the node at this path, e.g. /slide[2]."),
-                new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope."),
+                new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope (png default: source path with .png)."),
             ],
             "office_render"),
 
@@ -162,8 +162,18 @@ public static class CommandSurface
             [],
             "office_help"),
 
+        new("preview",
+            "Live browser preview: open serves the document on localhost (click = select), selection reads the clicked paths, close stops the server.",
+            "aioffice preview <open|selection|close> <file> [--port N]",
+            [
+                new("action", true, "open (blocking server; prints {url,port,pid} first), selection or close."),
+                new("file", true, "Document to preview (.docx/.xlsx/.pptx)."),
+            ],
+            [new("port", "N", "Fixed port for open (default: first free port in 26500-26600).")],
+            "preview_open"),
+
         new("mcp",
-            "Run the stdio MCP server exposing the same 13 capabilities as the CLI.",
+            "Run the stdio MCP server exposing the same 14 capabilities as the CLI.",
             "aioffice mcp",
             [],
             [],

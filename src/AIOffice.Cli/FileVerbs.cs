@@ -116,7 +116,13 @@ public sealed class FileVerbs
             ["scope"] = scope,
             ["output"] = output is null ? null : _workspace.Resolve(output),
         });
-        return ResolveHandler(file, kindOverride: null).Render(ctx);
+        var handler = ResolveHandler(file, kindOverride: null);
+
+        // PNG is cross-format plumbing (handler artifact -> headless-browser
+        // screenshot), so it is orchestrated here instead of inside handlers.
+        return args.GetOption("to") == "png"
+            ? AIOffice.Render.PngRenderVerb.Execute(handler, ctx)
+            : handler.Render(ctx);
     }
 
     public Envelope Validate(ParsedArgs args)

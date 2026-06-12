@@ -7,6 +7,8 @@
     <ProjectReference Include="../AIOffice.Word/AIOffice.Word.csproj" />
     <ProjectReference Include="../AIOffice.Excel/AIOffice.Excel.csproj" />
     <ProjectReference Include="../AIOffice.Pptx/AIOffice.Pptx.csproj" />
+    <ProjectReference Include="../AIOffice.Render/AIOffice.Render.csproj" />
+    <ProjectReference Include="../AIOffice.Preview/AIOffice.Preview.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!--

@@ -50,7 +50,9 @@ public sealed class ManualCheckFixtureTests : WordTestBase
                   {"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"text":"Quarter"}},
                   {"op":"set","path":"/body/table[1]/tr[1]/tc[2]","props":{"text":"Revenue"}},
                   {"op":"set","path":"/body/table[1]/tr[1]/tc[3]","props":{"text":"Growth"}},
-                  {"op":"add","path":"/body/table[1]","type":"tr","props":{"cells":["Q3","1.2M","8%"]}}
+                  {"op":"add","path":"/body/table[1]","type":"tr","props":{"cells":["Q3","1.2M","8%"]}},
+                  {"op":"add","path":"/header[1]","type":"header","props":{"text":"AIOffice manual check — header","alignment":"center"}},
+                  {"op":"add","path":"/footer[1]","type":"footer","props":{"text":"AIOffice manual check — footer"}}
                 ]
                 """));
 

@@ -12,7 +12,7 @@ public sealed partial class ExcelHandler
     private static readonly IReadOnlyList<string> SetProps =
         ["value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name"];
 
-    private static readonly IReadOnlyList<string> AddTypes = ["sheet", "table", "row"];
+    private static readonly IReadOnlyList<string> AddTypes = ["sheet", "table", "row", "chart"];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
     {
@@ -33,11 +33,15 @@ public sealed partial class ExcelHandler
 
         using var workbook = OpenWorkbook(file);
 
-        // Apply every op in memory first; any failure aborts before a byte is written.
+        // Apply every op in memory first; any failure aborts before a byte is
+        // written. Chart ops are validated here too, but their raw OpenXml
+        // write is deferred to a post-save pass (ClosedXML cannot author chart
+        // parts; measured: it preserves them byte-identical once present).
+        var charts = new ChartOpBatch(file);
         var details = new List<object>(ops.Count);
         for (var i = 0; i < ops.Count; i++)
         {
-            ApplyOp(workbook, ops[i], i, details);
+            ApplyOp(workbook, ops[i], i, details, charts);
         }
 
         if (ArgBool(ctx, "dryRun"))
@@ -47,14 +51,29 @@ public sealed partial class ExcelHandler
                 MetaFor(file, sw));
         }
 
-        _snapshots.Save(file); // pre-image: every successful edit is undoable
+        var snapshot = _snapshots.Save(file); // pre-image: every successful edit is undoable
         var warnings = SaveWithCachedValues(workbook, file);
+        if (!charts.IsEmpty)
+        {
+            try
+            {
+                ExcelCharts.Apply(file, charts.Ops);
+            }
+            catch (Exception)
+            {
+                // Keep the batch atomic: the ClosedXML half already hit disk,
+                // so roll the file back to its pre-edit bytes before failing.
+                File.Copy(snapshot.Path, file, overwrite: true);
+                throw;
+            }
+        }
+
         return Envelope.Ok(
             new { applied = details.Count, ops = details },
             MetaFor(file, sw, warnings));
     });
 
-    private static void ApplyOp(XLWorkbook workbook, EditOp op, int index, List<object> details)
+    private static void ApplyOp(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
     {
         switch (op.Op)
         {
@@ -62,15 +81,15 @@ public sealed partial class ExcelHandler
                 ApplySet(workbook, op, index, details);
                 break;
             case "add":
-                ApplyAdd(workbook, op, index, details);
+                ApplyAdd(workbook, op, index, details, charts);
                 break;
             case "remove":
-                ApplyRemove(workbook, op, details);
+                ApplyRemove(workbook, op, index, details, charts);
                 break;
             default: // "move" — ParseBatch already rejected anything else
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
-                    $"ops[{index}]: move is reserved for M1 on xlsx.",
+                    $"ops[{index}]: move is not supported for xlsx yet.",
                     "Copy the content to the destination with get + set, then remove the source.");
         }
     }
@@ -101,6 +120,15 @@ public sealed partial class ExcelHandler
         }
 
         var target = ExcelPaths.Resolve(workbook, op.Path);
+        if (target.Kind == ExcelTargetKind.Chart)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"ops[{index}]: set on a chart is not supported yet.",
+                "Remove the chart and add it again with the new props: " +
+                "{op:remove, path:" + op.Path + "} then {op:add, type:chart, ...}.");
+        }
+
         var applied = new List<string>();
 
         if (props.TryGetPropertyValue("value", out var valueNode))
@@ -342,7 +370,7 @@ public sealed partial class ExcelHandler
 
     // ----- add --------------------------------------------------------------
 
-    private static void ApplyAdd(XLWorkbook workbook, EditOp op, int index, List<object> details)
+    private static void ApplyAdd(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
     {
         switch (op.Type)
         {
@@ -355,17 +383,20 @@ public sealed partial class ExcelHandler
             case "row":
                 AddRow(workbook, op, index, details);
                 break;
+            case "chart":
+                AddChart(workbook, op, index, details, charts);
+                break;
             case null:
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"ops[{index}]: add needs a type.",
-                    "Supported xlsx adds: sheet, table, row.",
+                    "Supported xlsx adds: sheet, table, row, chart.",
                     candidates: AddTypes);
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
-                    $"ops[{index}]: add type '{op.Type}' is not supported for xlsx in v0.",
-                    "Supported adds: sheet, table, row. Charts and images land in M1.",
+                    $"ops[{index}]: add type '{op.Type}' is not supported for xlsx yet.",
+                    "Supported adds: sheet, table, row, chart. Images land later.",
                     candidates: AddTypes);
         }
     }
@@ -469,9 +500,40 @@ public sealed partial class ExcelHandler
         });
     }
 
+    /// <summary>
+    /// Validates an <c>add chart</c> op against the live workbook and queues
+    /// the raw OpenXml write for the post-save pass.
+    /// </summary>
+    private static void AddChart(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        if (target.Kind != ExcelTargetKind.Sheet)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: add chart targets a sheet path like /Sheet1; the data location goes in props.dataRange.",
+                "Use {op:add, type:chart, path:/Sheet1, props:{kind:\"bar\", dataRange:\"A1:B5\", anchor:\"D2\"}}.");
+        }
+
+        var spec = ExcelCharts.ParseAdd(target.Sheet, op, index);
+        var chartIndex = charts.Add(spec);
+        details.Add(new
+        {
+            op = "add",
+            type = "chart",
+            path = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{ExcelPaths.SheetPath(target.Sheet)}/chart[{chartIndex}]"),
+            kind = spec.Kind,
+            dataRange = spec.DataRange,
+            anchor = spec.Anchor,
+            series = spec.Series.Count,
+        });
+    }
+
     // ----- remove -----------------------------------------------------------
 
-    private static void ApplyRemove(XLWorkbook workbook, EditOp op, List<object> details)
+    private static void ApplyRemove(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
     {
         var target = ExcelPaths.Resolve(workbook, op.Path);
         var canonical = DocPath.Parse(op.Path).ToCanonicalString();
@@ -493,6 +555,11 @@ public sealed partial class ExcelHandler
             case ExcelTargetKind.Row:
                 target.Sheet.Row(target.RowNumber!.Value).Delete();
                 details.Add(new { op = "remove", path = canonical, removed = "row" });
+                break;
+
+            case ExcelTargetKind.Chart:
+                charts.Remove(target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.ChartIndex!.Value, index);
+                details.Add(new { op = "remove", path = canonical, removed = "chart" });
                 break;
 
             case ExcelTargetKind.Cell:

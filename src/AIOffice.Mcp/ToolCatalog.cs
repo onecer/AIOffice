@@ -4,13 +4,11 @@ using ModelContextProtocol.Protocol;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The 12 v0 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// The 14 M1 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
 /// <para>
-/// DECISION (frozen): the M1 capabilities <c>preview_open</c> / <c>preview_selection</c>
-/// are NOT registered in v0. Registering them only to return <c>unsupported_feature</c>
-/// would tax every agent's context with schemas for tools that cannot work and would
-/// make <c>tools/list</c> dishonest. The names stay reserved (docs/MCP.md §1.13); they
-/// join the list in M1 within the token budget already set aside for them.
+/// <c>preview_open</c> / <c>preview_selection</c> were reserved through v0 and
+/// register here in M1, inside the token budget set aside for them in
+/// docs/MCP.md §2.1.
 /// </para>
 /// <para>
 /// Budget discipline: property tables, selector grammar and addressing details live in
@@ -87,12 +85,12 @@ public static class ToolCatalog
             """),
         Make(
             "office_render",
-            "Render the document (or a subtree) to an inspectable artifact — the look step of render→look→fix. png is reserved for M1.",
+            "Render the document (or a subtree) to an inspectable artifact — the look step of render→look→fix. png also returns the image inline.",
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
               "to":{"type":"string","enum":["html","svg","text","png"],"default":"html",
-                "description":"html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: reserved M1 -> unsupported_feature"},
+                "description":"html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope)"},
               "scope":{"type":"string","description":"Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\""},
               "output":{"type":"string","description":"Output file or directory inside workspace (default: alongside source)"}},
              "required":["file"]}
@@ -143,7 +141,22 @@ public static class ToolCatalog
             "Machine-readable JSON of the whole command surface: every verb, its args, error codes and examples.",
             """
             {"type":"object","properties":{
-              "verb":{"type":"string","description":"Omit -> full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|mcp"}}}
+              "verb":{"type":"string","description":"Omit -> full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|preview|mcp"}}}
+            """),
+        Make(
+            "preview_open",
+            "Open a live localhost preview where a human clicks elements to select them; returns the url. Survives this session.",
+            """
+            {"type":"object","properties":{
+              "file":{"type":"string"},
+              "port":{"type":"integer","description":"Fixed port (default: auto-pick in 26500-26600)"}},
+             "required":["file"]}
+            """),
+        Make(
+            "preview_selection",
+            "Read the canonical paths the human clicked in the live preview; they feed office_get/office_edit directly.",
+            """
+            {"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}
             """),
     ];
 

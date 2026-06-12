@@ -21,8 +21,13 @@ namespace AIOffice.Excel;
 /// <c>xl/worksheets/sheetN.xml</c> (namespace attribute order on the root
 /// element only); every other zip part stays byte-identical. The round-trip
 /// law test pins this exact set.</item>
-/// <item><c>move</c> ops and png rendering are M1; they return typed
-/// <c>unsupported_feature</c> envelopes with workarounds.</item>
+/// <item>Charts (bar | line | pie) are authored on raw OpenXml in a post-save
+/// pass, because ClosedXML cannot create them. Measured: ClosedXML 0.105
+/// preserves existing chart/drawing parts byte-identical across its own
+/// saves, so charts survive later edits. Other chart kinds return
+/// <c>unsupported_feature</c> naming bar|line|pie.</item>
+/// <item><c>move</c> ops and png rendering are not implemented; they return
+/// typed <c>unsupported_feature</c> envelopes with workarounds.</item>
 /// </list>
 /// </summary>
 public sealed partial class ExcelHandler : IFormatHandler

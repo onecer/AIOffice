@@ -19,7 +19,7 @@ public class EnvelopeTests
         Assert.False(root.TryGetProperty("error", out _)); // nulls are omitted
         Assert.Equal("a.docx", root.GetProperty("meta").GetProperty("file").GetString());
         Assert.Equal("abc123def456", root.GetProperty("meta").GetProperty("rev").GetString());
-        Assert.Equal("0.1.0", root.GetProperty("meta").GetProperty("version").GetString());
+        Assert.Equal(Meta.ToolVersion, root.GetProperty("meta").GetProperty("version").GetString());
         Assert.True(root.GetProperty("meta").TryGetProperty("elapsedMs", out _));
     }
 

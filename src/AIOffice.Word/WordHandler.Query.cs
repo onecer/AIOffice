@@ -49,8 +49,8 @@ public sealed partial class WordHandler
         using (doc)
         using (ms)
         {
-            var body = GetBody(doc, file);
-            var matches = WordAddress.EnumerateBody(body)
+            _ = GetBody(doc, file); // a docx without a body is format_corrupt, even for header-only queries
+            var matches = WordAddress.EnumerateAll(doc)
                 .Where(n => selector.Element == "*" || n.Type == selector.Element)
                 .Where(n => selector.Predicates.All(predicate => Matches(n, predicate)))
                 .Select(n => new { path = n.CanonicalPath, type = n.Type, snippet = Snippet(n.Element.InnerText) })

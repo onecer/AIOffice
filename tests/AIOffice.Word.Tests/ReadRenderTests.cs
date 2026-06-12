@@ -122,10 +122,26 @@ public sealed class ReadRenderTests : WordTestBase
 
         var html = Data(Handler.Render(Ctx(file, new JsonObject { ["to"] = "html" })))["content"]!.GetValue<string>();
 
-        Assert.Contains("<h1>Doc Title</h1>", html, StringComparison.Ordinal);
-        Assert.Contains("<h2>Chapter One</h2>", html, StringComparison.Ordinal);
+        Assert.Contains("""<h1 data-aio-path="/body/p[1]">Doc Title</h1>""", html, StringComparison.Ordinal);
+        Assert.Contains("""<h2 data-aio-path="/body/p[3]">Chapter One</h2>""", html, StringComparison.Ordinal);
         Assert.Contains("<strong>Strong claim</strong>", html, StringComparison.Ordinal);
-        Assert.Contains("<td>K</td><td>V</td>", html, StringComparison.Ordinal);
+        Assert.Contains(
+            """<td data-aio-path="/body/table[1]/tr[1]/tc[1]">K</td><td data-aio-path="/body/table[1]/tr[1]/tc[2]">V</td>""",
+            html,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The data-aio-path render contract: every addressable block maps back to a path.</summary>
+    [Fact]
+    public void Render_html_tags_every_block_with_data_aio_path()
+    {
+        var file = CreateSample();
+
+        var html = Data(Handler.Render(Ctx(file, new JsonObject { ["to"] = "html" })))["content"]!.GetValue<string>();
+
+        Assert.Contains("""<p data-aio-path="/body/p[2]">Intro words here.</p>""", html, StringComparison.Ordinal);
+        Assert.Contains("""<table data-aio-path="/body/table[1]">""", html, StringComparison.Ordinal);
+        Assert.Contains("""<tr data-aio-path="/body/table[1]/tr[1]">""", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -139,7 +155,7 @@ public sealed class ReadRenderTests : WordTestBase
             ["scope"] = "/body/p[3]",
         })))["content"]!.GetValue<string>();
 
-        Assert.Equal("<h2>Chapter One</h2>", html);
+        Assert.Equal("""<h2 data-aio-path="/body/p[3]">Chapter One</h2>""", html);
     }
 
     [Fact]

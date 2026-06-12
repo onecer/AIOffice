@@ -72,7 +72,9 @@ public sealed partial class WordHandler
     private static object ApplyOp(WordprocessingDocument doc, string file, EditOp op) => op.Op switch
     {
         "set" => ApplySet(doc, op),
-        "add" => ApplyAdd(doc, file, op),
+        // header/footer creation cannot resolve its anchor (the part does not exist yet).
+        "add" when op.Type is "header" or "footer" => ApplyAddHeaderFooter(doc, file, op),
+        "add" => ApplyAdd(doc, op),
         "remove" => ApplyRemove(doc, op),
         _ => ApplyMove(doc, op),
     };
@@ -108,16 +110,19 @@ public sealed partial class WordHandler
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
                         $"set is not supported on '{node.Type}' (property '{name}').",
-                        node.Type is "tc"
-                            ? "A table cell only supports text, or address a paragraph inside it: " + node.CanonicalPath + "/p[1]."
-                            : "Set properties on p or run elements; address one with query first.");
+                        node.Type switch
+                        {
+                            "tc" => "A table cell only supports text, or address a paragraph inside it: " + node.CanonicalPath + "/p[1].",
+                            "header" or "footer" => "Address a paragraph inside it instead: " + node.CanonicalPath + "/p[1].",
+                            _ => "Set properties on p or run elements; address one with query first.",
+                        });
             }
         }
 
         return new { op = "set", path = node.CanonicalPath, type = node.Type };
     }
 
-    private static object ApplyAdd(WordprocessingDocument doc, string file, EditOp op)
+    private static object ApplyAdd(WordprocessingDocument doc, EditOp op)
     {
         var anchor = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
         var type = op.Type ?? "p";
@@ -127,7 +132,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"add position '{position}' is not valid.",
-                "Use position before, after or inside (inside only for /body, table or tc targets).",
+                "Use position before, after or inside (inside only for /body, header/footer, table or tc targets).",
                 candidates: ["before", "after", "inside"]);
         }
 
@@ -141,18 +146,19 @@ public sealed partial class WordHandler
             _ => throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"add --type {type} is not supported for docx.",
-                "Add p (use props.style=Heading1 for headings), tr (props.cells=[…]) or table (props.rows/columns). " +
-                "For runs, set text on the paragraph instead.",
-                candidates: ["p", "tr", "table"]),
+                "Add p (use props.style=Heading1 for headings), tr (props.cells=[…]), table (props.rows/columns), " +
+                "or header/footer targeting /header[1] | /footer[1]. For runs, set text on the paragraph instead.",
+                candidates: ["p", "tr", "table", "header", "footer"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.
-        var isContainerAnchor = anchor.Type is "body" or "tc" || (anchor.Type == "table" && created is TableRow);
+        var isContainerAnchor = anchor.Type is "body" or "tc" or "header" or "footer"
+            || (anchor.Type == "table" && created is TableRow);
         var pos = position ?? (isContainerAnchor ? "inside" : "after");
 
         var valid = (created, anchor.Type, pos) switch
         {
-            (Paragraph or Table, "body" or "tc", "inside") => true,
+            (Paragraph or Table, "body" or "tc" or "header" or "footer", "inside") => true,
             (Paragraph or Table, "p" or "table", "before" or "after") => true,
             (TableRow, "table", "inside") => true,
             (TableRow, "tr", "before" or "after") => true,
@@ -164,16 +170,16 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Cannot add a '{type}' {pos} {anchor.CanonicalPath} ({anchor.Type}).",
-                "Add p/table inside /body or a tc, or before/after an existing p/table; " +
+                "Add p/table inside /body, /header[n], /footer[n] or a tc, or before/after an existing p/table; " +
                 "add tr inside a table, or before/after an existing tr.");
         }
 
-        var canonical = Insert(GetBody(doc, file), anchor, created, pos);
+        var canonical = Insert(doc, anchor, created, pos);
         return new { op = "add", type, anchor = anchor.CanonicalPath, path = canonical };
     }
 
     /// <summary>Inserts at the validated position; appending to body keeps sectPr last.</summary>
-    private static string Insert(Body body, ResolvedNode anchor, OpenXmlElement created, string pos)
+    private static string Insert(WordprocessingDocument doc, ResolvedNode anchor, OpenXmlElement created, string pos)
     {
         switch (pos)
         {
@@ -198,8 +204,8 @@ public sealed partial class WordHandler
                 break;
         }
 
-        // Report where the new node landed as a canonical path.
-        var match = WordAddress.EnumerateBody(body).FirstOrDefault(n => ReferenceEquals(n.Element, created));
+        // Report where the new node landed as a canonical path (body, header or footer scope).
+        var match = WordAddress.EnumerateAll(doc).FirstOrDefault(n => ReferenceEquals(n.Element, created));
         return match?.CanonicalPath ?? anchor.CanonicalPath;
     }
 
@@ -211,7 +217,9 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"remove is not supported on '{node.Type}'.",
-                "Remove p, table or tr elements. To clear a run or cell, set its text to \"\" instead.");
+                node.Type is "header" or "footer"
+                    ? $"Removing a whole {node.Type} is not supported yet (M2). Blank it instead: set {node.CanonicalPath}/p[1] text to \"\"."
+                    : "Remove p, table or tr elements. To clear a run or cell, set its text to \"\" instead.");
         }
 
         if (node.Element is Paragraph && node.Element.Parent is TableCell cell &&
@@ -221,6 +229,20 @@ public sealed partial class WordHandler
                 ErrorCodes.InvalidArgs,
                 $"{node.CanonicalPath} is the only paragraph in its table cell; a cell must keep one.",
                 "Set its text to \"\" instead: {\"op\":\"set\",\"path\":\"" + node.CanonicalPath + "\",\"props\":{\"text\":\"\"}}.");
+        }
+
+        // A w:hdr/w:ftr must keep at least one block-level element to stay schema-valid.
+        if (node.Element is Paragraph or Table && node.Element.Parent is Header or Footer &&
+            node.Element.Parent!.ChildElements.Count(c => c is Paragraph or Table) == 1)
+        {
+            var container = node.Element.Parent is Header ? "header" : "footer";
+            var containerPath = node.CanonicalPath[..node.CanonicalPath.LastIndexOf('/')];
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"{node.CanonicalPath} is the last block in its {container}; a {container} must keep at least one block.",
+                node.Element is Paragraph
+                    ? "Set its text to \"\" instead: {\"op\":\"set\",\"path\":\"" + node.CanonicalPath + "\",\"props\":{\"text\":\"\"}}."
+                    : "Add a paragraph to the " + container + " first ({\"op\":\"add\",\"path\":\"" + containerPath + "\",\"type\":\"p\"}), then remove the table.");
         }
 
         node.Element.Remove();

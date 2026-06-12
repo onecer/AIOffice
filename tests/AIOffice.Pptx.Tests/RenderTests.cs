@@ -42,7 +42,46 @@ public sealed class RenderTests : IDisposable
         Assert.Contains("fill=\"#FFEE00\"", svg, StringComparison.Ordinal);
         Assert.Contains("Revenue &amp; growth", svg, StringComparison.Ordinal);
         Assert.Contains("font-weight=\"bold\"", svg, StringComparison.Ordinal);
-        Assert.Contains("data-path=\"/slide[2]/shape[@id=", svg, StringComparison.Ordinal);
+        Assert.Contains("<g data-aio-path=\"/slide[2]/shape[@id=", svg, StringComparison.Ordinal);
+    }
+
+    /// <summary>The data-aio-path render contract: every shape is wrapped in a g
+    /// whose attribute is the canonical stable-id path, so a browser click maps
+    /// back to an addressable node.</summary>
+    [Fact]
+    public void Svg_WrapsEveryShapeInADataAioPathGroup()
+    {
+        CreateDeck();
+        var data = TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "svg"))));
+
+        var slides = data["slides"]!.AsArray();
+        Assert.Equal(2, slides.Count);
+        foreach (var slide in slides)
+        {
+            var path = slide!["path"]!.GetValue<string>();
+            var svg = slide["svg"]!.GetValue<string>();
+            var groups = svg.Split("<g data-aio-path=\"").Length - 1;
+            var shapeCount = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["shapeCount"]!.GetValue<int>();
+
+            Assert.Equal(shapeCount, groups);
+            Assert.Equal(groups, svg.Split("</g>").Length - 1);
+            for (var ordinal = 1; ordinal <= shapeCount; ordinal++)
+            {
+                var canonical = TestEnv.AssertOk(_handler.Get(
+                    _ws.Ctx("deck.pptx", ("path", $"{path}/shape[{ordinal}]"))))["path"]!.GetValue<string>();
+                Assert.Contains($"<g data-aio-path=\"{canonical}\"", svg, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void Html_CarriesDataAioPathAttributes()
+    {
+        CreateDeck();
+        var html = TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))))["html"]!.GetValue<string>();
+
+        Assert.Contains("<g data-aio-path=\"/slide[1]/shape[@id=", html, StringComparison.Ordinal);
+        Assert.Contains("<g data-aio-path=\"/slide[2]/shape[@id=", html, StringComparison.Ordinal);
     }
 
     [Fact]

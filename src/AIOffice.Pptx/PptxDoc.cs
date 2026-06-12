@@ -6,12 +6,17 @@ using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx;
 
-/// <summary>A top-level slide shape with its stable id and 1-based ordinal.</summary>
+/// <summary>A top-level shape (of a slide, master or layout) with its stable id and 1-based ordinal.</summary>
 internal sealed record ShapeView(OpenXmlCompositeElement Element, uint Id, int Ordinal, string Kind, string Name)
 {
-    public string CanonicalPath(int slideIndex) => Units.Inv($"/slide[{slideIndex}]/shape[@id={Id}]");
+    public string CanonicalPath(int slideIndex) => CanonicalPathIn(Units.Inv($"/slide[{slideIndex}]"));
 
-    public string OrdinalPath(int slideIndex) => Units.Inv($"/slide[{slideIndex}]/shape[{Ordinal}]");
+    public string OrdinalPath(int slideIndex) => OrdinalPathIn(Units.Inv($"/slide[{slideIndex}]"));
+
+    /// <summary>Stable-id path beneath any container (/slide[2], /master[1]/layout[2], …).</summary>
+    public string CanonicalPathIn(string containerPath) => Units.Inv($"{containerPath}/shape[@id={Id}]");
+
+    public string OrdinalPathIn(string containerPath) => Units.Inv($"{containerPath}/shape[{Ordinal}]");
 }
 
 /// <summary>Shape geometry in EMU.</summary>
@@ -101,18 +106,33 @@ internal static class PptxDoc
 
     public static P.ShapeTree RequireShapeTree(SlidePart slidePart)
     {
-        return slidePart.Slide?.CommonSlideData?.ShapeTree ?? throw new AiofficeException(
-            ErrorCodes.FormatCorrupt,
-            "The slide has no shape tree (p:spTree).",
-            "The slide part is malformed; re-export the file or restore a snapshot.");
+        return slidePart.Slide?.CommonSlideData?.ShapeTree ?? throw MissingShapeTree("slide");
     }
 
+    public static P.ShapeTree RequireShapeTree(SlideMasterPart masterPart)
+    {
+        return masterPart.SlideMaster?.CommonSlideData?.ShapeTree ?? throw MissingShapeTree("slide master");
+    }
+
+    public static P.ShapeTree RequireShapeTree(SlideLayoutPart layoutPart)
+    {
+        return layoutPart.SlideLayout?.CommonSlideData?.ShapeTree ?? throw MissingShapeTree("slide layout");
+    }
+
+    private static AiofficeException MissingShapeTree(string partKind) => new(
+        ErrorCodes.FormatCorrupt,
+        $"The {partKind} has no shape tree (p:spTree).",
+        $"The {partKind} part is malformed; re-export the file or restore a snapshot.");
+
     /// <summary>Top-level shapes of a slide in document order, ordinals starting at 1.</summary>
-    public static List<ShapeView> Shapes(SlidePart slidePart)
+    public static List<ShapeView> Shapes(SlidePart slidePart) => Shapes(RequireShapeTree(slidePart));
+
+    /// <summary>Top-level shapes of any shape tree (slide, master or layout), ordinals starting at 1.</summary>
+    public static List<ShapeView> Shapes(P.ShapeTree tree)
     {
         var views = new List<ShapeView>();
         var ordinal = 0;
-        foreach (var element in RequireShapeTree(slidePart).ChildElements)
+        foreach (var element in tree.ChildElements)
         {
             var kind = element switch
             {
@@ -145,7 +165,16 @@ internal static class PptxDoc
 
     public static ShapeView ResolveShape(SlidePart slidePart, PptxAddress address)
     {
-        var shapes = Shapes(slidePart);
+        return ResolveShape(
+            Shapes(slidePart),
+            address,
+            address.CanonicalContainerPath,
+            Units.Inv($"on slide {address.SlideIndex}"));
+    }
+
+    /// <summary>Resolves a shape segment inside any container's shape list (slide, master or layout).</summary>
+    public static ShapeView ResolveShape(List<ShapeView> shapes, PptxAddress address, string containerPath, string containerLabel)
+    {
         ShapeView? match = address.ShapeId is { } id
             ? shapes.FirstOrDefault(s => s.Id == id)
             : shapes.FirstOrDefault(s => s.Ordinal == address.ShapeOrdinal);
@@ -158,9 +187,147 @@ internal static class PptxDoc
         var what = address.ShapeId is { } sid ? $"id {sid}" : $"index {address.ShapeOrdinal}";
         throw new AiofficeException(
             ErrorCodes.InvalidPath,
-            $"No shape with {what} on slide {address.SlideIndex}; it has {shapes.Count} shape(s).",
+            $"No shape with {what} {containerLabel}; it has {shapes.Count} shape(s).",
             "Run 'aioffice query <file> shape' to list canonical shape paths.",
-            candidates: [.. shapes.Take(10).Select(s => s.CanonicalPath(address.SlideIndex))]);
+            candidates: [.. shapes.Take(10).Select(s => s.CanonicalPathIn(containerPath))]);
+    }
+
+    /// <summary>Master parts in p:sldMasterIdLst order, indices starting at 1.</summary>
+    public static List<(int Index, SlideMasterPart Part)> Masters(PresentationPart presentation)
+    {
+        var result = new List<(int, SlideMasterPart)>();
+        var list = presentation.Presentation?.SlideMasterIdList;
+        if (list is not null)
+        {
+            foreach (var masterId in list.Elements<P.SlideMasterId>())
+            {
+                if (masterId.RelationshipId?.Value is { } relId &&
+                    presentation.TryGetPartById(relId, out var part) &&
+                    part is SlideMasterPart masterPart)
+                {
+                    result.Add((result.Count + 1, masterPart));
+                }
+            }
+
+            return result;
+        }
+
+        foreach (var masterPart in presentation.SlideMasterParts)
+        {
+            result.Add((result.Count + 1, masterPart));
+        }
+
+        return result;
+    }
+
+    /// <summary>Layout parts of a master in p:sldLayoutIdLst order, indices starting at 1.</summary>
+    public static List<(int Index, SlideLayoutPart Part)> Layouts(SlideMasterPart masterPart)
+    {
+        var result = new List<(int, SlideLayoutPart)>();
+        var list = masterPart.SlideMaster?.SlideLayoutIdList;
+        if (list is not null)
+        {
+            foreach (var layoutId in list.Elements<P.SlideLayoutId>())
+            {
+                if (layoutId.RelationshipId?.Value is { } relId &&
+                    masterPart.TryGetPartById(relId, out var part) &&
+                    part is SlideLayoutPart layoutPart)
+                {
+                    result.Add((result.Count + 1, layoutPart));
+                }
+            }
+
+            return result;
+        }
+
+        foreach (var layoutPart in masterPart.SlideLayoutParts)
+        {
+            result.Add((result.Count + 1, layoutPart));
+        }
+
+        return result;
+    }
+
+    public static SlideMasterPart ResolveMaster(PresentationPart presentation, int index1, string raw)
+    {
+        var masters = Masters(presentation);
+        if (index1 >= 1 && index1 <= masters.Count)
+        {
+            return masters[index1 - 1].Part;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidPath,
+            $"Master index {index1} is out of range in '{raw}'; the deck has {masters.Count} master(s).",
+            "Run 'aioffice read <file> --view structure' to list masters and layouts.",
+            candidates: [.. Enumerable.Range(1, Math.Min(masters.Count, 10)).Select(i => Units.Inv($"/master[{i}]"))]);
+    }
+
+    public static SlideLayoutPart ResolveLayout(SlideMasterPart masterPart, int masterIndex, int index1, string raw)
+    {
+        var layouts = Layouts(masterPart);
+        if (index1 >= 1 && index1 <= layouts.Count)
+        {
+            return layouts[index1 - 1].Part;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidPath,
+            $"Layout index {index1} is out of range in '{raw}'; master {masterIndex} has {layouts.Count} layout(s).",
+            "Run 'aioffice read <file> --view structure' to list masters and layouts.",
+            candidates: [.. Enumerable.Range(1, Math.Min(layouts.Count, 10))
+                .Select(i => Units.Inv($"/master[{masterIndex}]/layout[{i}]"))]);
+    }
+
+    /// <summary>The canonical /master[m]/layout[l] path of the layout a slide uses, when resolvable.</summary>
+    public static string? LayoutPathOf(PresentationPart presentation, SlidePart slidePart)
+    {
+        var layout = slidePart.SlideLayoutPart;
+        if (layout is null)
+        {
+            return null;
+        }
+
+        foreach (var (masterIndex, masterPart) in Masters(presentation))
+        {
+            foreach (var (layoutIndex, layoutPart) in Layouts(masterPart))
+            {
+                if (layoutPart.Uri == layout.Uri)
+                {
+                    return Units.Inv($"/master[{masterIndex}]/layout[{layoutIndex}]");
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The layout's p:cSld name ("Blank", "Title Slide", …), when set.</summary>
+    public static string? LayoutName(SlideLayoutPart layoutPart) =>
+        layoutPart.SlideLayout?.CommonSlideData?.Name?.Value;
+
+    /// <summary>The layout's schema type token ("blank", "titleOnly", …), when set.</summary>
+    public static string? LayoutType(SlideLayoutPart layoutPart) =>
+        layoutPart.SlideLayout?.Type?.InnerText;
+
+    /// <summary>
+    /// The placeholder type token of a shape ("title", "body", "ctrTitle", …);
+    /// "body" when the placeholder exists with no explicit type (the schema
+    /// default), null when the shape is not a placeholder.
+    /// </summary>
+    public static string? PlaceholderType(OpenXmlCompositeElement element)
+    {
+        var placeholder = element switch
+        {
+            P.Shape s => s.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape,
+            P.Picture p => p.NonVisualPictureProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape,
+            P.GraphicFrame g => g.NonVisualGraphicFrameProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape,
+            P.GroupShape g => g.NonVisualGroupShapeProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape,
+            P.ConnectionShape c => c.NonVisualConnectionShapeProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape,
+            _ => null,
+        };
+
+        return placeholder is null ? null : placeholder.Type?.InnerText ?? "body";
     }
 
     public static A.Paragraph ResolveParagraph(ShapeView view, PptxAddress address)

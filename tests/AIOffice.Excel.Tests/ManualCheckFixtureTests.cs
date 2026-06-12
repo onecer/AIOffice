@@ -53,6 +53,8 @@ public sealed class ManualCheckFixtureTests : ExcelTestBase
                 SetOp("/'Q3 Data'/C8", ("value", "=SUM(C4:C6)"), ("numberFormat", "#,##0.00"), ("bold", true)),
                 SetOp("/'Q3 Data'/C9", ("value", "2026-06-12")),
                 SetOp("/'Q3 Data'/A8", ("fill", "#FFF2CC")),
+                AddOp("/'Q3 Data'", "chart",
+                    ("kind", "bar"), ("dataRange", "A3:C6"), ("anchor", "E3"), ("title", "Sales by item")),
             ]);
         Assert.True(edit.IsOk, edit.ToJson());
 

@@ -71,6 +71,42 @@ public sealed class RoundTripLawTests : ExcelTestBase
         AssertValidatorClean(resaved);
     }
 
+    /// <summary>
+    /// The chart corollary of the round-trip law: a file whose charts were
+    /// written by aioffice's post-save OpenXml pass must keep every chart and
+    /// drawing part BYTE-IDENTICAL through a no-edit ClosedXML open/save — the
+    /// changed-part set stays exactly the documented one (sheet1.xml).
+    /// </summary>
+    [Fact]
+    public void NoEdit_resave_keeps_chart_parts_byte_identical()
+    {
+        var original = BuildRichFixture();
+        var chartEnvelope = EditOps(original, AddOp(
+            "/Sheet1", "chart",
+            ("kind", "bar"), ("dataRange", "A10:C12"), ("anchor", "G2"), ("title", "Stock")));
+        Assert.True(chartEnvelope.IsOk, chartEnvelope.ToJson());
+
+        var resaved = Path.Combine(Dir, "resaved-chart.xlsx");
+        File.Copy(original, resaved);
+        using (var workbook = new XLWorkbook(resaved))
+        {
+            workbook.Save(); // no edits at all
+        }
+
+        var before = ReadParts(original);
+        var after = ReadParts(resaved);
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
+        Assert.Contains("xl/drawings/drawing1.xml", before.Keys);
+        Assert.Contains("xl/drawings/charts/chart1.xml", before.Keys);
+
+        var changed = before.Keys
+            .Where(name => !before[name].AsSpan().SequenceEqual(after[name]))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(DocumentedChangedParts, changed); // chart parts NOT in the set
+
+        AssertValidatorClean(resaved);
+    }
+
     /// <summary>A workbook exercising values, formulas, styles, merges and a table.</summary>
     private string BuildRichFixture()
     {

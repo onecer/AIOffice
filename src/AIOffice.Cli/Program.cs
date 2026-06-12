@@ -60,6 +60,22 @@ internal static class Program
             }
         }
 
+        // preview owns its own printing order: the open action must print (and
+        // flush) the startup envelope BEFORE it blocks on the server.
+        if (parsed.Verb == "preview")
+        {
+            try
+            {
+                return PreviewVerbs.Run(parsed, BuildWorkspace(parsed), stopwatch, env => Print(env, pretty, quiet));
+            }
+            catch (Exception ex)
+            {
+                return Print(
+                    Stamp(Envelope.FromException(ex), MetaFileFor(parsed), workspace: null, stopwatch.ElapsedMilliseconds),
+                    pretty, quiet);
+            }
+        }
+
         // Resolved up front so error envelopes still carry file + rev meta
         // (a stale_address response should tell the agent the current rev).
         var metaFile = MetaFileFor(parsed);
@@ -89,7 +105,7 @@ internal static class Program
     /// <summary>The positional that names the file this command touches, if any.</summary>
     private static string? MetaFileFor(ParsedArgs parsed) => parsed.Verb switch
     {
-        "snapshot" when parsed.Positionals.Count > 1 => parsed.Positionals[1],
+        "snapshot" or "preview" when parsed.Positionals.Count > 1 => parsed.Positionals[1],
         { } verb when FileVerbNames.Contains(verb, StringComparer.Ordinal) && parsed.Positionals.Count > 0 =>
             parsed.Positionals[0],
         _ => null,

@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：v0 规格（冻结 13 个能力名：12 个工具在 v0 注册，`preview_*` 整组保留至 M1）。
+> 状态：M1 规格（v0.2.0）：**14 个工具全部注册**——v0 的 12 个 + M1 转正的 `preview_open` / `preview_selection`；`office_render` 新增 `to=png`（附 MCP image content block）。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -17,7 +17,7 @@ aioffice mcp [--workspace <dir>]
 
 - stdio MCP server；`--workspace`（或环境变量 `AIOFFICE_WORKSPACE`，默认 cwd）定义沙箱根。
 - 所有 `file` / `output` 参数在每次调用时做 realpath + symlink 逃逸检查，越界即 `sandbox_denied`。
-- 13 个能力：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_template` `file_snapshot` `office_status` `office_help` `office_schema`，外加 `preview_*`（保留 M1，v0 不注册，见 §1.13）。
+- 14 个工具：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_template` `file_snapshot` `office_status` `office_help` `office_schema` `preview_open` `preview_selection`（preview 二件套 M1 转正注册，见 §1.13）。
 
 ### 0.2 统一返回 envelope
 
@@ -37,7 +37,7 @@ aioffice mcp [--workspace <dir>]
     "file": "report.docx",            // when a file was involved
     "rev": "a3f9c12be01d",            // first 12 hex of SHA256 of file bytes, AFTER the call
     "elapsedMs": 42,
-    "version": "0.1.0",               // aioffice version
+    "version": "0.2.0",               // aioffice version
     "warnings": [                     // optional, non-fatal
       { "code": "formula_not_evaluated", "message": "B7 has no cached value; returned formula text" }
     ]
@@ -57,9 +57,9 @@ aioffice mcp [--workspace <dir>]
 
 | 格式 | 示例 |
 |---|---|
-| docx | `/body/p[3]`、`/body/table[1]/tr[2]/tc[1]`、`/body/p[3]/run[2]`、`/header[1]/p[1]` |
-| xlsx | `/Sheet1/A1`、`/Sheet1/A1:C10`、`/Sheet1/row[3]`，含空格的表名加引号：`/'Q3 Data'/B2` |
-| pptx | `/slide[2]`、`/slide[2]/shape[3]`、`/slide[2]/shape[3]/p[1]`（master/layout 寻址保留 M1） |
+| docx | `/body/p[3]`、`/body/table[1]/tr[2]/tc[1]`、`/body/p[3]/run[2]`、`/header[1]/p[1]`、`/footer[1]/p[1]` |
+| xlsx | `/Sheet1/A1`、`/Sheet1/A1:C10`、`/Sheet1/row[3]`、`/Sheet1/chart[1]`，含空格的表名加引号：`/'Q3 Data'/B2` |
+| pptx | `/slide[2]`、`/slide[2]/shape[3]`、`/slide[2]/shape[3]/p[1]`；M1 起 `/master[1]`、`/master[1]/layout[2]`（get/query 只读） |
 
 索引一律 **1-based**。`office_query` 返回规范路径（canonical paths），`office_get` / `office_edit` 原样接受。位置索引在增删后会漂移——多步编辑中，删改之后**重新 query**，不要复用旧索引。
 
@@ -72,7 +72,7 @@ aioffice mcp [--workspace <dir>]
 | `sandbox_denied` | 路径越出 workspace（含 symlink 逃逸） | `suggestion` 提示 `--workspace` / `AIOFFICE_WORKSPACE` | 4 |
 | `invalid_path` | 元素路径不存在 | **必附 `candidates[]`**：服务端自动用路径末段元素名跑一次近似 query 回填 | 2 |
 | `stale_address` | `expect_rev` 与当前 rev 失配（文件被外部或并行修改） | 重新 `office_get` 拿新 rev 后重试；写入未发生 | 2 |
-| `unsupported_feature` | 能力在当前里程碑不可用（如 `render to=png`） | **`suggestion` 必须给出 workaround** | 5 |
+| `unsupported_feature` | 能力在当前里程碑不可用（如 master/layout 编辑、scatter 图表） | **`suggestion` 必须给出 workaround** | 5 |
 | `format_corrupt` | 文件不是合法 OOXML / zip 损坏 | `suggestion` 提示 `office_validate` 与 `file_snapshot restore` | 3 |
 | `internal_error` | 未预期异常（我们的 bug） | `suggestion` 提示带 `office_status` 输出报 issue | 3 |
 | `formula_not_evaluated` | **warning（`meta.warnings`），非 error**：xlsx 公式无缓存值且本次未计算 | 读到的是公式文本而非值；data 中相应字段标注 | 0 |
@@ -300,7 +300,7 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.6 `office_render`
 
-**用途**：把文档（或子树）渲染为可检视产物——「render → look → fix」循环的 look 步骤。v0：docx/xlsx → html，pptx → 每页 svg（或 html）；`text` 全格式可用。**png 保留 M1**（调用返回 `unsupported_feature`，含 workaround）。
+**用途**：把文档（或子树）渲染为可检视产物——「render → look → fix」循环的 look 步骤。docx/xlsx → html，pptx → 每页 svg（或 html）；`text` 全格式可用。**M1 起支持 `to=png`**：handler 产物（html/svg）→ headless 浏览器（Chrome/Edge，`office_status` 报告探测结果）截图；pptx 一次渲染一页（传 `scope`，缺省 `/slide[1]` + meta warning）。探测不到浏览器 → `unsupported_feature` + 安装建议。
 
 ```json
 {
@@ -308,7 +308,7 @@ aioffice mcp [--workspace <dir>]
   "properties": {
     "file": { "type": "string" },
     "to": { "type": "string", "enum": ["html", "svg", "text", "png"], "default": "html",
-      "description": "html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: reserved M1 → unsupported_feature" },
+      "description": "html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope)" },
     "scope": { "type": "string", "description": "Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\"" },
     "output": { "type": "string", "description": "Output file or directory inside workspace (default: alongside source)" }
   },
@@ -316,8 +316,10 @@ aioffice mcp [--workspace <dir>]
 }
 ```
 
-**result**：`data: { outputs: string[] /* absolute paths */, content?: string /* inlined when single text-format output ≤ 256 KB */ }`
+**result**：
+- html/svg/text：`data: { outputs: string[] /* absolute paths */, content?: string /* inlined when single text-format output ≤ 256 KB */ }`
 （单一 html/svg/text 产物且不超过 256 KB 时直接内联在 `content`，agent 无需再开文件；超限时只给路径并在 `meta.warnings` 标注。）
+- png：`data: { format: "png", scope?: string, written: string /* absolute path */, sizeBytes: number }`，**且** MCP result 的 `content` 附第二个 block：`{type:"image", mimeType:"image/png", data:<base64>}`——文件字节原样内联（不降采样），模型直接看图。
 
 **示例**
 
@@ -328,9 +330,16 @@ aioffice mcp [--workspace <dir>]
 { "ok": true, "data": { "outputs": ["/ws/deck.slide3.svg"], "content": "<svg width=\"1280\" height=\"720\">…</svg>" } }
 ```
 
-**映射 CLI**：`aioffice render <file> [--to html|svg|text] [--scope <path>] [-o out]`
+```json
+// call — png 截图（pptx 必须给 scope，否则默认 /slide[1] 并在 meta.warnings 提示）
+{ "file": "deck.pptx", "to": "png", "scope": "/slide[2]" }
+// result（content[0] 是这段 envelope 文本，content[1] 是 image/png block）
+{ "ok": true, "data": { "format": "png", "scope": "/slide[2]", "written": "/ws/deck.png", "sizeBytes": 48213 } }
+```
 
-**错误码**：`unsupported_feature`（`to=png` → suggestion：先 `to=svg`/`to=html` 检视几何与文本，或把产物交给外部浏览器截图；M1 提供原生 png）、`invalid_path`（坏 scope，带 candidates）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+**映射 CLI**：`aioffice render <file> [--to html|svg|text|png] [--scope <path>] [-o out]`
+
+**错误码**：`unsupported_feature`（`to=png` 且探测不到 Chrome/Edge → suggestion 给安装路径与 html/svg 替代）、`invalid_path`（坏 scope，带 candidates）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
 
 ---
 
@@ -458,7 +467,7 @@ aioffice mcp [--workspace <dir>]
 // call
 {}
 // result
-{ "ok": true, "data": { "healthy": true, "version": "0.1.0",
+{ "ok": true, "data": { "healthy": true, "version": "0.2.0",
   "runtime": { "dotnet": "10.0.300", "os": "macos", "arch": "arm64" },
   "workspace": "/ws",
   "snapshotStore": { "path": "~/.aioffice/snapshots", "count": 14, "bytes": 41943040 },
@@ -509,14 +518,14 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.12 `office_schema`
 
-**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。13 工具 / 13 动词的单一事实来源（与 `aioffice schema` 字节一致）。
+**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。14 工具 / 14 动词的单一事实来源（与 `aioffice schema` 字节一致）。
 
 ```json
 {
   "type": "object",
   "properties": {
     "verb": { "type": "string",
-      "description": "Omit → full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|mcp" }
+      "description": "Omit → full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|preview|mcp" }
   }
 }
 ```
@@ -529,7 +538,7 @@ aioffice mcp [--workspace <dir>]
 // call
 { "verb": "edit" }
 // result
-{ "ok": true, "data": { "version": "0.1.0", "verbs": [
+{ "ok": true, "data": { "version": "0.2.0", "verbs": [
   { "name": "edit", "summary": "Atomic batch mutation",
     "args": { "ops": "...", "expect_rev": "...", "dry_run": "..." },
     "errors": ["stale_address", "invalid_path", "invalid_args", "unsupported_feature", "file_not_found", "sandbox_denied", "format_corrupt"],
@@ -543,14 +552,66 @@ aioffice mcp [--workspace <dir>]
 
 ---
 
-### 1.13 `preview_*`（保留 M1，v0 不注册）
+### 1.13 `preview_open`（M1 转正）
 
-浏览器实时预览 + 选区读取（人指哪、AI 打哪）规划在 M1：`preview_open`（启动/关闭/滚动到元素）、`preview_selection`（读取用户在浏览器中点选的元素路径）。
+**用途**：打开本地实时预览——人在浏览器里**点选元素**（点击高亮并记录其 `data-aio-path` 规范路径），AI 用 `preview_selection` 读回，「人指哪、AI 打哪」。文件被编辑后浏览器经 SSE 自动刷新。
 
-- v0 的 MCP server **不注册**这些工具（`tools/list` 中不出现），因此不占 token、不可误调。
-- 名称已冻结保留，第三方不要占用 `preview_` 前缀。
-- v0 的替代：让用户用 `office_render` 产物（html/svg）人工检视；改动定位用 `office_query`。
-- §2.1 的 token 预算已为它们预留空间，M1 落地不需要重谈预算。
+实现要点：阻塞型 server 不能住在 MCP 进程里（stdio 属于 JSON-RPC），所以本工具**拉起 detached `aioffice preview open` 子进程**（自身可执行文件定位：`AIOFFICE_EXE` env → 当前进程 → 同目录 `aioffice`），轮询 lockfile + HTTP health 最多 10s，成功返回 url。幂等：同文件已有活预览时直接返回它（`meta.warnings: already_running`）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "port": { "type": "integer", "description": "Fixed port (default: auto-pick in 26500-26600)" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { url: string, port: number, pid: number }`
+
+**示例**
+
+```json
+// call
+{ "file": "report.docx" }
+// result
+{ "ok": true, "data": { "url": "http://127.0.0.1:26500/", "port": 26500, "pid": 4242 } }
+```
+
+**映射 CLI**：`aioffice preview open <file> [--port N]`（CLI 形态是前台阻塞 server，envelope 先打印再阻塞）
+
+**错误码**：`file_not_found`、`sandbox_denied`、`invalid_args`（坏 port）、`unsupported_feature`（定位不到 aioffice 可执行文件，suggestion 给 `AIOFFICE_EXE` / 手动启动）、`internal_error`（子进程 10s 未就绪或启动即死，relay 子进程 envelope）。
+
+---
+
+### 1.14 `preview_selection`（M1 转正）
+
+**用途**：读回用户在预览浏览器里点选的元素的规范路径，直接喂给 `office_get` / `office_edit`。
+
+```json
+{
+  "type": "object",
+  "properties": { "file": { "type": "string" } },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { paths: string[], rev: string | null, updatedAt: string | null }`（`rev` = 选择发生时的文件 rev；编辑前可与当前 `meta.rev` 对比判断选区是否已过期）
+
+**示例**
+
+```json
+// call
+{ "file": "report.docx" }
+// result — 用户点了一个段落和一个表格
+{ "ok": true, "data": { "paths": ["/body/p[3]", "/body/table[1]"], "rev": "a3f9c12be01d", "updatedAt": "2026-06-12T08:30:00Z" } }
+```
+
+**映射 CLI**：`aioffice preview selection <file>`（`preview close <file>` 关停 server 并清理 lockfile）
+
+**错误码**：`preview_not_running`（该文件没有运行中的预览，suggestion 指向 `preview_open`）、`sandbox_denied`。
 
 ---
 
@@ -563,7 +624,7 @@ aioffice mcp [--workspace <dir>]
 | 工具 | 预算 (tokens) | 理由 |
 |---|---:|---|
 | `office_edit` | 620 | 唯一 fat tool，承载全部变更动词与 ops 语法 |
-| `office_render` | 260 | 4 种目标格式 + scope + png 保留说明 |
+| `office_render` | 260 | 4 种目标格式 + scope + png 行为说明 |
 | `office_read` | 240 | 4 种 view + range |
 | `office_query` | 230 | selector 示例占大头 |
 | `office_template` | 230 | merge 语义 + 占位符示例 |
@@ -574,18 +635,19 @@ aioffice mcp [--workspace <dir>]
 | `office_schema` | 120 | |
 | `office_validate` | 100 | |
 | `office_status` | 90 | |
-| **v0 小计（12 工具）** | **2540** | |
-| M1 预留：`preview_open` + `preview_selection` | 480 | 落地时不重谈预算 |
+| `preview_open` | 300 | M1 转正，吃掉当年预留额度的大头 |
+| `preview_selection` | 180 | M1 转正 |
+| **M1 小计（14 工具）** | **3020** | v0 小计 2540 + preview 预留 480，预算如约未重谈 |
 | 措辞浮动预留 | 480 | description 迭代余量 |
-| **总额** | **≤ 3500** | |
+| **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关 |
 
 预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。
 
-### 2.2 Few-fat vs many-thin：为什么是 13 个中粒度能力
+### 2.2 Few-fat vs many-thin：为什么是 14 个中粒度能力
 
 - **Many-thin 的失败模式**：按「动词 × 格式」切会得到 50+ 个工具（docx_add_paragraph、xlsx_set_cell…），schema 总量超预算一个数量级，且把路由难题推给模型——工具选择错误率随工具数超线性上涨。
 - **One-mega 的失败模式**：单个 `run_aioffice(argv: string)` 看似零预算，实际把 CLI 语法学习成本转嫁给模型：丢失参数级校验、丢失结构化错误与 `candidates[]`、丢失 `expect_rev` / 自动快照等横切机制的注入点。
-- **我们的切法：按意图分层**——读三档粒度（`read` 全文档 → `query` 检索 → `get` 单点）、写**一档**（唯一的 fat `office_edit`：所有变更共享快照 / rev 守卫 / 原子保存这套横切机制，合并后机制只实现一次）、看（`render`）、体检（`validate`）、模板（`template`）、安全网（`snapshot` / `status`）、自描述（`help` / `schema`）、人机协作（`preview_*`，M1）。
+- **我们的切法：按意图分层**——读三档粒度（`read` 全文档 → `query` 检索 → `get` 单点）、写**一档**（唯一的 fat `office_edit`：所有变更共享快照 / rev 守卫 / 原子保存这套横切机制，合并后机制只实现一次）、看（`render`）、体检（`validate`）、模板（`template`）、安全网（`snapshot` / `status`）、自描述（`help` / `schema`）、人机协作（`preview_open` / `preview_selection`）。
 - CLI 动词与 MCP 工具 **1:1 镜像**（见附表）：agent 在两个入口间切换零学习成本，文档、测试、schema 只维护一份。
 
 ### 2.3 render → look → fix 循环
@@ -602,13 +664,13 @@ office_edit(改)
   → 收敛后 office_validate 收尾
 ```
 
-规则：**每完成一个视觉里程碑必须 render 看一次**，不要盲编 10 步再看；只渲染受影响的 `scope`，省 token 也省时间；非视觉问题（schema 违规、空段落、悬空引用）用 `office_validate` 的 issues，比渲染便宜。v0 的「看」是读 html/svg 标记（几何与文本可精确判断，像素级观感不行）；M1 的 `to=png` 会附带 MCP image content block，模型直接看图。
+规则：**每完成一个视觉里程碑必须 render 看一次**，不要盲编 10 步再看；只渲染受影响的 `scope`，省 token 也省时间；非视觉问题（schema 违规、空段落、悬空引用）用 `office_validate` 的 issues，比渲染便宜。读 html/svg 标记可精确判断几何与文本；要像素级观感用 `to=png`——result 附带 MCP image content block，模型直接看图。
 
 ### 2.4 渐进式文档漏斗（`office_help` / `office_schema`）
 
 OOXML 属性面有几千个属性名，全塞 schema 是预算自杀。三层漏斗：
 
-1. **第 0 层（常驻）**：12 个 tool schema 里只有动词、路径语法和一行示例（2540 tokens）；
+1. **第 0 层（常驻）**：14 个 tool schema 里只有动词、路径语法和一行示例（≈3020 tokens）；
 2. **第 1 层（按需）**：动手前 `office_help {topic:"<fmt>/<element>#<verb>"}` 拿该元素该动词的准确属性表——**一次 help 查询胜过 guess-fail-retry 三轮**；`office_schema` 给整个命令面的机器可读自省；
 3. **第 2 层（自愈）**：错误路径也接进漏斗——`invalid_path` 自动回填 `candidates[]`；`invalid_args`（坏 selector / 未知主题）的 suggestion 直接指向对应的 help 主题；`unsupported_feature` 的 suggestion 必须给出当前可用的 workaround。
 
@@ -656,14 +718,15 @@ You have aioffice MCP tools for real .docx/.xlsx/.pptx files. Rules:
 | `office_query` | `query <file> <selector>` | 返回规范路径 |
 | `office_get` | `get <file> <path>` | 单节点 + 属性 |
 | `office_edit` | `edit <file> --ops <json|@file> [--dry-run] [--expect-rev]` | 糖：`--set/--add/--remove` |
-| `office_render` | `render <file> [--to] [--scope] [-o]` | png 保留 M1 |
+| `office_render` | `render <file> [--to] [--scope] [-o]` | to: html/svg/text/png |
 | `office_validate` | `validate <file>` | OpenXmlValidator + lint |
 | `office_template` | `template <file> --data <json|@file> [-o]` | `{{key}}` 合并 |
 | `file_snapshot` | `snapshot <list|restore> <file> [n]` | 环形 20 份 |
 | `office_status` | `doctor` | |
 | `office_help` | `help [topic]` | 渐进式文档 |
 | `office_schema` | `schema [verb]` | 命令面自省 |
-| `preview_*`（M1） | —（M1 一并落地） | v0 不注册 |
+| `preview_open` | `preview open <file> [--port N]` | MCP 侧 detached 子进程；CLI 侧前台阻塞 |
+| `preview_selection` | `preview selection <file>` | `preview close <file>` 关停 |
 
 > CLI 全局旗标：`--json`（非 TTY 默认）| `--pretty` | `--workspace <dir>`（或 `AIOFFICE_WORKSPACE`）| `--quiet`。
 > CLI exit codes：`0` ok | `2` user/input error | `3` internal/format error | `4` sandbox_denied | `5` unsupported_feature（与 §0.4 错误码表对应）。

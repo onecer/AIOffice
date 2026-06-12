@@ -7,7 +7,7 @@
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4)
 ![platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
-**为 AI agent 而生的 Office CLI + MCP 服务器。** AIOffice 让 agent 像调用函数一样创建、查询、编辑、渲染、校验真实的 `.docx` / `.xlsx` / `.pptx`：一条命令进，恰好一个 JSON 信封出。
+**为 AI agent 而生的 Office CLI + MCP 服务器。** AIOffice 让 agent 像调用函数一样创建、查询、编辑、渲染、预览、校验真实的 `.docx` / `.xlsx` / `.pptx`：一条命令进，恰好一个 JSON 信封出。
 
 100% 自研，纯 C#/.NET 直接无损读写 OOXML（DocumentFormat.OpenXml + ClosedXML）。**一个约 36 MB 的单文件二进制，无需安装 Office，零运行时依赖，不包装任何第三方引擎。**
 
@@ -15,8 +15,139 @@
 aioffice create report.docx --title "Q3 报告"
 aioffice edit   report.docx --set '/body/p[1]' text="营收增长 12%"
 aioffice read   report.docx --view outline
-aioffice mcp    # 同样的 12 项能力，以 MCP 工具形式走 stdio
+aioffice mcp    # 同样的 14 项能力，以 MCP 工具形式走 stdio
 ```
+
+## 眼见为实
+
+下面每个文件都仅由 `aioffice` 创建、编辑、校验并截图——没装 Office，没有模板，没有手工修饰。完整脚本折叠在下方；[deck-1.svg](assets/demo/deck-1.svg) 是同一页标题幻灯片的 SVG 版本，其中每个形状都带有指回规范文档路径的 `data-aio-path` 属性。
+
+| | |
+|---|---|
+| ![deck.pptx 第 1 页，由 aioffice 渲染为 PNG](assets/demo/deck-1.png)<br><sub>`aioffice render deck.pptx --to png --scope '/slide[1]' -o deck-1.png`</sub> | ![deck.pptx 第 2 页，由定位形状拼出的数据卡片](assets/demo/deck-2.png)<br><sub>`aioffice query deck.pptx 'shape:contains("14")'` → `/slide[2]/shape[@id=9]`</sub> |
+| ![report.docx：页眉、标题与表格](assets/demo/report.png)<br><sub>`aioffice get report.docx '/header[1]/p[1]'` → `"text": "AIOffice Demo"`</sub> | ![metrics.xlsx：公式求值与数字格式](assets/demo/metrics.png)<br><sub>`aioffice get metrics.xlsx /Sheet1/B7` → `"cachedValue": 286900`</sub> |
+
+<details>
+<summary>完整脚本（逐条原样命令，含 render → look → fix 闭环）</summary>
+
+```bash
+# 在一个空目录中，aioffice 已加入 PATH
+
+# ---- deck.pptx —— 3 页幻灯片，深色背景 + 强调色形状 ----
+aioffice create deck.pptx
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"name":"bg","x":0,"y":0,"w":"33.87cm","h":"19.05cm","fill":"0F172A"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"name":"deco-1","x":26.2,"y":10.8,"w":12,"h":12,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"name":"deco-2","x":30.4,"y":15,"w":8,"h":8,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"name":"accent","x":2.6,"y":6.1,"w":5.2,"h":0.16,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"AIOffice","x":2.5,"y":6.6,"w":24,"h":3.6,"fontSize":60,"bold":true,"color":"FFFFFF"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"An AI-native CLI + MCP server for real Office files","x":2.5,"y":10.4,"w":26,"h":1.8,"fontSize":20,"color":"94A3B8"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"This deck was built entirely by aioffice edit — no Office installed","x":2.5,"y":16.9,"w":26,"h":1.2,"fontSize":12,"color":"64748B"}}]'
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[1]","type":"slide","position":"after"},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"name":"bg","x":0,"y":0,"w":"33.87cm","h":"19.05cm","fill":"0F172A"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"name":"accent","x":2.6,"y":2.0,"w":3.6,"h":0.16,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"M1 in numbers","x":2.5,"y":2.5,"w":20,"h":2.2,"fontSize":34,"bold":true,"color":"FFFFFF"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"name":"card-1","x":2.5,"y":6.4,"w":8.6,"h":8.2,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"3","x":3.4,"y":7.4,"w":6.8,"h":2.6,"fontSize":48,"bold":true,"color":"38BDF8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"file formats — docx, xlsx, pptx — one 36 MB binary","x":3.4,"y":10.6,"w":6.8,"h":3.4,"fontSize":13,"color":"94A3B8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"name":"card-2","x":12.6,"y":6.4,"w":8.6,"h":8.2,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"14","x":13.5,"y":7.4,"w":6.8,"h":2.6,"fontSize":48,"bold":true,"color":"38BDF8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"MCP tools, 1:1 with the CLI verbs","x":13.5,"y":10.6,"w":6.8,"h":3.4,"fontSize":13,"color":"94A3B8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"name":"card-3","x":22.7,"y":6.4,"w":8.6,"h":8.2,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"0","x":23.6,"y":7.4,"w":6.8,"h":2.6,"fontSize":48,"bold":true,"color":"38BDF8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"Office installs required — render, preview, validate built in","x":23.6,"y":10.6,"w":6.8,"h":3.4,"fontSize":13,"color":"94A3B8"}}]'
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[2]","type":"slide","position":"after"},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"name":"bg","x":0,"y":0,"w":"33.87cm","h":"19.05cm","fill":"0F172A"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"name":"deco","x":-3,"y":13.5,"w":10,"h":10,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"name":"accent","x":2.6,"y":7.0,"w":5.2,"h":0.16,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"text":"render → look → fix","x":2.5,"y":7.5,"w":28,"h":3.2,"fontSize":44,"bold":true,"color":"FFFFFF"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"text":"One JSON envelope at a time. github.com/onecer/AIOffice","x":2.5,"y":11,"w":26,"h":1.6,"fontSize":18,"color":"94A3B8"}}]'
+aioffice validate deck.pptx
+
+# ---- report.docx —— 页眉、Heading1/2、导语、表格 ----
+aioffice create report.docx
+aioffice edit report.docx --ops '[
+  {"op":"add","path":"/header[1]","type":"header","props":{"text":"AIOffice Demo"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"AIOffice M1 Report","style":"Heading1"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"This document was created entirely from the command line by aioffice — headings, header, table and styles included. Every block below is addressable (/body/p[2], /body/table[1]) and was written through the same atomic edit batches an AI agent would use."}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Milestone snapshot","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"table","position":"inside","props":{"rows":4,"cols":3}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"text":"Milestone"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[2]","props":{"text":"Highlights"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[3]","props":{"text":"Status"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[1]","props":{"text":"M0"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[2]","props":{"text":"create / query / edit / render / validate"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[3]","props":{"text":"shipped"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[1]","props":{"text":"M1"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[2]","props":{"text":"png render, live preview, headers/footers, xlsx charts"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[3]","props":{"text":"shipped"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[1]","props":{"text":"M2"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[2]","props":{"text":"tracked changes, comments, pivot tables"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[3]","props":{"text":"next"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"How it was made","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"aioffice edit report.docx --ops … applied all of the above in one atomic batch; aioffice validate confirms the OOXML is clean, and aioffice render --to png produced the image you are looking at."}}]'
+aioffice read report.docx --view outline        # 先看大纲：标题 + 规范路径
+aioffice edit report.docx --remove '/body/p[1]' # 删掉 create 留下的空段落
+aioffice validate report.docx
+aioffice get report.docx '/header[1]/p[1]'      # → "text": "AIOffice Demo"
+
+# ---- metrics.xlsx —— 销售表、SUM/AVERAGE、数字格式、柱状图 ----
+aioffice create metrics.xlsx
+aioffice edit metrics.xlsx --ops '[
+  {"op":"set","path":"/Sheet1/A1","props":{"value":"Month"}},
+  {"op":"set","path":"/Sheet1/B1","props":{"value":"Revenue"}},
+  {"op":"set","path":"/Sheet1/C1","props":{"value":"Units"}},
+  {"op":"set","path":"/Sheet1/A1:C1","props":{"bold":true,"fill":"DBEAFE"}},
+  {"op":"set","path":"/Sheet1/A2","props":{"value":"Jan"}},
+  {"op":"set","path":"/Sheet1/B2","props":{"value":48800}},
+  {"op":"set","path":"/Sheet1/C2","props":{"value":305}},
+  {"op":"set","path":"/Sheet1/A3","props":{"value":"Feb"}},
+  {"op":"set","path":"/Sheet1/B3","props":{"value":52400}},
+  {"op":"set","path":"/Sheet1/C3","props":{"value":327}},
+  {"op":"set","path":"/Sheet1/A4","props":{"value":"Mar"}},
+  {"op":"set","path":"/Sheet1/B4","props":{"value":61200}},
+  {"op":"set","path":"/Sheet1/C4","props":{"value":382}},
+  {"op":"set","path":"/Sheet1/A5","props":{"value":"Apr"}},
+  {"op":"set","path":"/Sheet1/B5","props":{"value":57600}},
+  {"op":"set","path":"/Sheet1/C5","props":{"value":360}},
+  {"op":"set","path":"/Sheet1/A6","props":{"value":"May"}},
+  {"op":"set","path":"/Sheet1/B6","props":{"value":66900}},
+  {"op":"set","path":"/Sheet1/C6","props":{"value":418}},
+  {"op":"set","path":"/Sheet1/A7","props":{"value":"Total","bold":true}},
+  {"op":"set","path":"/Sheet1/B7","props":{"value":"=SUM(B2:B6)","bold":true}},
+  {"op":"set","path":"/Sheet1/C7","props":{"value":"=SUM(C2:C6)","bold":true}},
+  {"op":"set","path":"/Sheet1/A8","props":{"value":"Average"}},
+  {"op":"set","path":"/Sheet1/B8","props":{"value":"=AVERAGE(B2:B6)"}},
+  {"op":"set","path":"/Sheet1/C8","props":{"value":"=AVERAGE(C2:C6)","numberFormat":"0.0"}},
+  {"op":"set","path":"/Sheet1/B2:B8","props":{"numberFormat":"$#,##0"}},
+  {"op":"add","path":"/Sheet1","type":"chart","props":{"kind":"bar","dataRange":"A1:B6","anchor":"E2","title":"Revenue by month"}}]'
+aioffice get metrics.xlsx /Sheet1/B7            # → "formula": "=SUM(B2:B6)", "cachedValue": 286900
+aioffice get metrics.xlsx /Sheet1/B8            # → "formula": "=AVERAGE(B2:B6)", "cachedValue": 57380
+aioffice get metrics.xlsx '/Sheet1/chart[1]'    # → 柱状图 "Revenue by month"，A1:B6 @ E2
+aioffice validate metrics.xlsx
+
+# ---- render：「看」的那一步 ----
+aioffice render deck.pptx    --to png --scope '/slide[1]' -o deck-1.png
+aioffice render deck.pptx    --to png --scope '/slide[2]' -o deck-2.png
+aioffice render deck.pptx    --to svg --scope '/slide[1]' -o deck-1.svg
+aioffice render report.docx  --to png -o report.png
+aioffice render metrics.xlsx --to png -o metrics.png
+
+# ---- look → fix：第 2 页卡片文字溢出了卡片边界 ----
+aioffice query deck.pptx 'shape:contains("formats")'   # 找到标签 → /slide[2]/shape[6]
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/slide[2]/shape[6]","props":{"text":"file formats — one binary"}},
+  {"op":"set","path":"/slide[2]/shape[9]","props":{"text":"MCP tools, 1:1 with the CLI"}},
+  {"op":"set","path":"/slide[2]/shape[12]","props":{"text":"Office installs required"}}]'
+aioffice validate deck.pptx
+aioffice render deck.pptx --to png --scope '/slide[2]' -o deck-2.png
+```
+
+PNG 入库 `assets/demo/` 前仅做了等比缩放（≤900 px 宽，sips/Pillow），像素未做其他处理。xlsx 的 PNG 展示的是 HTML 渲染器当前画出的内容：单元格、格式与公式缓存结果；柱状图真实存在于文件中（见 `get '/Sheet1/chart[1]'`），用 Excel 打开即可看到。
+
+</details>
 
 ## 为什么是 "AI-Native"？
 
@@ -30,10 +161,11 @@ aioffice mcp    # 同样的 12 项能力，以 MCP 工具形式走 stdio
 | **原子批量编辑** | `edit --ops '[...]'` 全部成功或全部不落盘；支持 `--dry-run`；乐观并发守卫 `--expect-rev`——文件被外部改动时在**任何写入之前**以 `stale_address` 失败 |
 | **自动可撤销** | 每次变更前自动快照前像（20 份环形保留），`snapshot restore` 一次调用即回滚，回滚本身也可撤销 |
 | **公式写入即求值** | Excel 公式写入时计算并**把结果缓存进文件**（`=SUM(A1:A2)` → 重新打开直接是 `42`）；引擎算不了的函数显式给 `formula_not_evaluated` 警告——绝不静默留旧值 |
-| **render → look → fix 闭环** | docx/xlsx 渲染 HTML、pptx 逐页渲染 SVG，全程无需 Office——agent 能"看见"自己做的东西再改 |
+| **render → look → fix 闭环** | docx/xlsx 渲染 HTML、pptx 逐页渲染 SVG，还能经系统浏览器一键出 **PNG**，全程无需 Office——agent 能"看见"自己做的东西再改 |
+| **人在环中的实时预览** | `preview open` 在 localhost 起一个实时视图；渲染节点带 `data-aio-path`，人类**点一下**，`preview selection` 就把规范路径还给 agent |
 | **默认沙箱** | 所有文件参数在工作区白名单内解析（`--workspace`，含符号链接逃逸检查）；越界即 `sandbox_denied`，退出码 4 |
 | **可自省的命令面** | `aioffice schema` 返回整个命令面的机器可读 JSON——agent 读规范，而不是幻觉规范 |
-| **CLI = MCP 同一套心智模型** | 14 个 CLI 动词与 12 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
+| **CLI = MCP 同一套心智模型** | 15 个 CLI 动词与 14 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
 
 ### "会教学的错误" —— 真实输出
 
@@ -123,7 +255,7 @@ aioffice validate report.docx                        # OOXML 校验 + lint
 ## MCP（接入 Claude 等 agent）
 
 ```bash
-aioffice mcp     # stdio MCP 服务器 —— 12 个工具，与 CLI 动词 1:1
+aioffice mcp     # stdio MCP 服务器 —— 14 个工具，与 CLI 动词 1:1
 ```
 
 Claude Desktop / Claude Code 配置：
@@ -147,10 +279,11 @@ Claude Desktop / Claude Code 配置：
 | `office_get` | get | `office_status` | doctor |
 | `office_edit` | edit | `office_help` | help |
 | `office_render` | render | `office_schema` | schema |
+| `preview_open` | preview open | `preview_selection` | preview selection |
 
-`preview_open` / `preview_selection`（实时预览 + 人工点选回读）预留至 M1。全部工具 schema 的 token 预算上限 3,500——由测试强制。
+`preview_open` / `preview_selection`（实时预览 + 人工点选回读）已于 M1（v0.2.0）注册。全部工具 schema 的 token 预算上限 3,500——由测试强制。
 
-## 命令面（v0）
+## 命令面（v0.2.0）
 
 | 动词 | 说明 |
 |---|---|
@@ -159,10 +292,11 @@ Claude Desktop / Claude Code 配置：
 | `query <file> <selector>` | CSS 风格选择器 → 规范路径（`p[style=Heading1]`、`cell[value>100]`、`shape:contains('Q3')`） |
 | `get <file> <path>` | 取单个节点及属性 |
 | `edit <file> --ops <json\|@file>` | **原子**批量 set/add/remove/move · `--dry-run` · `--expect-rev` · 语法糖 `--set/--add/--remove` |
-| `render <file> [--to html\|svg\|text] [--scope]` | "看"的那一步；png 在 M1 |
+| `render <file> [--to html\|svg\|text\|png] [--scope]` | "看"的那一步——docx/xlsx 出 html，pptx 逐页出 svg，**png** 经系统浏览器截图 |
 | `validate <file>` | OOXML 校验 + lint，带修复建议 |
 | `template <file> --data <json\|@file>` | `{{key}}` 模板合并（跨 run 拆分安全） |
 | `snapshot <list\|restore> <file> [n]` | 编辑前快照环（20 份） |
+| `preview <open\|selection\|close> <file> [--port N]` | localhost 实时预览；人点选 → `selection` 返回规范路径 |
 | `doctor` | 环境 / 运行时 / 处理器诊断 |
 | `schema [verb]` | 整个命令面的机器可读 JSON |
 | `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors |
@@ -174,13 +308,13 @@ Claude Desktop / Claude Code 配置：
 
 **寻址语法**（1 起始）：`/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/Sheet1/A1:C10` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]`。
 
-## 当前能力（M0）
+## 当前能力（M0 + M1）
 
-| 格式 | 能力（v0.1.0） |
-|---|---|
-| **.docx** | 创建 · 段落/标题/样式 · 表格 · 文本与格式编辑（加粗/斜体/颜色/对齐/字号）· query/get · outline/text/stats/structure 视图 · HTML 渲染 · `{{key}}` 模板 · 校验 |
-| **.xlsx** | 创建 · 类型化写入（数字/布尔/字符串/日期）· **公式求值并缓存结果** + 诚实警告 · 数字格式 · 合并单元格 · 表格/工作表 · 区域读取 · 按值/公式查询 · HTML 渲染 · 模板 · 校验 |
-| **.pptx** | 创建（validator 零错误，PowerPoint/Keynote 可直接打开）· 增/删/重排幻灯片 · 定位文本形状（cm/EMU）· 稳定 shape id 的 query/get · **逐页 SVG 渲染** · 模板 · 校验 |
+| 格式 | M0（v0.1.0） | + M1（v0.2.0） |
+|---|---|---|
+| **.docx** | 创建 · 段落/标题/样式 · 表格 · 文本与格式编辑（加粗/斜体/颜色/对齐/字号）· query/get · outline/text/stats/structure 视图 · HTML 渲染 · `{{key}}` 模板 · 校验 | **页眉/页脚**（创建 + 编辑，`/header[1]/p[1]`）· PNG 渲染 · 实时预览 |
+| **.xlsx** | 创建 · 类型化写入（数字/布尔/字符串/日期）· **公式求值并缓存结果** + 诚实警告 · 数字格式 · 合并单元格 · 表格/工作表 · 区域读取 · 按值/公式查询 · HTML 渲染 · 模板 · 校验 | **图表**（bar/line/pie，`add type:chart`）· PNG 渲染 · 实时预览 |
+| **.pptx** | 创建（validator 零错误，PowerPoint/Keynote 可直接打开）· 增/删/重排幻灯片 · 定位文本形状（cm/EMU）· 稳定 shape id 的 query/get · **逐页 SVG 渲染** · 模板 · 校验 | 形状**填充/字体/颜色/对齐属性** · **母版/版式只读寻址** · 逐页 PNG 渲染 · 实时预览 |
 
 长期能力对齐台账（对标业界最强 CLI）见 [docs/PARITY.md](docs/PARITY.md)——能力对齐是北极星，命令面刻意自研。
 
@@ -188,8 +322,11 @@ Claude Desktop / Claude Code 配置：
 
 ```
                  ┌─────────────────────────────────────────────┐
-   agent/human → │  src/AIOffice.Cli   （aioffice，14 动词）    │
-   MCP client  → │  src/AIOffice.Mcp   （stdio，12 工具，1:1）  │
+   agent/human → │  src/AIOffice.Cli   （aioffice，15 动词）    │
+   MCP client  → │  src/AIOffice.Mcp   （stdio，14 工具，1:1）  │
+                 ├─────────────────────────────────────────────┤
+                 │  src/AIOffice.Render   （经浏览器出 png）    │
+                 │  src/AIOffice.Preview  （实时点选预览）      │
                  └──────────────┬──────────────────────────────┘
                                 │ 信封 · 寻址 · 选择器
                  ┌──────────────▼──────────────────────────────┐
@@ -210,7 +347,7 @@ Claude Desktop / Claude Code 配置：
 
 本项目的起点之一，是研究过一个**零自动化测试**却日更发布的优秀 office CLI——AIOffice 选择完全相反的立场：
 
-- **275 个测试**横跨 5 个项目（Core 104 · Word 52 · Pptx 48 · Excel 41 · MCP 30），每次提交全绿。
+- **383 个测试**横跨 7 个项目（Core 104 · Word 73 · Pptx 72 · Excel 59 · MCP 30 · Preview 24 · Render 21），每次提交全绿。
 - **往返定律**：打开 → 不编辑直接保存，所有 zip part 必须字节级一致；已文档化的例外被逐一精确断言。
 - **独立裁判**：每个变更测试后 OpenXmlValidator 必须报 0 错误——工具不给自己的作业打分。
 - **CI 矩阵**：macOS 14 + Windows，warnings-as-errors 构建、金样脚本、单文件发布并冒烟。
@@ -218,8 +355,8 @@ Claude Desktop / Claude Code 配置：
 
 ## 路线图
 
-- **M0（当前）** —— 以上全部；单文件发布；macOS + Windows CI。
-- **M1** —— PNG 渲染（探测系统浏览器）· `preview_open`/`preview_selection`（实时预览 + 人工点选回读）· docx 页眉页脚 · pptx 母版/版式寻址 · xlsx 图表。
+- **M0** —— 以上全部；单文件发布；macOS + Windows CI。
+- **M1（已交付，v0.2.0）** —— PNG 渲染（探测系统浏览器）· `preview_open`/`preview_selection`（实时预览 + 人工点选回读）· docx 页眉页脚 · pptx 母版/版式只读寻址 · xlsx 图表（bar/line/pie）。
 - **M2** —— 修订（tracked changes）· 批注 · 样式管理 · 数据透视表 · 条件格式 · 大文件流式。
 - **M3** —— 跨文档工作流（xlsx 数据 → pptx 图表）· 批处理流水线 · 能力插件 · 对齐台账清零。
 

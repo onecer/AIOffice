@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" font-family="Helvetica, Arial, sans-serif" data-slide="1">
+  <rect x="0" y="0" width="1280" height="720" fill="#ffffff" stroke="#cccccc"/>
+  <g data-aio-path="/slide[1]/shape[@id=2]" data-name="bg">
+    <rect x="0" y="0" width="1280.1" height="720" fill="#0F172A" stroke="#999999"/>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=3]" data-name="deco-1">
+    <rect x="990.2" y="408.2" width="453.5" height="453.5" fill="#1E293B" stroke="#999999"/>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=4]" data-name="deco-2">
+    <rect x="1149" y="566.9" width="302.4" height="302.4" fill="#38BDF8" stroke="#999999"/>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=5]" data-name="accent">
+    <rect x="98.3" y="230.6" width="196.5" height="6" fill="#38BDF8" stroke="#999999"/>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=6]" data-name="TextBox 6">
+    <rect x="94.5" y="249.4" width="907.1" height="136.1" fill="none" stroke="#999999"/>
+    <text x="100.5" y="333.4" font-size="80" text-anchor="start" font-weight="bold" fill="#FFFFFF">AIOffice</text>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=7]" data-name="TextBox 7">
+    <rect x="94.5" y="393.1" width="982.7" height="68" fill="none" stroke="#999999"/>
+    <text x="100.5" y="423.7" font-size="26.7" text-anchor="start" fill="#94A3B8">An AI-native CLI + MCP server for real Office files</text>
+  </g>
+  <g data-aio-path="/slide[1]/shape[@id=8]" data-name="TextBox 8">
+    <rect x="94.5" y="638.7" width="982.7" height="45.4" fill="none" stroke="#999999"/>
+    <text x="100.5" y="658.7" font-size="16" text-anchor="start" fill="#64748B">This deck was built entirely by aioffice edit — no Office installed</text>
+  </g>
+</svg>

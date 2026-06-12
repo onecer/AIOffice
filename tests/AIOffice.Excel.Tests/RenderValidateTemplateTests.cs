@@ -24,6 +24,25 @@ public sealed class RenderValidateTemplateTests : ExcelTestBase
     }
 
     [Fact]
+    public void Render_html_cells_carry_data_aio_path()
+    {
+        // The M1 render contract: every cell maps a browser click back to a
+        // canonical document path via data-aio-path.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("value", "x")),
+            SetOp("/Sheet1/B2", ("value", 5))).IsOk);
+
+        var data = OkData(Handler.Render(Ctx(file, ("to", "html"))));
+
+        var content = data["content"]!.GetValue<string>();
+        Assert.Contains("<table data-sheet=\"Sheet1\" data-aio-path=\"/Sheet1\">", content, StringComparison.Ordinal);
+        Assert.Contains("<td data-aio-path=\"/Sheet1/A1\">", content, StringComparison.Ordinal);
+        Assert.Contains("<td data-aio-path=\"/Sheet1/B2\">", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Render_png_is_unsupported_with_a_named_workaround()
     {
         var file = CreateWorkbook();

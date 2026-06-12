@@ -48,10 +48,12 @@ internal static class ToolRouter
         "office_status" => service.Status(),
         "office_help" => service.Help(args),
         "office_schema" => service.Schema(args),
+        "preview_open" => service.PreviewOpen(args),
+        "preview_selection" => service.PreviewSelection(args),
         _ => Envelope.Fail(
             ErrorCodes.InvalidArgs,
             $"Unknown tool: '{name}'.",
-            "Call tools/list for the available tools; preview_* is reserved for M1 and not registered in v0.",
+            "Call tools/list for the available tools.",
             candidates: ToolCatalog.Names),
     };
 
@@ -74,13 +76,24 @@ internal static class ToolRouter
     private static CallToolResult ToResult(string toolName, Envelope envelope)
     {
         var content = new List<ContentBlock> { new TextContentBlock { Text = envelope.ToJson() } };
-        if (toolName == "office_render" && envelope.IsOk && TryGetInlineSvg(envelope) is { } svg)
+        if (toolName == "office_render" && envelope.IsOk)
         {
-            content.Add(new ImageContentBlock
+            if (TryGetInlineSvg(envelope) is { } svg)
             {
-                MimeType = "image/svg+xml",
-                Data = Encoding.UTF8.GetBytes(svg), // serialized base64 on the wire by the SDK
-            });
+                content.Add(new ImageContentBlock
+                {
+                    MimeType = "image/svg+xml",
+                    Data = Encoding.UTF8.GetBytes(svg), // serialized base64 on the wire by the SDK
+                });
+            }
+            else if (TryReadWrittenPng(envelope) is { } png)
+            {
+                content.Add(new ImageContentBlock
+                {
+                    MimeType = "image/png",
+                    Data = png, // the file's bytes verbatim — no downscaling
+                });
+            }
         }
 
         return new CallToolResult
@@ -88,6 +101,26 @@ internal static class ToolRouter
             Content = content,
             IsError = envelope.IsOk ? null : true,
         };
+    }
+
+    /// <summary>Reads the PNG a png-render wrote (<c>data.format == "png"</c> + <c>data.written</c>), if any.</summary>
+    private static byte[]? TryReadWrittenPng(Envelope envelope)
+    {
+        try
+        {
+            if (JsonSerializer.SerializeToNode(envelope.Data, JsonDefaults.Options) is not JsonObject data ||
+                data["format"] is not JsonValue fv || !fv.TryGetValue<string>(out var format) || format != "png" ||
+                data["written"] is not JsonValue wv || !wv.TryGetValue<string>(out var written))
+            {
+                return null;
+            }
+
+            return File.Exists(written) ? File.ReadAllBytes(written) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return null; // the envelope (with data.written) still answers; only the inline block is skipped
+        }
     }
 
     /// <summary>Extracts an inlined SVG render artifact (<c>data.content</c> + a .svg output), if any.</summary>

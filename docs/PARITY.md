@@ -1,6 +1,6 @@
 # AIOffice 能力账本（Capability Ledger）
 
-> 本账本只记录**能力**（capability），不映射任何命令语法。OfficeCLI（参考源码 `/tmp/office_research/OfficeCLI`，`SKILL.md` + `src/officecli/Handlers/{Word,Excel,Pptx}` + `schemas/help/`）的能力清单是长期对齐的北极星；但 AIOffice 是 100% 自研（C#/.NET，DocumentFormat.OpenXml + ClosedXML），命令与参数**刻意不**与上游 1:1 还原 —— 我们的对外表面是自己的 13 动词 AI 原生命令面（见 `docs/DESIGN.md`）。
+> 本账本只记录**能力**（capability），不映射任何命令语法。OfficeCLI（参考源码 `/tmp/office_research/OfficeCLI`，`SKILL.md` + `src/officecli/Handlers/{Word,Excel,Pptx}` + `schemas/help/`）的能力清单是长期对齐的北极星；但 AIOffice 是 100% 自研（C#/.NET，DocumentFormat.OpenXml + ClosedXML），命令与参数**刻意不**与上游 1:1 还原 —— 我们的对外表面是自己的 14 动词 AI 原生命令面（见 `docs/DESIGN.md`；M1 起含 `preview`）。
 >
 > 账本与代码之间的契约：任何标记为未实现的能力，运行时必须返回类型化 `unsupported_feature` envelope（`suggestion` 必须给出 workaround），**绝不 crash、绝不静默 no-op**。
 
@@ -8,8 +8,9 @@
 
 | 标记 | 含义 |
 |------|------|
-| ✅ M0 已实现 | 当前脚手架交付：13 动词命令面 + MCP，基础元素读写 |
-| 🔜 M1 | 下一里程碑：图片、页眉页脚、列表、PNG 渲染、实时预览等高频能力 |
+| ✅ M0 已实现 | M0 脚手架交付：13 动词命令面 + MCP，基础元素读写 |
+| ✅ M1 已实现 | M1（v0.2.0）交付：页眉页脚、xlsx 图表（bar/line/pie）、pptx 母版/版式只读、PNG 渲染、实时预览 + 选区回读 |
+| 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至 M2 窗口） |
 | 📋 M2 | 对象层扩展：图表、批注、条件格式、域/TOC、透视表前置等 |
 | 🗺 M3 | 深水区：修订、动画、透视表、OLE/3D/SmartArt、RTL、dump 回放 |
 | ❌ 不计划 | 与 AIOffice 设计冲突，或属上游生态/语法专有 |
@@ -41,16 +42,16 @@
 | CSV/TSV 导入 xlsx | 表头识别（AutoFilter + 冻结首行）、起始单元格 | 📋 M2 | ClosedXML `InsertTable` / 逐格写入 |
 | dump 可回放导出 | 整文档导出为可回放的 edit-ops JSON（round-trip） | 🗺 M3 | 各格式 BatchEmitter 等价物；上游 docx 全覆盖是高水位线 |
 | render HTML | docx/xlsx 整文档 HTML；pptx 每页 SVG-or-HTML | ✅ M0 已实现 | 自研渲染器（上游 HtmlPreview 系列为行为参考） |
-| render PNG 截图 | 整页/网格缩略图 PNG | 🔜 M1 | 需 headless 浏览器；M0 返回 `unsupported_feature`（建议先用 html） |
+| render PNG 截图 | 整页/网格缩略图 PNG | ✅ M1 已实现 | `AIOffice.Render`：html/svg → headless Chrome/Edge 截图；docx/xlsx 整文档、pptx 单页（`--scope /slide[N]`，缺省首页 + warning）；网格 `--grid` 后置 |
 | render PDF | 导出 PDF | 🗺 M3 | 上游经插件实现；评估 html→pdf 通道 |
 | OpenXML schema 校验 | 对照 OOXML schema 报错误清单 | ✅ M0 已实现 | `OpenXmlValidator`（也是所有 mutating 测试的 oracle） |
-| 实时预览（watch） | 本地 server，文件变更自动刷新浏览器 | 🔜 M1 | MCP `preview_*` 工具名已保留 |
-| 浏览器选区回读 | 用户在预览中点选元素，CLI/MCP 读取选中路径 | 📋 M2 | 依赖 watch + data-path 标注（上游 xlsx 至今缺失，引以为戒） |
+| 实时预览（watch） | 本地 server，文件变更自动刷新浏览器 | ✅ M1 已实现 | `AIOffice.Preview`：`preview open/close` 本地 server（SSE 自动刷新）；MCP `preview_open` 拉起 detached 子进程 |
+| 浏览器选区回读 | 用户在预览中点选元素，CLI/MCP 读取选中路径 | ✅ M1 已实现 | 渲染产物全量 `data-aio-path` 标注（docx 块级 / xlsx 单元格 / pptx 形状）+ `POST /selection`；`preview selection` / MCP `preview_selection` 读回 |
 | mark 待审修改提案 | 高亮 + 备注 + tofix 的"待人审"标记管线 | 🗺 M3 | 依赖 watch 进程态；与永久批注（comment）区分 |
 | goto 视图定位 | 滚动预览浏览器到指定元素 | 🗺 M3 | watch IPC |
 | 常驻进程模式 | 文件常驻内存、显式 open/close/save | ❌ 不计划 | 无状态进程 + rev 守卫 + 快照已覆盖正确性；性能实测有瓶颈再议 |
 | raw XML 直改 | 按 part + XPath 直接增删改 XML、新建 part | 🗺 M3 | L2 覆盖不足时的逃生舱；受 sandbox 显式开关门禁 |
-| MCP stdio server | 与 CLI 同一命令面的 13 工具 | ✅ M0 已实现 | ModelContextProtocol 官方 C# SDK；CLI/MCP 共用内部命令层 |
+| MCP stdio server | 与 CLI 同一命令面的 14 工具（M1 起注册 `preview_open`/`preview_selection`） | ✅ M0 已实现 | ModelContextProtocol 官方 C# SDK；CLI/MCP 共用内部命令层 |
 | 渐进式 help | 寻址语法、选择器、逐元素属性文档 | ✅ M0 已实现 | `help [topic]`，内容由 schema 生成 |
 | 机器可读 schema | 整个命令面的 JSON 描述，agent 自省代替猜测 | ✅ M0 已实现 | `schema [verb]`；超出上游（其仅有元素级 help --json） |
 | doctor 环境体检 | runtime / workspace / 快照目录诊断 | ✅ M0 已实现 | 自研检查项 |
@@ -78,7 +79,7 @@
 | 虚拟列操作 | 把 `/tbl/col[N]` 当实体：整列增/删/移/拷 | 📋 M2 | 自研：跨行遍历同列 `TableCell`（上游 table-column schema 为参考） |
 | 图片 | 插入、尺寸、alt 文本、二进制导出 | 🔜 M1 | `ImagePart` + `Drawing`（DrawingML inline/anchor） |
 | 文本框 / 形状 | 几何、填充、线条、环绕、锚定 | 📋 M2 | DrawingML `wps:wsp` |
-| 页眉 / 页脚 | 增删改，首页/奇偶页变体；寻址 `/header[1]/p[1]` | 🔜 M1 | `HeaderPart` / `FooterPart` + `SectionProperties` 引用 |
+| 页眉 / 页脚 | 增删改，首页/奇偶页变体；寻址 `/header[1]/p[1]` | ✅ M1 已实现 | `HeaderPart` / `FooterPart` + `SectionProperties` 引用；read structure / render 同步暴露 |
 | 节属性 | 纸张/边距/方向/分栏/页码格式枚举/页面边框 | 🔜 M1 | `SectionProperties`（`PageSize`/`PageMargin`/`Columns`/`PageNumberType`） |
 | 分页符 / 换行符 | page break、line break、column break | 🔜 M1 | `Break`（`BreakValues`） |
 | 列表与多级编号 | 项目符号、编号、多级列表（num/abstractNum/lvl） | 🔜 M1 | `NumberingDefinitionsPart` |
@@ -130,7 +131,7 @@
 | 条件格式 | databar / colorscale / iconset / cellIs / formulacf / topN / aboveAverage / containstext / dateoccurring / duplicate / unique（上游 11 类全） | 📋 M2 | `IXLConditionalFormat`（ClosedXML 覆盖大部分类型） |
 | 数据验证 | 列表/范围/自定义公式验证 + 提示语 | 📋 M2 | `IXLDataValidation` |
 | 迷你图 | line / column / winloss sparkline 组 | 📋 M2 | `IXLSparklineGroups` |
-| 图表 | chart + 轴/系列子实体、anchor 简写、pareto | 🗺 M3 | **ClosedXML 不支持图表**：需直接手写 OpenXml `ChartPart` + `DrawingsPart`（与 docx/pptx 共享 DrawingML chart 层） |
+| 图表 | bar/line/pie 增删读（`/Sheet1/chart[1]` 寻址、anchor 简写）；轴/系列子实体逐属性、pareto 后置 | ✅ M1 已实现 | **ClosedXML 不支持图表**：自研 OpenXml `ChartPart` + `DrawingsPart`（`ExcelCharts.cs`）；轴/系列深编辑 → 📋 M2 |
 | 图片 | 插入/定位/缩放（PNG/JPEG）；SVG | 🔜 M1 | `IXLPicture`；SVG 需 OpenXml 双 part（svgBlip + png fallback）→ 📋 M2 |
 | 批注 | 单元格批注读写删 | 📋 M2 | `IXLCell.CreateComment` |
 | 形状 / 文本框 | 浮动 shape/textbox；选择器需枚举 grpSp 内叶子 | 🗺 M3 | ClosedXML 不支持：OpenXml `DrawingsPart`（xdr:sp） |
@@ -160,7 +161,7 @@
 | 形状外观基础 | 纯色填充、线条颜色/粗细、预设几何（rect/ellipse/arrow 等） | 🔜 M1 | `a:solidFill` / `a:ln` / `a:prstGeom` |
 | 形状外观高级 | 渐变/图片填充、阴影/发光效果、旋转、图片亮度对比度 | 📋 M2 | `a:gradFill` / `a:effectLst` / `xfrm@rot` |
 | effective 继承值溯源 | 读出属性的最终生效值及来源（shape→layout→master 链） | 🗺 M3 | 自研继承解析器（上游 effective.X.src 为行为参考） |
-| 母版 / 版式寻址 | `/master[1]`、`/layout[2]` 路径（命令面已保留 M1） | 🔜 M1 | `SlideMasterPart` / `SlideLayoutPart` 枚举 |
+| 母版 / 版式寻址 | `/master[1]`、`/master[1]/layout[2]` 路径，get/query 只读 | ✅ M1 已实现 | `SlideMasterPart` / `SlideLayoutPart` 枚举；编辑仍 `unsupported_feature`（→ M2） |
 | 母版 / 版式编辑 | 对 master/layout 上元素 add/set/remove | 📋 M2 | 同 slide 编辑管线复用 |
 | 图片 | 插入/位置/尺寸/alt；SVG、裁剪、滤镜属性后置 | 🔜 M1 | `ImagePart` + `P.Picture`；SVG/滤镜 → 📋 M2 |
 | 表格 | graphicFrame 建表、行列增删、单元格文本/合并、内建样式目录、列实体操作 | 📋 M2 | `a:tbl`（DrawingML table） |
@@ -184,18 +185,20 @@
 | 主题 / 文档级属性 | theme 颜色字体、defaultFont、show.loop、print.what | 📋 M2 | `ThemePart` / `PresentationPropertiesPart` |
 | RTL | shape/notes direction、图表轴 RTL | 🗺 M3 | `a:bodyPr@rtlCol` / `a:pPr@rtl` |
 | 逐页渲染 SVG/HTML | 每页 slide 输出 SVG（或 HTML 退化） | ✅ M0 已实现 | 自研渲染器（基础形状/文本；覆盖面随元素能力增长） |
-| 截图网格 / 页范围 | PNG 缩略图网格（--grid）、html 页范围 | 🔜 M1 | 依赖跨格式 PNG 渲染通道 |
+| 截图网格 / 页范围 | PNG 缩略图网格（--grid）、html 页范围 | 🔜 M1 | 单页 PNG 已落地（`render --to png --scope /slide[N]`）；网格拼接与页范围未实现 |
 
 ---
 
 ## 4. 统计
 
-| 范围 | ✅ M0 已实现 | 🔜 M1 | 📋 M2 | 🗺 M3 | ❌ 不计划 | 合计 |
+| 范围 | ✅ 已实现（M0+M1） | 🔜 M1 | 📋 M2 | 🗺 M3 | ❌ 不计划 | 合计 |
 |---|---|---|---|---|---|---|
-| 跨格式通用 | 17 | 6 | 7 | 5 | 3 | 38 |
-| docx | 4 | 10 | 12 | 8 | 0 | 34 |
-| xlsx | 5 | 10 | 12 | 8 | 0 | 35 |
-| pptx | 5 | 8 | 10 | 12 | 0 | 35 |
-| **合计** | **31** | **34** | **41** | **33** | **3** | **142** |
+| 跨格式通用 | 20 | 4 | 6 | 5 | 3 | 38 |
+| docx | 5 | 9 | 12 | 8 | 0 | 34 |
+| xlsx | 6 | 10 | 12 | 7 | 0 | 35 |
+| pptx | 6 | 7 | 10 | 12 | 0 | 35 |
+| **合计** | **37** | **30** | **40** | **32** | **3** | **142** |
 
-> 解读：M0 的 31 项里有相当一部分是 AI 原生层（envelope、快照、rev、sandbox、schema、MCP）—— 这是 AIOffice 的差异化地基，上游完全没有。格式能力本身（docx 4 / xlsx 5 / pptx 5）在 M0 刻意收窄到"段落、单元格、形状"三个最小核心，换取每一项都带测试、过 `OpenXmlValidator`、守住 round-trip 字节一致律。其余 108 项按 M1→M3 排队，每一项落地时同步更新本表状态与"实现备注"中的真实 API。
+> 解读：M0 的 31 项里有相当一部分是 AI 原生层（envelope、快照、rev、sandbox、schema、MCP）—— 这是 AIOffice 的差异化地基，上游完全没有。格式能力本身（docx 4 / xlsx 5 / pptx 5）在 M0 刻意收窄到"段落、单元格、形状"三个最小核心，换取每一项都带测试、过 `OpenXmlValidator`、守住 round-trip 字节一致律。
+>
+> M1（v0.2.0）新增 6 项：docx 页眉/页脚、xlsx 图表（bar/line/pie，自研 ChartPart）、pptx 母版/版式只读寻址、跨格式 PNG 渲染（headless 浏览器）、实时预览 server、浏览器选区回读（`data-aio-path` 契约，原排 M2 提前落地）。其余 102 项按 M1→M3 排队，每一项落地时同步更新本表状态与"实现备注"中的真实 API。

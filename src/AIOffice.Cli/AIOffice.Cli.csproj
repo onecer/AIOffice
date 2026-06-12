@@ -17,6 +17,8 @@
     <ProjectReference Include="../AIOffice.Excel/AIOffice.Excel.csproj" />
     <ProjectReference Include="../AIOffice.Pptx/AIOffice.Pptx.csproj" />
     <ProjectReference Include="../AIOffice.Mcp/AIOffice.Mcp.csproj" />
+    <ProjectReference Include="../AIOffice.Render/AIOffice.Render.csproj" />
+    <ProjectReference Include="../AIOffice.Preview/AIOffice.Preview.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="HelpTopics/*.md" />

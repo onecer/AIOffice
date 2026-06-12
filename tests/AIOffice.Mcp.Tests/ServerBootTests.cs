@@ -9,10 +9,11 @@ public sealed class ServerBootTests
         "office_create", "office_read", "office_query", "office_get",
         "office_edit", "office_render", "office_validate", "office_template",
         "file_snapshot", "office_status", "office_help", "office_schema",
+        "preview_open", "preview_selection",
     ];
 
     [Fact]
-    public async Task Boot_AdvertisesAioffice_AndExactlyTheTwelveV0Tools()
+    public async Task Boot_AdvertisesAioffice_AndExactlyTheFourteenM1Tools()
     {
         using var ws = new TempWorkspace();
         await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
@@ -21,12 +22,9 @@ public sealed class ServerBootTests
 
         var tools = await srv.Client.ListToolsAsync();
         Assert.Equal(ExpectedTools.Length, tools.Count);
+        Assert.Equal(14, tools.Count); // the M1 surface: 12 v0 tools + preview_open + preview_selection
         Assert.Equal(ExpectedTools.ToHashSet(StringComparer.Ordinal),
             tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal));
-
-        // preview_* is reserved for M1 and deliberately NOT registered in v0:
-        // tools/list must stay honest — no schemas for capabilities that cannot run.
-        Assert.DoesNotContain(tools, t => t.Name.StartsWith("preview_", StringComparison.Ordinal));
 
         Assert.All(tools, t =>
         {
