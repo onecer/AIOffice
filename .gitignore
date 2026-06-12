@@ -32,3 +32,4 @@ fixtures/tmp/
 
 # publish output
 dist/
+release-v0.4.0/
