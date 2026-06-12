@@ -402,6 +402,51 @@ internal static class PptxDoc
         return properties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
     }
 
+    /// <summary>Solid RRGGBB outline (stroke) color of a shape, when one is set explicitly.</summary>
+    public static string? LineHex(OpenXmlCompositeElement element)
+    {
+        var properties = (element as P.Shape)?.ShapeProperties
+            ?? (element as P.Picture)?.ShapeProperties
+            ?? (element as P.ConnectionShape)?.ShapeProperties;
+        return properties?.GetFirstChild<A.Outline>()?.GetFirstChild<A.SolidFill>()?
+            .RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+    }
+
+    /// <summary>
+    /// The aioffice geometry token of a shape's preset geometry ("rect",
+    /// "roundRect", "ellipse", "triangle", "diamond", "arrow", "line"); foreign
+    /// presets report their raw OOXML token; null when no preset geometry exists.
+    /// </summary>
+    public static string? GeometryToken(OpenXmlCompositeElement element)
+    {
+        var properties = (element as P.Shape)?.ShapeProperties
+            ?? (element as P.Picture)?.ShapeProperties
+            ?? (element as P.ConnectionShape)?.ShapeProperties;
+        return properties?.GetFirstChild<A.PresetGeometry>()?.Preset?.InnerText switch
+        {
+            null => null,
+            "rightArrow" => "arrow",
+            { } token => token, // rect/roundRect/ellipse/triangle/diamond/line pass through unchanged
+        };
+    }
+
+    /// <summary>"h", "v" or "hv" when the shape's transform flips it; null otherwise.</summary>
+    public static string? FlipToken(OpenXmlCompositeElement element)
+    {
+        var transform = (element as P.Shape)?.ShapeProperties?.Transform2D
+            ?? (element as P.Picture)?.ShapeProperties?.Transform2D
+            ?? (element as P.ConnectionShape)?.ShapeProperties?.Transform2D;
+        var h = transform?.HorizontalFlip?.Value == true;
+        var v = transform?.VerticalFlip?.Value == true;
+        return (h, v) switch
+        {
+            (true, true) => "hv",
+            (true, false) => "h",
+            (false, true) => "v",
+            _ => null,
+        };
+    }
+
     public static GeometryEmu? Geometry(OpenXmlCompositeElement element)
     {
         switch (element)

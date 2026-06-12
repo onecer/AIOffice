@@ -64,6 +64,43 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>The round-trip law over the M3 surface: charts, transitions, geometries and z-order.</summary>
+    [Fact]
+    public void M3Features_ReadSideVerbs_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Immutable"))));
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(
+                ("transition", "fade"), ("transitionDuration", "0.5s"))),
+            TestEnv.Op("add", "/slide[1]", type: "chart", props: TestEnv.Props(
+                ("kind", "bar"),
+                ("categories", new JsonArray("Q1", "Q2")),
+                ("series", new JsonArray(new JsonObject
+                {
+                    ["name"] = "Sales",
+                    ["values"] = new JsonArray(10, 20),
+                })),
+                ("title", "Revenue"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+                ("shape", "ellipse"), ("fill", "FFEE00"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+                ("shape", "line"), ("flip", "v"))),
+            TestEnv.Op("move", "/slide[1]/shape[2]", position: "front"),
+        ]));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "outline"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "structure"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/chart[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/shape[1]"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {
@@ -135,6 +172,31 @@ public sealed class RoundTripTests : IDisposable
                 ("src", "showcase-logo.png"), ("x", "2cm"), ("y", "6cm"), ("w", "6cm"))),
         ]));
         File.Delete(logo);
+
+        // M3 surface: a native chart, preset geometries, a flipped line and a fade transition.
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[4]", type: "slide", props: TestEnv.Props(
+                ("title", "M3: chart, geometries & transition"))),
+            TestEnv.Op("set", "/slide[4]", props: TestEnv.Props(
+                ("transition", "fade"), ("transitionDuration", "0.7s"))),
+            TestEnv.Op("add", "/slide[4]", type: "chart", props: TestEnv.Props(
+                ("kind", "bar"),
+                ("title", "Quarterly revenue"),
+                ("categories", new JsonArray("Q1", "Q2", "Q3", "Q4")),
+                ("series", new JsonArray(
+                    new JsonObject { ["name"] = "2025", ["values"] = new JsonArray(12, 18, 15, 22) },
+                    new JsonObject { ["name"] = "2026", ["values"] = new JsonArray(14, 21, 19, 27) })),
+                ("x", "2cm"), ("y", "4.5cm"), ("w", "16cm"), ("h", "11cm"))),
+            TestEnv.Op("add", "/slide[4]", type: "shape", props: TestEnv.Props(
+                ("shape", "ellipse"), ("x", "20cm"), ("y", "4.5cm"), ("w", "5cm"), ("h", "3cm"),
+                ("fill", "70AD47"), ("text", "ellipse"), ("align", "center"))),
+            TestEnv.Op("add", "/slide[4]", type: "shape", props: TestEnv.Props(
+                ("shape", "arrow"), ("x", "26cm"), ("y", "4.5cm"), ("w", "5cm"), ("h", "3cm"),
+                ("fill", "ED7D31"))),
+            TestEnv.Op("add", "/slide[4]", type: "shape", props: TestEnv.Props(
+                ("shape", "line"), ("x", "20cm"), ("y", "9cm"), ("w", "11cm"), ("h", "3cm"),
+                ("flip", "v"), ("fill", "4472C4"))),
+        ]));
 
         var validation = TestEnv.AssertOk(handler.Validate(
             new CommandContext { Workspace = ws, File = ctx.File, Args = [] }));

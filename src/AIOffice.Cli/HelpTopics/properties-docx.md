@@ -43,6 +43,42 @@ Headers/footers are addressable (`/header[1]/p[1]`) for read/set, and created
 with `{op:"add", path:"/header[1]", type:"header", props:{text, align?}}`
 (same for `footer`).
 
+## list (M3)
+
+`add` a paragraph with list props to make it a list item:
+
+| prop        | type   | notes                                          |
+|-------------|--------|------------------------------------------------|
+| list        | string | bullet · number                                |
+| level       | number | 0-based nesting level (default 0)              |
+| listRestart | bool   | number lists: restart numbering at this item   |
+
+`{op:"add", path:"/body", type:"p", props:{text:"Step one", list:"number"}}`;
+nested: `props:{text:"Detail", list:"number", level:1}`. `read --view text`
+shows `1.` / `•` markers; `render --to html` emits real `<ol>`/`<ul>`.
+
+## link / bookmark / footnote (M3)
+
+| type     | props                       | notes                                        |
+|----------|-----------------------------|----------------------------------------------|
+| link     | text, url OR anchor        | inline at the end of the target paragraph    |
+| bookmark | name                       | wraps the target paragraph; name ≤ 40 chars  |
+| footnote | text                       | reference at the paragraph end + note text   |
+
+`{op:"add", path:"/body/p[3]", type:"link", props:{text:"site", url:"https://…"}}`;
+internal jump: `props:{text:"see intro", anchor:"Intro"}` (a bookmark name).
+
+## section (M3, `/section[1]`)
+
+| prop                       | type   | notes                              |
+|----------------------------|--------|------------------------------------|
+| pageSize                   | string | A4 · Letter · Legal · A3 · A5      |
+| orientation                | string | portrait · landscape               |
+| marginTop/Bottom/Left/Right| length | e.g. "2cm", "72pt"                 |
+
+`{op:"set", path:"/section[1]", props:{pageSize:"A4", orientation:"landscape"}}`;
+`get /section[1]` reflects everything (sizes in cm).
+
 ## tracked changes (M2)
 
 Pass `--track` (and optionally `--author NAME`) on `edit`: text `set`/`add`/
@@ -57,6 +93,9 @@ silently. Only text changes can be tracked; tracked formatting answers
 
 Author resolution: op `props.author` > `--author` > `AIOFFICE_AUTHOR` env >
 `AIOffice`. Revisions are never `remove`d — only accepted or rejected.
+M3: `accept`/`reject` also resolve formatting revisions (w:rPrChange /
+w:pPrChange) — reject restores the preserved old formatting. *Writing*
+tracked formatting is still `invalid_args` with the workaround named.
 
 ## comment (M2)
 
@@ -68,6 +107,9 @@ Author resolution: op `props.author` > `--author` > `AIOFFICE_AUTHOR` env >
 `{op:"add", path:"/body/p[2]", type:"comment", props:{text:"check this"}}` —
 the path is the anchored content (paragraph or run). Read back with
 `read --view comments`; `get /comment[@id=2]`; `remove /comment[@id=2]`.
+M3 threaded replies: `{op:"add", path:"/comment[@id=1]", type:"reply",
+props:{text:"agreed", author?:"Name"}}` — `read --view comments` nests them
+under `replies`.
 
 ## style (M2)
 

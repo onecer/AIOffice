@@ -55,8 +55,11 @@ public sealed record PathSegment
     /// <summary>1-based index for indexed elements; null when the element is unindexed.</summary>
     public int? Index { get; init; }
 
-    /// <summary>Stable-id selector value for <c>element[@id=…]</c> segments (e.g. shape[@id=7], revision[@id=3], style[@id=Callout]); null otherwise.</summary>
+    /// <summary>Stable-id selector value for <c>element[@id=…]</c> / <c>element[@name=…]</c> segments (e.g. shape[@id=7], revision[@id=3], bookmark[@name=Results]); null otherwise.</summary>
     public string? Id { get; init; }
+
+    /// <summary>The attribute the id selector matched on: "id" (default) or "name" (e.g. bookmark[@name=Results]); null for non-id segments.</summary>
+    public string? IdAttribute { get; init; }
 
     /// <summary>Cell (Cell kind) or top-left of a range.</summary>
     public CellRef? Start { get; init; }
@@ -67,7 +70,7 @@ public sealed record PathSegment
     public string ToCanonicalString() => Kind switch
     {
         PathSegmentKind.Element => Id is { } id
-            ? string.Create(CultureInfo.InvariantCulture, $"{Name}[@id={id}]")
+            ? string.Create(CultureInfo.InvariantCulture, $"{Name}[@{IdAttribute ?? "id"}={id}]")
             : Index is { } i
                 ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
                 : Name!,
@@ -99,7 +102,7 @@ public sealed partial record DocPath
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([0-9]+)\]$")]
     private static partial Regex IndexedElement();
 
-    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@id=([A-Za-z0-9_.-]+)\]$")]
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name)=([A-Za-z0-9_.-]+)\]$")]
     private static partial Regex IdElement();
 
     [GeneratedRegex(@"^([A-Z]{1,3})([0-9]{1,7})$")]
@@ -229,7 +232,13 @@ public sealed partial record DocPath
         var byId = IdElement().Match(raw);
         if (byId.Success)
         {
-            return new PathSegment { Kind = PathSegmentKind.Element, Name = byId.Groups[1].Value, Id = byId.Groups[2].Value };
+            return new PathSegment
+            {
+                Kind = PathSegmentKind.Element,
+                Name = byId.Groups[1].Value,
+                IdAttribute = byId.Groups[2].Value,
+                Id = byId.Groups[3].Value,
+            };
         }
 
         var indexed = IndexedElement().Match(raw);

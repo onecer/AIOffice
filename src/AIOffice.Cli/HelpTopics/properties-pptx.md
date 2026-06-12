@@ -65,10 +65,38 @@ The path addresses the whole speaker-notes body (no `/p[j]` beneath it).
 `{op:"add", path:"/slide[1]", type:"image", props:{src:"logo.png", w:"6cm"}}` —
 the result path is `/slide[1]/shape[@id=N]`; `remove` it by that path.
 
+## chart (M3, `/slide[1]/chart[1]`)
+
+`{op:"add", path:"/slide[1]", type:"chart", props:{kind:"bar|line|pie",
+categories:["Q1","Q2"], series:[{name:"Sales", values:[10,20]}],
+title?, x?, y?, w?, h?}}`. Data is cached literally in the chart XML (no
+embedded workbook): every projection reports `dataEditable:false` and the add
+attaches a warning. Cross-document data (M3): replace categories/series with
+`{"dataFrom":"book.xlsx!Sheet1/A1:B5"}` — first column = categories, header
+row = series names, remaining columns = series values (quote sheet names with
+spaces: `book.xlsx!'Q3 Data'/A1:C5`). `set` on `/slide[i]/chart[k]` retitles;
+`remove` deletes frame + part.
+
+## transition (M3, slide-level set)
+
+`{op:"set", path:"/slide[2]", props:{transition:"fade|push|wipe|none",
+transitionDuration:"0.5s"}}` — `get /slide[2]` and the outline view read it
+back.
+
+## geometry & z-order (M3)
+
+`add type:shape` accepts `shape:"rect|roundRect|ellipse|triangle|diamond|
+arrow|line"` plus `flipH`/`flipV` ("line" builds a connector; `fill` sets its
+stroke). Z-order: `{op:"move", path:"/slide[1]/shape[@id=5]",
+position:"front|back|forward|backward"}` reorders the paint order (front =
+topmost).
+
 ## Rendering
 
 `aioffice render deck.pptx --to svg --scope /slide[2] -o slide2.svg` renders
 one slide; `--to html` renders a simple HTML projection; `--to png` screenshots
-one slide via a local Chrome/Edge (default `/slide[1]` — pass `--scope`).
+one slide via a local Chrome/Edge (default `/slide[1]` — pass `--scope`);
+`--to pdf` (M3) prints the WHOLE deck to one PDF, one page per slide
+(`--scope /slide[N]` narrows it to a single page).
 
-Master/layout editing is still `unsupported_feature` (M3).
+Master/layout editing is still `unsupported_feature` (M4).

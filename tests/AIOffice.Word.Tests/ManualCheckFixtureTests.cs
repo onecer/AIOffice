@@ -82,6 +82,29 @@ public sealed class ManualCheckFixtureTests : WordTestBase
             File.Delete(logo);
         }
 
+        // M3 surface: lists with nesting, external + internal links over a
+        // bookmark, a footnote, a threaded comment reply, landscape A4 pages.
+        var m3 = Handler.Edit(
+            new CommandContext { Workspace = workspace, File = file, Args = [] },
+            EditOp.ParseBatch("""
+                [
+                  {"op":"add","path":"/body","props":{"text":"Lists (M3)","style":"Heading2"}},
+                  {"op":"add","path":"/body","type":"p","props":{"text":"First step","list":"number"}},
+                  {"op":"add","path":"/body","type":"p","props":{"text":"Nested detail","list":"number","level":1}},
+                  {"op":"add","path":"/body","type":"p","props":{"text":"Second step","list":"number"}},
+                  {"op":"add","path":"/body","type":"p","props":{"text":"An unordered point","list":"bullet"}},
+                  {"op":"add","path":"/body","props":{"text":"Links, bookmark, footnote (M3)","style":"Heading2"}},
+                  {"op":"add","path":"/body","type":"p","props":{"text":"This sentence carries two links and a footnote: "}},
+                  {"op":"add","path":"/body/p[11]","type":"bookmark","props":{"name":"Lists"}},
+                  {"op":"add","path":"/body/p[17]","type":"link","props":{"text":"external site","url":"https://example.com/aioffice"}},
+                  {"op":"add","path":"/body/p[17]","type":"link","props":{"text":" / jump to Lists","anchor":"Lists"}},
+                  {"op":"add","path":"/body/p[17]","type":"footnote","props":{"text":"Footnote written by aioffice — must appear at the page bottom."}},
+                  {"op":"add","path":"/comment[@id=1]","type":"reply","props":{"text":"Reply written by aioffice — must thread under the first comment.","author":"Author"}},
+                  {"op":"set","path":"/section[1]","props":{"pageSize":"A4","orientation":"landscape","marginTop":"2cm","marginBottom":"2cm"}}
+                ]
+                """));
+        Assert.True(m3.IsOk, m3.ToJson());
+
         // The pending tracked change: the human must see an insertion/deletion
         // attributed to "Reviewer" in Word's review pane.
         var tracked = Handler.Edit(
@@ -92,7 +115,7 @@ public sealed class ManualCheckFixtureTests : WordTestBase
                 Args = new JsonObject { ["track"] = true, ["author"] = "Reviewer" },
             },
             EditOp.ParseBatch("""
-                [{"op":"set","path":"/body/p[2]","props":{"text":"Open this file in Word: heading, formatting, table, styles, image, comment and ONE PENDING tracked change must look right."}}]
+                [{"op":"set","path":"/body/p[2]","props":{"text":"Open this file in Word: heading, formatting, table, styles, image, comment + threaded reply, numbered/bulleted lists, links, footnote, landscape A4 pages and ONE PENDING tracked change must look right."}}]
                 """));
         Assert.True(tracked.IsOk, tracked.ToJson());
 

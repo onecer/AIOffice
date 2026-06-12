@@ -21,15 +21,20 @@ namespace AIOffice.Excel;
 /// <c>xl/worksheets/sheetN.xml</c> (namespace attribute order on the root
 /// element only); every other zip part stays byte-identical. The round-trip
 /// law test pins this exact set.</item>
-/// <item>Charts (bar | line | pie) are authored on raw OpenXml in a post-save
-/// pass, because ClosedXML cannot create them. Measured: ClosedXML 0.105
-/// preserves existing chart/drawing parts byte-identical across its own
-/// saves, so charts survive later edits. Other chart kinds return
-/// <c>unsupported_feature</c> naming bar|line|pie.</item>
+/// <item>Charts (bar | line | pie | scatter | area) are authored on raw
+/// OpenXml in a post-save pass, because ClosedXML cannot create them.
+/// Measured: ClosedXML 0.105 preserves existing chart/drawing parts
+/// byte-identical across its own saves, so charts survive later edits. Other
+/// chart kinds return <c>unsupported_feature</c> naming the supported set.</item>
 /// <item>Pivot tables, conditional formats (cellIs | colorScale | dataBar |
-/// containsText) and images (png | jpeg, header-sniffed, sandbox-resolved)
-/// are ClosedXML-native; a post-save pass corrects ClosedXML's data-bar GUID
+/// containsText), images (png | jpeg, header-sniffed, sandbox-resolved),
+/// defined names, freeze panes, autofilter and page setup are
+/// ClosedXML-native; a post-save pass corrects ClosedXML's data-bar GUID
 /// casing so files stay validator-clean (see ExcelConditionalFormats).</item>
+/// <item>Big workbooks (M3): <c>read --view stats|text</c> and <c>get</c> of a
+/// cell/range stream the raw XML without loading the DOM — see
+/// <see cref="ExcelStreaming"/>. Mutating ops on huge files still load the
+/// full workbook through ClosedXML (streaming is read-only for now).</item>
 /// <item><c>move</c> ops and png rendering are not implemented; they return
 /// typed <c>unsupported_feature</c> envelopes with workarounds.</item>
 /// </list>

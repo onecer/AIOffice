@@ -97,6 +97,11 @@ public sealed partial class PptxHandler : IFormatHandler
             return PptxNotes.NotesDetail(presentation, address);
         }
 
+        if (address.IsChart)
+        {
+            return PptxCharts.Detail(presentation, address);
+        }
+
         if (address.IsMaster)
         {
             return address.HasShape
@@ -128,7 +133,7 @@ public sealed partial class PptxHandler : IFormatHandler
         };
     });
 
-    public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Execute(ctx, file =>
+    public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Execute(ctx, (file, warnings) =>
     {
         if (ops.Count == 0)
         {
@@ -153,6 +158,13 @@ public sealed partial class PptxHandler : IFormatHandler
             }
 
             slideCount = PptxDoc.Slides(presentation).Count;
+        }
+
+        // Charts carry cached literal data only — be honest about "Edit Data".
+        if (ops.Any(op => string.Equals(op.Op, "add", StringComparison.Ordinal) &&
+                          string.Equals(op.Type?.Trim(), "chart", StringComparison.OrdinalIgnoreCase)))
+        {
+            warnings.Add(PptxCharts.DataNotEditableWarning);
         }
 
         // Every op succeeded: snapshot the pre-image, then write atomically.
@@ -279,10 +291,14 @@ public sealed partial class PptxHandler : IFormatHandler
 
     // ---- shared plumbing ----------------------------------------------------
 
-    private static Envelope Execute(CommandContext ctx, Func<string, object?> action)
+    private static Envelope Execute(CommandContext ctx, Func<string, object?> action) =>
+        Execute(ctx, (file, _) => action(file));
+
+    private static Envelope Execute(CommandContext ctx, Func<string, List<Warning>, object?> action)
     {
         var stopwatch = Stopwatch.StartNew();
         string? file = ctx.File;
+        var warnings = new List<Warning>();
         try
         {
             if (string.IsNullOrWhiteSpace(file))
@@ -293,20 +309,21 @@ public sealed partial class PptxHandler : IFormatHandler
                     "Pass the .pptx path as the first argument.");
             }
 
-            var data = action(file);
-            return Envelope.Ok(data, BuildMeta(file, stopwatch));
+            var data = action(file, warnings);
+            return Envelope.Ok(data, BuildMeta(file, stopwatch, warnings));
         }
         catch (Exception exception)
         {
-            return Envelope.FromException(exception, BuildMeta(file, stopwatch));
+            return Envelope.FromException(exception, BuildMeta(file, stopwatch, warnings: null));
         }
     }
 
-    private static Meta BuildMeta(string? file, Stopwatch stopwatch) => new()
+    private static Meta BuildMeta(string? file, Stopwatch stopwatch, List<Warning>? warnings = null) => new()
     {
         File = file,
         Rev = file is not null && File.Exists(file) ? Rev.OfFile(file) : null,
         ElapsedMs = stopwatch.ElapsedMilliseconds,
+        Warnings = warnings is { Count: > 0 } ? warnings : null,
     };
 
     private static string RequireArg(CommandContext ctx, string key)
@@ -387,12 +404,12 @@ public sealed partial class PptxHandler : IFormatHandler
                 "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
         }
 
-        if (address.HasShape || address.IsNotes)
+        if (address.HasShape || address.IsNotes || address.IsChart)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Render scope must be a slide, not '{scope}'.",
-                "Use --scope /slide[2]; shape/notes-level rendering is not supported yet.");
+                "Use --scope /slide[2]; shape/chart/notes-level rendering is not supported yet.");
         }
 
         var part = PptxDoc.ResolveSlide(presentation, address.SlideIndex, scope);
@@ -406,10 +423,13 @@ public sealed partial class PptxHandler : IFormatHandler
         {
             var shapes = PptxDoc.Shapes(s.Part);
             var notes = PptxNotes.Text(s.Part);
+            var transition = PptxTransitions.Read(s.Part);
             return new
             {
                 Path = Units.Inv($"/slide[{s.Index}]"),
                 Index = s.Index,
+                Transition = transition?.Kind,
+                TransitionDuration = transition?.Duration,
                 ShapeCount = shapes.Count,
                 Shapes = shapes.Select(shape => new
                 {

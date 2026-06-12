@@ -38,7 +38,9 @@ internal sealed record ChartAddSpec(
     int AnchorColumn,
     int AnchorRow,
     int WidthCells,
-    int HeightCells);
+    int HeightCells,
+    // Numeric X values (scatter only): the first dataRange column parsed as numbers.
+    IReadOnlyList<double?>? XValues = null);
 
 /// <summary>A validated chart removal (1-based per-sheet index at apply time).</summary>
 internal sealed record ChartRemoveSpec(string SheetName, int Index);
@@ -131,7 +133,7 @@ internal sealed class ChartOpBatch
 internal static partial class ExcelCharts
 {
     /// <summary>The chart kinds aioffice can create. Everything else is unsupported_feature.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["bar", "line", "pie"];
+    public static readonly IReadOnlyList<string> Kinds = ["bar", "line", "pie", "scatter", "area"];
 
     private static readonly IReadOnlyList<string> AddProps =
         ["kind", "dataRange", "anchor", "title", "widthCells", "heightCells"];
@@ -195,8 +197,8 @@ internal static partial class ExcelCharts
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"ops[{opIndex}]: chart kind '{kind}' is not supported.",
-                "Supported chart kinds: bar, line, pie. Scatter, area and combo charts land later; " +
-                "a line chart is the usual stand-in for scatter/area data.",
+                "Supported chart kinds: bar, line, pie, scatter, area. Bubble, radar and combo " +
+                "charts land later; a scatter chart is the usual stand-in for bubble data.",
                 candidates: Kinds);
         }
 
@@ -264,6 +266,31 @@ internal static partial class ExcelCharts
             categories.Add(ExcelValues.SafeFormatted(sheet.Cell(row, firstColumn)));
         }
 
+        // Scatter plots numbers against numbers: the first column is the X
+        // axis and must be numeric (categories stay text for bar/line/pie/area).
+        List<double?>? xValues = null;
+        if (kind == "scatter")
+        {
+            xValues = new List<double?>(lastRow - dataFirstRow + 1);
+            for (var row = dataFirstRow; row <= lastRow; row++)
+            {
+                var cell = sheet.Cell(row, firstColumn);
+                var value = EvaluatedValue(cell);
+                xValues.Add(value.Type switch
+                {
+                    XLDataType.Blank => null,
+                    XLDataType.Number => value.GetNumber(),
+                    XLDataType.DateTime => value.GetDateTime().ToOADate(),
+                    XLDataType.TimeSpan => value.GetTimeSpan().TotalDays,
+                    _ => throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{opIndex}]: a scatter chart needs numeric X values, but " +
+                        $"{ExcelPaths.CellPath(sheet, cell.Address)} is {ExcelValues.TypeName(value.Type)}.",
+                        "Point the first dataRange column at numbers, or use kind \"line\" for category data."),
+                });
+            }
+        }
+
         var categoriesRef = RangeRef(sheet.Name, firstColumn, dataFirstRow, firstColumn, lastRow);
         var series = new List<ChartSeriesSpec>(columns - 1);
         for (var column = firstColumn + 1; column <= lastColumn; column++)
@@ -298,7 +325,8 @@ internal static partial class ExcelCharts
             AnchorColumn: anchorColumn,
             AnchorRow: anchorRow,
             WidthCells: widthCells,
-            HeightCells: heightCells);
+            HeightCells: heightCells,
+            XValues: xValues);
     }
 
     private static (int FirstColumn, int FirstRow, int LastColumn, int LastRow) ParseDataRange(
@@ -653,9 +681,25 @@ internal static partial class ExcelCharts
     {
         var plotArea = new C.PlotArea(new C.Layout());
         plotArea.Append(BuildChartGroup(spec));
-        if (spec.Kind is "bar" or "line")
+        if (spec.Kind is "bar" or "line" or "area")
         {
             plotArea.Append(new C.CategoryAxis(
+                new C.AxisId { Val = CategoryAxisId },
+                new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                new C.Delete { Val = false },
+                new C.AxisPosition { Val = C.AxisPositionValues.Bottom },
+                new C.CrossingAxis { Val = ValueAxisId }));
+            plotArea.Append(new C.ValueAxis(
+                new C.AxisId { Val = ValueAxisId },
+                new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                new C.Delete { Val = false },
+                new C.AxisPosition { Val = C.AxisPositionValues.Left },
+                new C.CrossingAxis { Val = CategoryAxisId }));
+        }
+        else if (spec.Kind == "scatter")
+        {
+            // Scatter plots value-against-value: both axes are value axes.
+            plotArea.Append(new C.ValueAxis(
                 new C.AxisId { Val = CategoryAxisId },
                 new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
                 new C.Delete { Val = false },
@@ -731,6 +775,38 @@ internal static partial class ExcelCharts
                 return group;
             }
 
+            case "area":
+            {
+                var group = new C.AreaChart(
+                    new C.Grouping { Val = C.GroupingValues.Standard },
+                    new C.VaryColors { Val = false });
+                for (var i = 0; i < spec.Series.Count; i++)
+                {
+                    var series = new C.AreaChartSeries();
+                    AppendSeriesChildren(series, spec, i);
+                    group.Append(series);
+                }
+
+                group.Append(new C.AxisId { Val = CategoryAxisId });
+                group.Append(new C.AxisId { Val = ValueAxisId });
+                return group;
+            }
+
+            case "scatter":
+            {
+                var group = new C.ScatterChart(
+                    new C.ScatterStyle { Val = C.ScatterStyleValues.LineMarker },
+                    new C.VaryColors { Val = false });
+                for (var i = 0; i < spec.Series.Count; i++)
+                {
+                    group.Append(BuildScatterSeries(spec, i));
+                }
+
+                group.Append(new C.AxisId { Val = CategoryAxisId });
+                group.Append(new C.AxisId { Val = ValueAxisId });
+                return group;
+            }
+
             default: // "pie" — ParseAdd rejected everything else
             {
                 var group = new C.PieChart(new C.VaryColors { Val = true });
@@ -743,19 +819,33 @@ internal static partial class ExcelCharts
         }
     }
 
+    /// <summary>idx/order/tx/spPr/xVal/yVal/smooth — scatter plots X numbers against Y numbers.</summary>
+    private static C.ScatterChartSeries BuildScatterSeries(ChartAddSpec spec, int ordinal)
+    {
+        var data = spec.Series[ordinal];
+        var series = new C.ScatterChartSeries();
+        series.Append(new C.Index { Val = (uint)ordinal });
+        series.Append(new C.Order { Val = (uint)ordinal });
+        series.Append(SeriesText(data));
+
+        // Markers only: no connecting line, the classic scatter look.
+        series.Append(new C.ChartShapeProperties(new A.Outline(new A.NoFill())));
+
+        series.Append(new C.XValues(new C.NumberReference(
+            new C.Formula(spec.CategoriesRef), NumberCache(spec.XValues!))));
+        series.Append(new C.YValues(new C.NumberReference(
+            new C.Formula(data.ValuesRef), NumberCache(data.Values))));
+        series.Append(new C.Smooth { Val = false });
+        return series;
+    }
+
     /// <summary>idx/order/tx/cat/val — the shared series skeleton (schema order).</summary>
     private static void AppendSeriesChildren(OpenXmlCompositeElement series, ChartAddSpec spec, int ordinal)
     {
         var data = spec.Series[ordinal];
         series.Append(new C.Index { Val = (uint)ordinal });
         series.Append(new C.Order { Val = (uint)ordinal });
-        series.Append(data.NameRef is { } nameRef
-            ? new C.SeriesText(new C.StringReference(
-                new C.Formula(nameRef),
-                new C.StringCache(
-                    new C.PointCount { Val = 1u },
-                    new C.StringPoint { Index = 0u, NumericValue = new C.NumericValue(data.Name) })))
-            : new C.SeriesText(new C.NumericValue(data.Name)));
+        series.Append(SeriesText(data));
 
         var stringCache = new C.StringCache(new C.PointCount { Val = (uint)spec.Categories.Count });
         for (var i = 0; i < spec.Categories.Count; i++)
@@ -770,14 +860,28 @@ internal static partial class ExcelCharts
         series.Append(new C.CategoryAxisData(new C.StringReference(
             new C.Formula(spec.CategoriesRef), stringCache)));
 
-        var numberCache = new C.NumberingCache(
+        series.Append(new C.Values(new C.NumberReference(
+            new C.Formula(data.ValuesRef), NumberCache(data.Values))));
+    }
+
+    private static C.SeriesText SeriesText(ChartSeriesSpec data) => data.NameRef is { } nameRef
+        ? new C.SeriesText(new C.StringReference(
+            new C.Formula(nameRef),
+            new C.StringCache(
+                new C.PointCount { Val = 1u },
+                new C.StringPoint { Index = 0u, NumericValue = new C.NumericValue(data.Name) })))
+        : new C.SeriesText(new C.NumericValue(data.Name));
+
+    private static C.NumberingCache NumberCache(IReadOnlyList<double?> values)
+    {
+        var cache = new C.NumberingCache(
             new C.FormatCode("General"),
-            new C.PointCount { Val = (uint)data.Values.Count });
-        for (var i = 0; i < data.Values.Count; i++)
+            new C.PointCount { Val = (uint)values.Count });
+        for (var i = 0; i < values.Count; i++)
         {
-            if (data.Values[i] is { } value)
+            if (values[i] is { } value)
             {
-                numberCache.Append(new C.NumericPoint
+                cache.Append(new C.NumericPoint
                 {
                     Index = (uint)i,
                     NumericValue = new C.NumericValue(value.ToString(CultureInfo.InvariantCulture)),
@@ -785,8 +889,7 @@ internal static partial class ExcelCharts
             }
         }
 
-        series.Append(new C.Values(new C.NumberReference(
-            new C.Formula(data.ValuesRef), numberCache)));
+        return cache;
     }
 
     private static void AppendAnchor(DrawingsPart drawings, ChartPart chartPart, ChartAddSpec spec)

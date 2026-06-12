@@ -40,7 +40,7 @@ OfficeCLI 的**能力清单**是我们长期对齐的北极星（台账见 `docs
 | 2 | **Errors that Teach** | 错误是下一步动作的输入，不是终点 | `AiofficeError` 构造器强制非空 `suggestion`；`invalid_path` 服务端自动近邻重查回填 `candidates[]` |
 | 3 | **Stable Addressing** | AI 多步操作必须有一套稳定、简单、三格式统一的地址语法 | 自研寻址文法（§2.4）：1-based 路径，`query` 返回规范路径，`get`/`edit` 接受之 |
 | 4 | **Atomic Batch Edits** | AI 天然产出操作序列；序列要么全成要么全不成 | `edit --ops` 整批一个保存周期、失败回滚、`--dry-run` 预演、`--expect-rev` 乐观锁 |
-| 5 | **Render → Look → Fix** | AI 改完必须能"看见"结果再迭代，否则是盲改 XML | `render`（html/svg/text）+ `validate` lint；png 与实时 preview 在 M1 |
+| 5 | **Render → Look → Fix** | AI 改完必须能"看见"结果再迭代，否则是盲改 XML | `render`（html/svg/text）+ `validate` lint；png 与实时 preview M1 落地，pdf（分页打印）M3 落地 |
 | 6 | **Introspectable Schema** | "不确定就查 schema，而不是猜参数" | `schema [verb]` 输出整个命令面的机器可读 JSON；`help` 渐进式文档 |
 | 7 | **Sandbox by Default** | 给 AI 的工具必须默认最小权限 | `--workspace`（默认 cwd）白名单，realpath + symlink 逃逸检查，越界即 `sandbox_denied`（exit 4） |
 
@@ -564,11 +564,22 @@ public sealed class AiofficeError : Exception
 - ✅ 大文件守卫：超过 50MB（`AIOFFICE_MAX_FILE_MB` 可调）拒绝打开 → `file_too_large` + 建议；`doctor` 报告 `limits.maxFileMb`。
 - ⏭ 大文件流式处理**没有**按 M2 交付：它需要一轮专门的基准驱动打磨（10 万行 xlsx / 千页 docx 实测），移入 M3；M2 以尺寸守卫诚实兜底。
 
-### M3 — 对齐台账清零
+### M3 — 功能第一（已交付，v0.4.0）
 
-- 以 `docs/PARITY.md` 为账本，逐项核对能力覆盖（注意：对齐的是**能力**，不是命令语法），清零或显式标记"不做 + 理由"。
-- 大文件流式与性能：10 万行 xlsx、千页 docx 基准与优化（接替 M2 的尺寸守卫）。
-- docx 格式/移动修订、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景。
+用户指令：**功能第一**——不让体积/性能的节俭挡住能力；二进制增长可接受。
+
+- ✅ 大小上限翻转：`FileSizeGuard` 默认**不限大小**；`AIOFFICE_MAX_FILE_MB` 改为 opt-in 上限（设了且超限才 `file_too_large`）；`doctor` 缺省报告 `limits.maxFileMb: "unlimited"`。
+- ✅ `render --to pdf`：`AIOffice.Render` PdfRenderer 经系统 Chrome `--headless=new --print-to-pdf --no-pdf-header-footer` 出分页 PDF；docx/xlsx html → A4 分页；pptx 整副 deck 一个 PDF、`@page` 钉死片尺寸、一页一片（`--scope` 可缩到单页）。无浏览器 → `unsupported_feature` + 安装/替代建议。CLI 与 MCP `office_render` 同步增加 `pdf` 目标。
+- ✅ 跨文档 dataFrom（xlsx 数据 → pptx 图表）：命令层（CLI edit 与 MCP office_edit 共用 `CrossDocDataFrom`）把 `{"dataFrom":"metrics.xlsx!Sheet1/A1:B5"}` 展开为字面量 categories/series——首列 → 分类、表头行 → 系列名、其余列 → 系列值；工作簿必经沙箱解析，经 xlsx handler 读取；区域写错返回 candidates（表名/最近 usedRange）。
+- ✅ docx：列表（编号/项目符号/嵌套/重启，text 视图标记 + HTML 真 `<ol>/<ul>`）、超链接（url/anchor）、书签、脚注、节属性（`/section[1]` 纸张/方向/边距）、格式修订 accept/reject（w:rPrChange/w:pPrChange）、批注线程回复（w15 commentsExtended）。
+- ✅ xlsx：大工作簿流式读取（>20 MB 或 `stream:true` 走 SAX，stats/text/get 不加载 DOM）、scatter/area 图表、命名区域（`/name[@name=X]`，公式真求值）、冻结窗格、自动筛选、打印设置（方向/纸张/fitTo/printArea）。
+- ✅ pptx：原生图表（bar/line/pie，字面量缓存 + `dataEditable:false` 诚实告知）、切换动画（fade/push/wipe + 时长）、预设几何（ellipse/triangle/diamond/arrow/roundRect + line 连接线、翻转）、z 序（front/back/forward/backward）。
+- ⏭ 留给 M4 的种子：嵌入式图表工作簿（PowerPoint 内可编辑数据）、动画、尾注、docx 多节插入、大工作簿**写入**流式、跨 run find/replace、数据验证、连接线/组合。
+
+### M4 — 能力深化（规划）
+
+- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M4 窗口），或显式标记"不做 + 理由"。
+- docx 移动修订与 tracked find/replace、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景与母版编辑。
 
 ---
 

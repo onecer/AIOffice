@@ -68,6 +68,29 @@ public sealed class ManualCheckFixtureTests : ExcelTestBase
             ]);
         Assert.True(edit.IsOk, edit.ToJson());
 
+        // M3 surface, on its own sheet so the human can eyeball each feature:
+        // scatter chart over numeric X/Y, a defined name used by a live SUM,
+        // frozen header row, an AutoFilter and a print area.
+        var m3 = Handler.Edit(
+            new CommandContext { Workspace = workspace, File = file, Args = [] },
+            [
+                AddOp("/Metrics", "sheet"),
+                SetOp("/Metrics/A1:B5", ("values", new JsonArray(
+                    new JsonArray("X", "Y"),
+                    new JsonArray(1, 2.5),
+                    new JsonArray(2, 4.1),
+                    new JsonArray(3, 9.8),
+                    new JsonArray(4, 16.2)))),
+                AddOp("/Metrics", "chart",
+                    ("kind", "scatter"), ("dataRange", "A1:B5"), ("anchor", "D2"), ("title", "Growth (scatter)")),
+                AddOp("/Metrics/B2:B5", "name", ("name", "GrowthYs")),
+                SetOp("/Metrics/B7", ("value", "=SUM(GrowthYs)"), ("bold", true)),
+                SetOp("/Metrics", ("freezeRows", 1)),
+                SetOp("/Metrics/A1:B5", ("autoFilter", true)),
+                SetOp("/Metrics", ("printArea", "A1:F20")),
+            ]);
+        Assert.True(m3.IsOk, m3.ToJson());
+
         // Image: a small PNG written into the sandbox, embedded, then cleaned up.
         var logo = Path.Combine(dir, "manual-check-logo.png");
         File.WriteAllBytes(logo, Convert.FromBase64String(
@@ -91,6 +114,14 @@ public sealed class ManualCheckFixtureTests : ExcelTestBase
         Assert.NotNull(raw.CachedValue);
         var cached = double.Parse(raw.CachedValue, System.Globalization.CultureInfo.InvariantCulture);
         Assert.Equal(35.74, cached, precision: 10); // 9.99 + 24.5 + 1.25
+
+        // The defined-name SUM must carry a real cached value for Excel to show.
+        var nameSum = RawCell(file, "Metrics", "B7");
+        Assert.NotNull(nameSum.CachedValue);
+        Assert.Equal(
+            32.6, // 2.5 + 4.1 + 9.8 + 16.2
+            double.Parse(nameSum.CachedValue, System.Globalization.CultureInfo.InvariantCulture),
+            precision: 10);
     }
 
     private static string? FindRepoRoot()

@@ -133,8 +133,12 @@ public sealed partial class WordHandler : IFormatHandler
         {
             return WordprocessingDocument.Open(stream, editable);
         }
-        catch (Exception ex) when (ex is OpenXmlPackageException or InvalidDataException or System.Xml.XmlException)
+        catch (Exception ex) when (
+            ex is OpenXmlPackageException or InvalidDataException or System.Xml.XmlException or FileFormatException)
         {
+            // FileFormatException: System.IO.Packaging's own "not a package"
+            // signal (surfaced by huge non-zip files since the M3 size-cap
+            // default became unlimited) — same honest format_corrupt mapping.
             throw new AiofficeException(
                 ErrorCodes.FormatCorrupt,
                 $"Not a readable .docx package: {file} ({ex.Message})",

@@ -88,16 +88,19 @@ public sealed class CommandService
         var resolved = Workspace.Resolve(file, mustExist: true);
         var handler = Handlers.Resolve(resolved);
 
-        // png is cross-format plumbing (handler artifact -> headless-browser
-        // screenshot); everything else goes straight to the handler.
-        if (OptionalString(a, "to") == "png")
+        // png/pdf are cross-format plumbing (handler artifact -> headless
+        // browser); everything else goes straight to the handler.
+        var to = OptionalString(a, "to");
+        if (to is "png" or "pdf")
         {
             if (OptionalString(a, "output") is { } output)
             {
-                a["output"] = Workspace.Resolve(output); // PngRenderVerb expects a resolved path
+                a["output"] = Workspace.Resolve(output); // the render verbs expect a resolved path
             }
 
-            return AIOffice.Render.PngRenderVerb.Execute(handler, Context(resolved, a));
+            return to == "png"
+                ? AIOffice.Render.PngRenderVerb.Execute(handler, Context(resolved, a))
+                : AIOffice.Render.PdfRenderVerb.Execute(handler, Context(resolved, a));
         }
 
         return handler.Render(Context(resolved, a));
@@ -116,6 +119,11 @@ public sealed class CommandService
             "'ops' is required.",
             "Pass a JSON array like [{\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"text\":\"Hi\"}}].");
         var ops = EditOp.ParseBatch(opsNode.ToJsonString(JsonDefaults.Options));
+
+        // M3 cross-doc bridge: pptx chart ops may pull categories/series from a
+        // workbook ({"dataFrom":"book.xlsx!Sheet1/A1:B5"}); expanded BEFORE the
+        // rev guard and snapshot so a bad source range writes nothing.
+        ops = CrossDocDataFrom.Expand(ops, handler.Kind, Workspace, Handlers);
 
         GuardRev(resolved, OptionalString(a, "expect_rev"));
 

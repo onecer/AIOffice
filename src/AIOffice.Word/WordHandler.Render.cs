@@ -73,14 +73,15 @@ public sealed partial class WordHandler
 
         foreach (var header in roots.Where(r => r.Type == "header"))
         {
-            AppendHeaderFooter(sb, header, OwningPart(doc, header.Element));
+            AppendHeaderFooter(sb, header, doc, OwningPart(doc, header.Element));
         }
 
-        AppendContainer(sb, GetBody(doc, file), "/body", doc.MainDocumentPart);
+        AppendContainer(sb, GetBody(doc, file), "/body", doc, doc.MainDocumentPart);
+        AppendFootnoteSection(sb, doc);
 
         foreach (var footer in roots.Where(r => r.Type == "footer"))
         {
-            AppendHeaderFooter(sb, footer, OwningPart(doc, footer.Element));
+            AppendHeaderFooter(sb, footer, doc, OwningPart(doc, footer.Element));
         }
 
         return sb.ToString().TrimEnd('\n');
@@ -94,23 +95,50 @@ public sealed partial class WordHandler
         switch (node.Element)
         {
             case Paragraph p:
-                AppendBlock(sb, p, listOpen: false, node.CanonicalPath, part);
+                AppendBlock(sb, p, node.CanonicalPath, doc, part);
                 break;
 
             case Table t:
-                AppendTable(sb, t, node.CanonicalPath, part);
+                AppendTable(sb, t, node.CanonicalPath, doc, part);
                 break;
 
+            case Hyperlink:
+            {
+                var paragraphPath = node.CanonicalPath[..node.CanonicalPath.LastIndexOf('/')];
+                AppendInlineChild(sb, node.Element, node.CanonicalPath, paragraphPath, doc, part);
+                break;
+            }
+
             case Header or Footer:
-                AppendHeaderFooter(sb, node, part);
+                AppendHeaderFooter(sb, node, doc, part);
                 break;
 
             default:
-                AppendContainer(sb, node.Element, node.CanonicalPath, part);
+                AppendContainer(sb, node.Element, node.CanonicalPath, doc, part);
                 break;
         }
 
         return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>Footnotes render once, after the body, as an ordered list of notes.</summary>
+    private static void AppendFootnoteSection(StringBuilder sb, WordprocessingDocument doc)
+    {
+        var footnotes = EnumerateFootnotes(doc).ToList();
+        if (footnotes.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("<section class=\"footnotes\">\n<ol>\n");
+        foreach (var (footnote, id) in footnotes)
+        {
+            sb.Append("<li data-aio-path=\"").Append(FootnotePath(id)).Append("\">")
+              .Append(Escape(FootnoteText(footnote)))
+              .Append("</li>\n");
+        }
+
+        sb.Append("</ol>\n</section>\n");
     }
 
     /// <summary>The part whose relationships resolve r:embed ids under this element.</summary>
@@ -131,17 +159,22 @@ public sealed partial class WordHandler
     }
 
     /// <summary>The html tag for a header/footer root is its type name, path on the wrapper.</summary>
-    private static void AppendHeaderFooter(StringBuilder sb, ResolvedNode root, OpenXmlPart? part)
+    private static void AppendHeaderFooter(StringBuilder sb, ResolvedNode root, WordprocessingDocument doc, OpenXmlPart? part)
     {
         var tag = root.Type; // "header" | "footer"
         sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(root.CanonicalPath).Append("\">\n");
-        AppendContainer(sb, root.Element, root.CanonicalPath, part);
+        AppendContainer(sb, root.Element, root.CanonicalPath, doc, part);
         sb.Append("</").Append(tag).Append(">\n");
     }
 
-    private static void AppendContainer(StringBuilder sb, OpenXmlElement container, string path, OpenXmlPart? part)
+    /// <summary>
+    /// Blocks in document order; consecutive list paragraphs become real
+    /// &lt;ul&gt;/&lt;ol&gt; structures, nested by their numbering level
+    /// (sub-lists open inside the parent &lt;li&gt;).
+    /// </summary>
+    private static void AppendContainer(StringBuilder sb, OpenXmlElement container, string path, WordprocessingDocument doc, OpenXmlPart? part)
     {
-        var listOpen = false;
+        var lists = new List<(string Tag, bool LiOpen)>(); // open list stack, outermost first
         var pIndex = 0;
         var tableIndex = 0;
         foreach (var child in container.ChildElements)
@@ -150,30 +183,23 @@ public sealed partial class WordHandler
             {
                 case Paragraph p:
                     pIndex++;
-                    var isListItem = p.ParagraphProperties?.NumberingProperties is not null;
-                    if (isListItem && !listOpen)
+                    var pPath = $"{path}/p[{pIndex}]";
+                    if (ListInfoOf(doc, p) is { } info)
                     {
-                        sb.Append("<ul>\n");
-                        listOpen = true;
+                        AppendListItem(sb, p, pPath, info, lists, doc, part);
                     }
-                    else if (!isListItem && listOpen)
+                    else
                     {
-                        sb.Append("</ul>\n");
-                        listOpen = false;
+                        CloseLists(sb, lists, 0);
+                        AppendBlock(sb, p, pPath, doc, part);
                     }
 
-                    AppendBlock(sb, p, listOpen, $"{path}/p[{pIndex}]", part);
                     break;
 
                 case Table t:
                     tableIndex++;
-                    if (listOpen)
-                    {
-                        sb.Append("</ul>\n");
-                        listOpen = false;
-                    }
-
-                    AppendTable(sb, t, $"{path}/table[{tableIndex}]", part);
+                    CloseLists(sb, lists, 0);
+                    AppendTable(sb, t, $"{path}/table[{tableIndex}]", doc, part);
                     break;
 
                 default:
@@ -181,35 +207,84 @@ public sealed partial class WordHandler
             }
         }
 
-        if (listOpen)
+        CloseLists(sb, lists, 0);
+    }
+
+    private static void AppendListItem(
+        StringBuilder sb,
+        Paragraph p,
+        string path,
+        ListInfo info,
+        List<(string Tag, bool LiOpen)> lists,
+        WordprocessingDocument doc,
+        OpenXmlPart? part)
+    {
+        var tag = info.Kind == "bullet" ? "ul" : "ol";
+        var depth = info.Level + 1;
+
+        CloseLists(sb, lists, depth);
+        if (lists.Count == depth && lists[^1].Tag != tag)
         {
-            sb.Append("</ul>\n");
+            CloseLists(sb, lists, depth - 1);
+        }
+
+        while (lists.Count < depth)
+        {
+            sb.Append('<').Append(tag).Append(">\n");
+            lists.Add((tag, false));
+        }
+
+        if (lists[^1].LiOpen)
+        {
+            sb.Append("</li>\n");
+        }
+
+        sb.Append("<li data-aio-path=\"").Append(path).Append("\">");
+        AppendInline(sb, p, path, doc, part);
+        lists[^1] = (lists[^1].Tag, true);
+    }
+
+    /// <summary>
+    /// Closes open lists down to the given depth. Each level's open li closes
+    /// before its list; the parent li hosting a sublist stays open (it closes
+    /// when its own level does).
+    /// </summary>
+    private static void CloseLists(StringBuilder sb, List<(string Tag, bool LiOpen)> lists, int depth)
+    {
+        while (lists.Count > depth)
+        {
+            var (tag, liOpen) = lists[^1];
+            lists.RemoveAt(lists.Count - 1);
+            if (liOpen)
+            {
+                sb.Append("</li>\n");
+            }
+
+            sb.Append("</").Append(tag).Append(">\n");
         }
     }
 
-    private static void AppendBlock(StringBuilder sb, Paragraph p, bool listOpen, string path, OpenXmlPart? part)
+    private static void AppendBlock(StringBuilder sb, Paragraph p, string path, WordprocessingDocument doc, OpenXmlPart? part)
     {
         var style = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
         var level = HeadingLevel(style);
-        var tag = listOpen
-            ? "li"
-            : level is { } h
-                ? "h" + Math.Min(h, 6)
-                : "p";
+        var tag = level is { } h ? "h" + Math.Min(h, 6) : "p";
 
         sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(path).Append("\">");
-        AppendInline(sb, p, path, part);
+        AppendInline(sb, p, path, doc, part);
         sb.Append("</").Append(tag).Append(">\n");
     }
 
     /// <summary>
     /// Inline content with tracked changes rendered at their end state:
     /// w:ins content shows, w:del content is hidden. Inline images become
-    /// data-URI &lt;img&gt; tags carrying the run's canonical path.
+    /// data-URI &lt;img&gt; tags carrying the run's canonical path; hyperlinks
+    /// become &lt;a href&gt; carrying theirs.
     /// </summary>
-    private static void AppendInline(StringBuilder sb, Paragraph p, string path, OpenXmlPart? part)
+    private static void AppendInline(StringBuilder sb, Paragraph p, string path, WordprocessingDocument doc, OpenXmlPart? part)
     {
         var runIndex = 0;
+        var linkIndex = 0;
         foreach (var child in p.ChildElements)
         {
             switch (child)
@@ -217,6 +292,11 @@ public sealed partial class WordHandler
                 case Run run:
                     runIndex++;
                     AppendRun(sb, run, $"{path}/run[{runIndex}]", part);
+                    break;
+
+                case Hyperlink link:
+                    linkIndex++;
+                    AppendInlineChild(sb, link, $"{path}/link[{linkIndex}]", path, doc, part);
                     break;
 
                 case InsertedRun ins: // pending insertions are document content
@@ -231,6 +311,28 @@ public sealed partial class WordHandler
                     break;
             }
         }
+    }
+
+    /// <summary>One hyperlink as &lt;a href&gt;: external relationship url or #bookmark anchor.</summary>
+    private static void AppendInlineChild(StringBuilder sb, OpenXmlElement element, string linkPath, string paragraphPath, WordprocessingDocument doc, OpenXmlPart? part)
+    {
+        var hyperlink = (Hyperlink)element;
+        var href = ResolveLinkUrl(doc, hyperlink)
+            ?? (hyperlink.Anchor?.Value is { Length: > 0 } anchor ? "#" + anchor : null);
+
+        sb.Append("<a data-aio-path=\"").Append(linkPath).Append('"');
+        if (href is not null)
+        {
+            sb.Append(" href=\"").Append(Escape(href).Replace("\"", "&quot;", StringComparison.Ordinal)).Append('"');
+        }
+
+        sb.Append('>');
+        foreach (var run in hyperlink.ChildElements.OfType<Run>())
+        {
+            AppendRun(sb, run, paragraphPath, part);
+        }
+
+        sb.Append("</a>");
     }
 
     private static void AppendRun(StringBuilder sb, Run run, string pathForImages, OpenXmlPart? part)
@@ -268,6 +370,10 @@ public sealed partial class WordHandler
                     break;
                 case TabChar:
                     sb.Append('\t');
+                    break;
+                case FootnoteReference reference:
+                    sb.Append("<sup data-aio-path=\"").Append(FootnotePath((int)(reference.Id?.Value ?? 0)))
+                      .Append("\">").Append(reference.Id?.Value ?? 0).Append("</sup>");
                     break;
                 case Drawing drawing:
                     AppendImage(sb, drawing, pathForImages, part);
@@ -316,7 +422,7 @@ public sealed partial class WordHandler
         sb.Append("/>");
     }
 
-    private static void AppendTable(StringBuilder sb, Table table, string path, OpenXmlPart? part)
+    private static void AppendTable(StringBuilder sb, Table table, string path, WordprocessingDocument doc, OpenXmlPart? part)
     {
         sb.Append("<table data-aio-path=\"").Append(path).Append("\">\n");
         var rowIndex = 0;
@@ -340,7 +446,7 @@ public sealed partial class WordHandler
                         sb.Append("<br/>");
                     }
 
-                    AppendInline(sb, p, $"{cellPath}/p[{pIndex}]", part);
+                    AppendInline(sb, p, $"{cellPath}/p[{pIndex}]", doc, part);
                 }
 
                 sb.Append("</td>");

@@ -106,13 +106,13 @@ public static class CommandSurface
             "office_edit"),
 
         new("render",
-            "Render a document (or a scoped node) to html, svg, text or png.",
-            "aioffice render <file> [--to html|svg|text|png] [--scope <path>] [-o out]",
+            "Render a document (or a scoped node) to html, svg, text, png or pdf.",
+            "aioffice render <file> [--to html|svg|text|png|pdf] [--scope <path>] [-o out]",
             [new("file", true, "Document to render.")],
             [
-                new("to", "html|svg|text|png", "Output format. html for docx/xlsx, svg or html per slide for pptx; png screenshots via a local Chromium (pptx: one slide, default /slide[1] — use --scope)."),
+                new("to", "html|svg|text|png|pdf", "Output format. html for docx/xlsx, svg or html per slide for pptx; png screenshots via a local Chromium (pptx: one slide, default /slide[1] — use --scope); pdf prints paged output via the same Chromium (pptx: the whole deck, one page per slide)."),
                 new("scope", "<path>", "Render only the node at this path, e.g. /slide[2]."),
-                new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope (png default: source path with .png)."),
+                new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope (png/pdf default: source path with .png/.pdf)."),
             ],
             "office_render"),
 

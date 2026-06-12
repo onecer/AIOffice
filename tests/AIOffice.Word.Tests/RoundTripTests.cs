@@ -85,6 +85,49 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the M3 surface: lists, links, bookmarks,
+    /// footnotes, page setup and comment threads must survive a no-edit
+    /// open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_m3_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "M3 round trip");
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"p","props":{"text":"Item one","list":"number"}},
+              {"op":"add","path":"/body","type":"p","props":{"text":"Sub item","list":"number","level":1}},
+              {"op":"add","path":"/body/p[1]","type":"bookmark","props":{"name":"Top"}},
+              {"op":"add","path":"/body/p[1]","type":"link","props":{"text":"site","url":"https://example.com"}},
+              {"op":"add","path":"/body/p[1]","type":"link","props":{"text":"top","anchor":"Top"}},
+              {"op":"add","path":"/body/p[3]","type":"footnote","props":{"text":"a note"}},
+              {"op":"set","path":"/section[1]","props":{"pageSize":"A4","orientation":"landscape","marginTop":"2cm"}},
+              {"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root comment"}}
+            ]
+            """);
+        Edit(file, """[{"op":"add","path":"/comment[@id=1]","type":"reply","props":{"text":"a reply"}}]""");
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body;
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            _ = doc.MainDocumentPart.NumberingDefinitionsPart?.Numbering;
+            _ = doc.MainDocumentPart.FootnotesPart?.Footnotes;
+            _ = doc.MainDocumentPart.WordprocessingCommentsPart?.Comments;
+            _ = doc.MainDocumentPart.WordprocessingCommentsExPart?.CommentsEx;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

@@ -4,9 +4,11 @@ using Xunit;
 namespace AIOffice.Core.Tests;
 
 /// <summary>
-/// The M2 file-size guard: files over the limit (default 50 MB, overridable
-/// via AIOFFICE_MAX_FILE_MB) fail fast with file_too_large; the suggestion
-/// must name the env var so the agent can raise the limit deliberately.
+/// The file-size guard. Originally written for the M2 50 MB default; the M3
+/// directive (功能第一 — features first) flipped the default to UNLIMITED, so
+/// these tests now assert: no env var means no limit at all, and
+/// AIOFFICE_MAX_FILE_MB is a purely opt-in cap. The suggestion must still
+/// name the env var so the agent can adjust the cap deliberately.
 /// </summary>
 public sealed class FileSizeGuardTests : IDisposable
 {
@@ -44,7 +46,7 @@ public sealed class FileSizeGuardTests : IDisposable
         Assert.Equal(ErrorCodes.FileTooLarge, ex.Code);
         Assert.Contains("0 MB limit", ex.Message, StringComparison.Ordinal);
         Assert.Contains(FileSizeGuard.EnvVar, ex.Suggestion, StringComparison.Ordinal);
-        Assert.Contains("Split", ex.Suggestion, StringComparison.Ordinal);
+        Assert.Contains("split", ex.Suggestion, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -55,8 +57,10 @@ public sealed class FileSizeGuardTests : IDisposable
     }
 
     [Fact]
-    public void Env_var_overrides_the_default_limit()
+    public void Env_var_is_an_opt_in_cap_and_the_default_is_unlimited()
     {
+        // Rewritten for the M3 directive: the 50 MB default is gone; unset or
+        // unparsable env means null (no limit), a parsable value is the cap.
         var previous = Environment.GetEnvironmentVariable(FileSizeGuard.EnvVar);
         try
         {
@@ -64,10 +68,32 @@ public sealed class FileSizeGuardTests : IDisposable
             Assert.Equal(7, FileSizeGuard.MaxFileMb);
 
             Environment.SetEnvironmentVariable(FileSizeGuard.EnvVar, "not-a-number");
-            Assert.Equal(FileSizeGuard.DefaultMaxFileMb, FileSizeGuard.MaxFileMb);
+            Assert.Null(FileSizeGuard.MaxFileMb);
 
             Environment.SetEnvironmentVariable(FileSizeGuard.EnvVar, null);
-            Assert.Equal(FileSizeGuard.DefaultMaxFileMb, FileSizeGuard.MaxFileMb);
+            Assert.Null(FileSizeGuard.MaxFileMb);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(FileSizeGuard.EnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void Without_an_env_cap_even_huge_files_pass()
+    {
+        // M3 directive (功能第一): no env var -> Ensure is a no-op, whatever the size.
+        var previous = Environment.GetEnvironmentVariable(FileSizeGuard.EnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(FileSizeGuard.EnvVar, null);
+            var path = Path.Combine(_dir, "big.docx");
+            using (var fs = File.Create(path))
+            {
+                fs.SetLength(200L * 1024 * 1024); // sparse 200 MB
+            }
+
+            FileSizeGuard.Ensure(path); // no throw
         }
         finally
         {

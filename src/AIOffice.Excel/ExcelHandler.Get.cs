@@ -15,7 +15,34 @@ public sealed partial class ExcelHandler
             "get needs a path.",
             "Pass an address like /Sheet1/A1 or /Sheet1/A1:C10; run 'aioffice query' to discover paths.");
 
+        // Cell/range gets on big files (or with stream=true) are served by the
+        // SAX path without loading the workbook DOM. Other targets (sheet,
+        // chart, pivot, name…) still need the full model.
+        if ((ArgBool(ctx, "stream") || ExcelStreaming.IsLarge(file)) &&
+            ExcelStreaming.TryParseCellOrRange(pathArg, out var streamSheet, out var streamStart, out var streamEnd))
+        {
+            if (streamStart == streamEnd)
+            {
+                return Envelope.Ok(ExcelStreaming.GetCell(file, streamSheet, streamStart), MetaFor(file, sw));
+            }
+
+            var maxCells = ArgInt(ctx, "maxCells") ?? DefaultMaxRangeCells;
+            var result = ExcelStreaming.GetRange(file, streamSheet, streamStart, streamEnd, maxCells);
+            List<Warning>? streamWarnings = result.TotalRows > result.EmittedRows
+                ? [new Warning(
+                    "result_truncated",
+                    $"Range has {result.TotalRows} rows; returning the first {result.EmittedRows}. Request a smaller range or raise maxCells.")]
+                : null;
+            return Envelope.Ok(result.Data, MetaFor(file, sw, streamWarnings));
+        }
+
         using var workbook = OpenWorkbook(file);
+        if (ExcelNames.TryParsePath(pathArg, out var nameSheetPath, out var definedName))
+        {
+            var (found, scopeSheet) = ExcelNames.Find(workbook, nameSheetPath, definedName);
+            return Envelope.Ok(ExcelNames.Describe(found, scopeSheet), MetaFor(file, sw));
+        }
+
         var target = ExcelPaths.Resolve(workbook, pathArg);
 
         return target.Kind switch
@@ -104,6 +131,10 @@ public sealed partial class ExcelHandler
             lastColumn = sheet.LastColumnUsed()?.ColumnNumber(),
             tables = sheet.Tables.Select(t => t.Name).ToList(),
             mergedRanges = sheet.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
+            freezeRows = sheet.SheetView.SplitRow > 0 ? sheet.SheetView.SplitRow : (int?)null,
+            freezeCols = sheet.SheetView.SplitColumn > 0 ? sheet.SheetView.SplitColumn : (int?)null,
+            autoFilter = sheet.AutoFilter.IsEnabled ? sheet.AutoFilter.Range?.RangeAddress.ToString() : null,
+            pageSetup = PageSetupInfo(sheet),
         };
     }
 

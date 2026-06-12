@@ -39,10 +39,35 @@ returned and the envelope carries a `formula_not_evaluated` warning in
 `{op:"add", path:"/'New Sheet'", type:"sheet"}` creates a sheet. Sheet names
 with spaces are quoted in paths: `/'Q3 Data'/B2`.
 
-## chart (M1, `/Sheet1/chart[1]`)
+## chart (M1+M3, `/Sheet1/chart[1]`)
 
-`{op:"add", path:"/Sheet1", type:"chart", props:{kind:"bar|line|pie",
-dataRange:"A1:C6", anchor:"E3", title?}}`.
+`{op:"add", path:"/Sheet1", type:"chart", props:{kind:"bar|line|pie|scatter|area",
+dataRange:"A1:C6", anchor:"E3", title?}}`. scatter (M3) plots numbers against
+numbers: the first dataRange column is the numeric X axis, so every X cell
+must be a number (header row excepted).
+
+## name (M3, `/name[@name=SalesData]`)
+
+`{op:"add", path:"/Sheet1/B2:C5", type:"name", props:{name:"SalesData",
+scope?:"workbook|sheet"}}` — the op path is the range the name refers to.
+Formulas can use it right away: `{op:"set", path:"/Sheet1/D6",
+props:{value:"=SUM(SalesData)"}}` evaluates and caches a real value.
+`get /name[@name=X]` (workbook scope) or `/Sheet1/name[@name=X]` (sheet scope).
+
+## sheet props (M3, set on `/Sheet1` or a range)
+
+| prop                    | target      | notes                              |
+|-------------------------|-------------|------------------------------------|
+| freezeRows, freezeCols  | sheet       | 0 clears that axis                 |
+| autoFilter (bool)       | range       | one filter per sheet; false clears |
+| orientation, paperSize  | sheet       | landscape/portrait; A4/Letter/…    |
+| fitToWidth, fitToHeight | sheet       | print scaling, pages               |
+| printArea               | sheet       | e.g. "A1:F40"                      |
+
+`get /Sheet1` reflects freeze/autoFilter/pageSetup. Streaming (M3): files over
+20 MB (or `stream:true`) answer `read --view stats|text` and cell/range `get`
+via a SAX scan without loading the workbook DOM — reads only; edits still load
+the full workbook.
 
 ## pivot (M2, `/Pivot/pivot[@name=SalesPivot]`)
 

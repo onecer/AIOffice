@@ -10,10 +10,13 @@ namespace AIOffice.Excel;
 public sealed partial class ExcelHandler
 {
     private static readonly IReadOnlyList<string> SetProps =
-        ["value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name"];
+    [
+        "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name",
+        "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
+    ];
 
     private static readonly IReadOnlyList<string> AddTypes =
-        ["sheet", "table", "row", "chart", "pivot", "conditionalFormat", "image"];
+        ["sheet", "table", "row", "chart", "pivot", "conditionalFormat", "image", "name"];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
     {
@@ -160,6 +163,15 @@ public sealed partial class ExcelHandler
             }
         }
 
+        if (ExcelNames.TryParsePath(op.Path, out _, out _))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"ops[{index}]: set on a defined name is not supported yet.",
+                "Remove the name and add it again pointing at the new range: " +
+                "{op:remove, path:" + op.Path + "} then {op:add, type:name, path:/Sheet1/A1:B5, props:{name:…}}.");
+        }
+
         var target = ExcelPaths.Resolve(workbook, op.Path);
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
             or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image)
@@ -244,6 +256,41 @@ public sealed partial class ExcelHandler
 
             RenameSheet(target.Sheet, nameNode.GetValue<string>());
             applied.Add("name");
+        }
+
+        if (props.TryGetPropertyValue("freezeRows", out var freezeRowsNode) && freezeRowsNode is not null)
+        {
+            ApplyFreeze(target, op, freezeRowsNode, "freezeRows", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("freezeCols", out var freezeColsNode) && freezeColsNode is not null)
+        {
+            ApplyFreeze(target, op, freezeColsNode, "freezeCols", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("autoFilter", out var autoFilterNode) && autoFilterNode is not null)
+        {
+            ApplyAutoFilter(target, op, autoFilterNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("orientation", out var orientationNode) && orientationNode is not null)
+        {
+            ApplyOrientation(target, op, orientationNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("paperSize", out var paperSizeNode) && paperSizeNode is not null)
+        {
+            ApplyPaperSize(target, op, paperSizeNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("fitToWidth", out var fitToWidthNode) && fitToWidthNode is not null)
+        {
+            ApplyFitToWidth(target, op, fitToWidthNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("printArea", out var printAreaNode) && printAreaNode is not null)
+        {
+            ApplyPrintArea(target, op, printAreaNode, index, applied);
         }
 
         details.Add(new { op = "set", path = DocPath.Parse(op.Path).ToCanonicalString(), applied });
@@ -439,6 +486,9 @@ public sealed partial class ExcelHandler
             case "conditionalFormat":
                 details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
                 break;
+            case "name":
+                details.Add(ExcelNames.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
             case "image":
             {
                 var target = ExcelPaths.Resolve(workbook, op.Path);
@@ -619,6 +669,18 @@ public sealed partial class ExcelHandler
     private static void ApplyRemove(
         XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts, PostSaveWork post)
     {
+        // Defined-name paths use an id form the shared grammar cannot parse;
+        // peel them off before path resolution (precedent: pivot[@name=…]).
+        if (ExcelNames.TryParsePath(op.Path, out var nameSheetPath, out var definedName))
+        {
+            var (found, scopeSheet) = ExcelNames.Find(workbook, nameSheetPath, definedName);
+            var namePath = ExcelNames.PathOf(scopeSheet, found.Name);
+            var removedName = found.Name;
+            found.Delete();
+            details.Add(new { op = "remove", path = namePath, removed = "name", name = removedName });
+            return;
+        }
+
         var target = ExcelPaths.Resolve(workbook, op.Path);
         switch (target.Kind)
         {

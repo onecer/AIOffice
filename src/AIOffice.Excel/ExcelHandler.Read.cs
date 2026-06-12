@@ -14,21 +14,61 @@ public sealed partial class ExcelHandler
     {
         var file = RequireFile(ctx, mustExist: true);
         var view = ArgString(ctx, "view") ?? "stats";
-        using var workbook = OpenWorkbook(file);
-
-        return view switch
+        if (!ReadViews.Contains(view, StringComparer.Ordinal))
         {
-            "stats" => Envelope.Ok(ReadStats(workbook), MetaFor(file, sw)),
-            "outline" => Envelope.Ok(ReadOutline(workbook), MetaFor(file, sw)),
-            "structure" => Envelope.Ok(ReadStructure(workbook, file), MetaFor(file, sw)),
-            "text" => ReadText(ctx, workbook, file, sw),
-            _ => throw new AiofficeException(
+            throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
                 "Use one of: outline, text, stats, structure.",
-                candidates: ReadViews),
+                candidates: ReadViews);
+        }
+
+        // Big files (or explicit stream=true) answer stats/text via the SAX
+        // path without ever loading the workbook DOM.
+        var wantStream = ArgBool(ctx, "stream") || ExcelStreaming.IsLarge(file);
+        if (wantStream && view == "stats")
+        {
+            return Envelope.Ok(ExcelStreaming.ReadStats(file), MetaFor(file, sw));
+        }
+
+        if (wantStream && view == "text")
+        {
+            return ReadTextStreamed(ctx, file, sw);
+        }
+
+        // outline/structure need the full model; on a big file that is the
+        // honest slow path, flagged so agents know why.
+        List<Warning>? fallback = wantStream
+            ? [new Warning(
+                "stream_fallback",
+                $"Streaming covers --view stats|text; view '{view}' loads the whole workbook into memory.")]
+            : null;
+
+        using var workbook = OpenWorkbook(file);
+        return view switch
+        {
+            "stats" => Envelope.Ok(ReadStats(workbook), MetaFor(file, sw, fallback)),
+            "outline" => Envelope.Ok(ReadOutline(workbook), MetaFor(file, sw, fallback)),
+            "structure" => Envelope.Ok(ReadStructure(workbook, file), MetaFor(file, sw, fallback)),
+            _ => ReadText(ctx, workbook, file, sw),
         };
     });
+
+    private Envelope ReadTextStreamed(CommandContext ctx, string file, System.Diagnostics.Stopwatch sw)
+    {
+        var maxBytes = ArgInt(ctx, "maxBytes") ?? DefaultMaxTextBytes;
+        var (content, truncated) = ExcelStreaming.ReadText(file, ArgString(ctx, "range"), maxBytes);
+
+        List<Warning>? warnings = truncated
+            ? [new Warning(
+                "result_truncated",
+                $"Text output exceeded {maxBytes} bytes and was cut off. Narrow it with --range (e.g. --range A1:F50) or raise --max-bytes.")]
+            : null;
+
+        return Envelope.Ok(
+            new { view = "text", content, truncated, streamed = true },
+            MetaFor(file, sw, warnings));
+    }
 
     private static object ReadStats(XLWorkbook workbook)
     {
@@ -132,11 +172,10 @@ public sealed partial class ExcelHandler
                         .Select((pic, i) => ExcelImages.Describe(ws, pic, i + 1))
                         .ToList(),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
+                    autoFilter = ws.AutoFilter.IsEnabled ? ws.AutoFilter.Range?.RangeAddress.ToString() : null,
                 })
                 .ToList(),
-            definedNames = workbook.DefinedNames
-                .Select(n => new { name = n.Name, refersTo = n.RefersTo })
-                .ToList(),
+            definedNames = ExcelNames.ListAll(workbook),
         };
     }
 

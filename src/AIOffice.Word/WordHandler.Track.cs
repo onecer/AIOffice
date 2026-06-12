@@ -190,14 +190,14 @@ public sealed partial class WordHandler
 
     // -------------------------------------------------------- tracked writes
 
-    /// <summary>Tracked ops apply to body content in M2 (headers/footers in M3).</summary>
+    /// <summary>Tracked ops apply to body content only.</summary>
     private static void RequireBodyScope(string canonicalPath, string opName)
     {
         if (!canonicalPath.StartsWith("/body", StringComparison.Ordinal))
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"Tracked {opName} is supported on body content only in M2; got {canonicalPath}.",
+                $"Tracked {opName} is supported on body content only; got {canonicalPath}.",
                 "Edit headers/footers without track:true, or target a /body path.");
         }
     }
@@ -219,8 +219,9 @@ public sealed partial class WordHandler
             var others = string.Join(", ", effective.Select(kv => kv.Key).Where(k => k != "text"));
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"Tracked formatting changes (w:rPrChange) are not supported yet (planned for M3); got: {others}.",
-                "Track text changes only ({\"props\":{\"text\":\"…\"}}), or apply formatting without track:true.");
+                $"Producing tracked formatting changes (w:rPrChange) is not supported; got: {others}.",
+                "Track text changes only ({\"props\":{\"text\":\"…\"}}), or apply formatting without track:true. " +
+                "Existing formatting revisions can be resolved with accept/reject.");
         }
 
         if (effective["text"] is not { } textNode)
@@ -354,7 +355,7 @@ public sealed partial class WordHandler
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
-                    $"Tracked remove is not supported on '{node.Type}' yet (M2 tracks paragraph content).",
+                    $"Tracked remove is not supported on '{node.Type}' (tracking covers paragraph content).",
                     "Remove it without track:true, or tracked-remove the paragraphs inside it one by one.");
         }
 
@@ -427,8 +428,8 @@ public sealed partial class WordHandler
     /// <summary>
     /// <c>{"op":"accept"|"reject","path":P}</c> where P is /revision[@id=N],
     /// /revision[i], or a scope path (/body, /body/p[3]) meaning every
-    /// revision inside it. Formatting revisions are M3: a direct target fails
-    /// honestly; a scope skips them and reports the count.
+    /// revision inside it — insert/delete wrappers, paragraph marks and
+    /// formatting changes (w:rPrChange / w:pPrChange) alike.
     /// </summary>
     private static object ApplyAcceptOrReject(WordprocessingDocument doc, EditOp op)
     {
@@ -436,28 +437,14 @@ public sealed partial class WordHandler
         var path = DocPath.Parse(op.Path);
 
         List<RevisionRecord> targets;
-        var skippedFormat = 0;
         if (path.Segments[0].Name == "revision")
         {
-            var revision = ResolveRevision(doc, path);
-            if (revision.Kind == "format")
-            {
-                throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    $"Accepting/rejecting formatting revisions (w:pPrChange/w:rPrChange) is not supported yet (planned for M3); /revision[@id={revision.Id}] is one.",
-                    "Resolve insert/delete revisions, or remove the formatting markup by re-applying the formatting without track.");
-            }
-
-            targets = [revision];
+            targets = [ResolveRevision(doc, path)];
         }
         else
         {
             var scope = WordAddress.Resolve(doc, path);
-            var all = EnumerateRevisions(doc)
-                .Where(r => IsSelfOrDescendantOf(r.Element, scope.Element))
-                .ToList();
-            skippedFormat = all.Count(r => r.Kind == "format");
-            targets = [.. all.Where(r => r.Kind != "format")];
+            targets = [.. EnumerateRevisions(doc).Where(r => IsSelfOrDescendantOf(r.Element, scope.Element))];
         }
 
         // Reverse document order: content revisions resolve before the paragraph
@@ -472,7 +459,6 @@ public sealed partial class WordHandler
             op = accept ? "accept" : "reject",
             path = op.Path,
             applied = targets.Count,
-            skippedFormat = skippedFormat > 0 ? (int?)skippedFormat : null,
         };
     }
 
@@ -494,6 +480,12 @@ public sealed partial class WordHandler
         if (revision.ParagraphMark)
         {
             ResolveParagraphMark(revision, accept);
+            return;
+        }
+
+        if (revision.Kind == "format")
+        {
+            ResolveFormatChange(revision.Element, accept);
             return;
         }
 
@@ -522,6 +514,115 @@ public sealed partial class WordHandler
 
             default:
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Formatting revisions: accept keeps the current (new) formatting and
+    /// drops the marker; reject restores the previous properties the marker
+    /// preserved (w:rPrChange/w:pPrChange children are the OLD props).
+    /// </summary>
+    private static void ResolveFormatChange(OpenXmlElement marker, bool accept)
+    {
+        if (accept)
+        {
+            var host = marker.Parent;
+            marker.Remove();
+            TidyFormatHost(host);
+            return;
+        }
+
+        switch (marker)
+        {
+            case RunPropertiesChange rPrChange when rPrChange.Parent is RunProperties rPr && rPr.Parent is Run run:
+            {
+                var previous = rPrChange.PreviousRunProperties;
+                if (previous is null || !previous.HasChildren)
+                {
+                    run.RunProperties = null;
+                }
+                else
+                {
+                    var restored = new RunProperties();
+                    foreach (var child in previous.ChildElements)
+                    {
+                        restored.AppendChild(child.CloneNode(true));
+                    }
+
+                    run.RunProperties = restored;
+                }
+
+                break;
+            }
+
+            case RunPropertiesChange rPrChange when rPrChange.Parent is ParagraphMarkRunProperties markRPr:
+            {
+                var previous = rPrChange.PreviousRunProperties;
+                foreach (var child in markRPr.ChildElements.Where(c => c is not (Inserted or Deleted)).ToList())
+                {
+                    child.Remove();
+                }
+
+                foreach (var child in previous?.ChildElements ?? [])
+                {
+                    markRPr.AppendChild(child.CloneNode(true));
+                }
+
+                TidyFormatHost(markRPr);
+                break;
+            }
+
+            case ParagraphPropertiesChange pPrChange when pPrChange.Parent is ParagraphProperties pPr:
+            {
+                var previous = pPrChange.ParagraphPropertiesExtended;
+
+                // Restore the old pPr base; the paragraph-mark rPr and any sectPr are not part of the change.
+                foreach (var child in pPr.ChildElements
+                    .Where(c => c is not (ParagraphMarkRunProperties or SectionProperties or ParagraphPropertiesChange))
+                    .ToList())
+                {
+                    child.Remove();
+                }
+
+                // Base props precede the paragraph-mark rPr / sectPr in CT_PPr; restore them
+                // in their original order ahead of whatever survived the sweep.
+                var anchor = pPr.ChildElements.FirstOrDefault(c =>
+                    c is ParagraphMarkRunProperties or SectionProperties or ParagraphPropertiesChange);
+                foreach (var child in previous?.ChildElements ?? [])
+                {
+                    if (anchor is null)
+                    {
+                        pPr.AppendChild(child.CloneNode(true));
+                    }
+                    else
+                    {
+                        pPr.InsertBefore(child.CloneNode(true), anchor);
+                    }
+                }
+
+                pPrChange.Remove();
+                TidyFormatHost(pPr);
+                break;
+            }
+
+            default:
+                marker.Remove();
+                break;
+        }
+    }
+
+    /// <summary>Empty rPr/pPr wrappers left after a resolved format change are noise; drop them.</summary>
+    private static void TidyFormatHost(OpenXmlElement? host)
+    {
+        if (host is RunProperties or ParagraphMarkRunProperties && !host.HasChildren)
+        {
+            var pPr = host.Parent as ParagraphProperties;
+            host.Remove();
+            TidyFormatHost(pPr);
+        }
+        else if (host is ParagraphProperties pPrHost && !pPrHost.HasChildren)
+        {
+            pPrHost.Remove();
         }
     }
 

@@ -25,17 +25,22 @@ public static class HelpTopics
                 - errors          all error codes and how to recover
                 - docx/paragraph  paragraph element: settable props
                 - docx/revisions  tracked changes: track:true, accept/reject ops
-                - docx/comment    comments: add/read/remove
+                - docx/comment    comments + threaded replies: add/read/remove
                 - docx/style      style definitions: add/set/remove, apply
                 - docx/image      inline pictures: add type "image"
+                - docx/list       numbered/bulleted/nested list items (M3)
+                - docx/link       hyperlinks, bookmarks, footnotes (M3)
+                - docx/section    page size/orientation/margins (M3)
                 - xlsx/cell       cell element: settable props
                 - xlsx/pivot      pivot tables: add type "pivot"
                 - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
                 - xlsx/image      anchored pictures: add type "image"
-                - pptx/shape      shape element: settable props
-                - pptx/slide      slide props incl. background
+                - xlsx/sheet      freeze/autoFilter/print setup, defined names, streaming (M3)
+                - pptx/shape      shape element: settable props incl. preset geometry/z-order
+                - pptx/slide      slide props incl. background + transition
                 - pptx/notes      speaker notes: /slide[i]/notes
                 - pptx/image      pictures: add type "image"
+                - pptx/chart      native charts + cross-doc dataFrom (M3)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops"]),
@@ -100,7 +105,7 @@ public static class HelpTopics
                 invalid_path         element path does not resolve; candidates[] holds the nearest canonical paths — pick one
                 stale_address        expect_rev mismatch: file changed since you read it; re-read, then retry (nothing was written)
                 unsupported_feature  capability not in this milestone; suggestion names the workaround
-                file_too_large       file exceeds the size guard (default 50 MB); split it, or raise AIOFFICE_MAX_FILE_MB
+                file_too_large       file exceeds the opt-in AIOFFICE_MAX_FILE_MB cap (default unlimited); raise/unset it or split the file
                 format_corrupt       not valid OOXML; try office_validate and file_snapshot restore
                 internal_error       our bug; report with office_status output
                 formula_not_evaluated  WARNING in meta.warnings, not an error: formula text returned instead of a value
@@ -185,12 +190,14 @@ public static class HelpTopics
 
             ["pptx/slide"] = (
                 """
-                ## pptx slide (incl. M2 background)
+                ## pptx slide (incl. M2 background, M3 transition)
                 Add:        {"op":"add","path":"/slide[3]","type":"slide","props":{"title"?,"background"?}} — becomes slide 3.
                 Background: {"op":"set","path":"/slide[1]","props":{"background":"0F172A"}} — a real p:bg solid fill (hex).
-                Move/remove a slide by its /slide[i] path. render {to:"svg"|"png", scope:"/slide[N]"} to look after edits.
+                Transition: {"op":"set","path":"/slide[1]","props":{"transition":"fade","transitionDuration":"0.5s"}} (see pptx/transition).
+                Move/remove a slide by its /slide[i] path. render {to:"svg"|"png", scope:"/slide[N]"} to look after edits;
+                render {to:"pdf"} prints the whole deck, one page per slide.
                 """,
-                ["pptx/shape", "pptx/notes"]),
+                ["pptx/shape", "pptx/notes", "pptx/transition"]),
 
             ["pptx/notes"] = (
                 """
@@ -245,9 +252,82 @@ public static class HelpTopics
                 fill          hex "4472C4" or named
                 fontSize      unit-qualified, e.g. "18pt"
                 bold / italic "true" | "false"
+                shape (M3)    preset geometry on add: rect|roundRect|ellipse|triangle|diamond|arrow|line ("line" builds a connector; fill = stroke)
+                flipH / flipV (M3) "true" mirrors the geometry
+                z-order (M3): {"op":"move","path":"/slide[1]/shape[@id=5]","position":"front|back|forward|backward"} (front = painted last/topmost)
                 add slides with type "slide" on path "/"; render→look→fix: office_render {to:"svg", scope:"/slide[N]"} after each visual change.
                 """,
                 ["edit-ops", "addressing"]),
+
+            ["docx/list"] = (
+                """
+                ## docx lists (M3) — add type "p" with list props
+                list         bullet | number
+                level        0-based nesting (default 0)
+                listRestart  "true" restarts a number list at this item
+                {"op":"add","path":"/body","type":"p","props":{"text":"Step one","list":"number"}}
+                Nested: {"props":{"text":"Detail","list":"number","level":"1"}}.
+                read {view:"text"} shows "1." / "•" markers; render {to:"html"} emits real <ol>/<ul>.
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["docx/link"] = (
+                """
+                ## docx hyperlinks / bookmarks / footnotes (M3)
+                link:     {"op":"add","path":"/body/p[3]","type":"link","props":{"text":"site","url":"https://…"}}
+                          internal jump: {"props":{"text":"see intro","anchor":"Intro"}} (a bookmark name)
+                bookmark: {"op":"add","path":"/body/p[1]","type":"bookmark","props":{"name":"Intro"}} (letter/_ start, ≤40 chars)
+                footnote: {"op":"add","path":"/body/p[3]","type":"footnote","props":{"text":"the note"}} — reference lands at the paragraph end.
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["docx/section"] = (
+                """
+                ## docx page setup (M3) — set on /section[1]
+                pageSize     A4 | Letter | Legal | A3 | A5
+                orientation  portrait | landscape (width/height swap automatically)
+                marginTop / marginBottom / marginLeft / marginRight   unit-qualified, e.g. "2cm"
+                {"op":"set","path":"/section[1]","props":{"pageSize":"A4","orientation":"landscape"}}
+                office_get /section[1] reflects everything (cm). Inserting NEW sections is not supported yet.
+                """,
+                ["docx/paragraph", "addressing"]),
+
+            ["xlsx/sheet"] = (
+                """
+                ## xlsx sheet-level features (M3)
+                freeze:     {"op":"set","path":"/Sheet1","props":{"freezeRows":"1","freezeCols":"2"}} (0 clears an axis)
+                autoFilter: {"op":"set","path":"/Sheet1/A1:D20","props":{"autoFilter":"true"}} (one per sheet; false clears)
+                print:      {"op":"set","path":"/Sheet1","props":{"orientation":"landscape","paperSize":"A4","fitToWidth":"1","printArea":"A1:F40"}}
+                names:      {"op":"add","path":"/Sheet1/B2:C5","type":"name","props":{"name":"SalesData","scope"?:"workbook|sheet"}}
+                            then formulas just use it: {"op":"set","path":"/Sheet1/D6","props":{"value":"=SUM(SalesData)"}} (evaluates).
+                            get /name[@name=X] or /Sheet1/name[@name=X].
+                Streaming reads: files over 20 MB (or args.stream:true) answer read stats/text and cell/range get
+                via a SAX scan (no DOM). Reads only — edits still load the whole workbook.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["pptx/chart"] = (
+                """
+                ## pptx charts (M3) — add type "chart" on /slide[i]
+                kind        bar | line | pie (pie: exactly one series)
+                categories  ["Q1","Q2",…]            series  [{"name":"Sales","values":[10,20]}] (null = gap)
+                title, x, y, w, h   optional
+                Data is cached literally (c:strLit/c:numLit, no embedded workbook): projections report dataEditable:false.
+                Cross-doc dataFrom: {"props":{"kind":"bar","dataFrom":"book.xlsx!Sheet1/A1:B5"}} replaces categories/series —
+                first column = categories, header row = series names, remaining columns = series values; the workbook is
+                sandbox-resolved; a wrong range fails typed with candidates. Quote sheet names: book.xlsx!'Q3 Data'/A1:C5.
+                Address /slide[i]/chart[k] for get (full data readback), set (title) and remove.
+                """,
+                ["pptx/slide", "edit-ops"]),
+
+            ["pptx/transition"] = (
+                """
+                ## pptx slide transitions (M3) — slide-level set
+                {"op":"set","path":"/slide[2]","props":{"transition":"fade|push|wipe|none","transitionDuration":"0.5s"}}
+                Duration maps to p14:dur milliseconds (PowerPoint 2010+; older clients use the spd fallback).
+                office_get /slide[2] and read {view:"outline"} report transition/transitionDuration.
+                """,
+                ["pptx/slide", "edit-ops"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

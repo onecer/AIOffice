@@ -86,7 +86,7 @@ internal static class PptxQueryEngine
     /// <summary>Query restricted to one container: a slide, a master or one of its layouts.</summary>
     private static List<object> QueryScoped(PresentationPart presentation, Selector selector, PptxAddress scope)
     {
-        if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes)
+        if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes || scope.IsChart)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -367,11 +367,15 @@ internal static class PptxQueryEngine
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var shapes = PptxDoc.Shapes(slidePart);
         var notes = PptxNotes.Text(slidePart);
+        var transition = PptxTransitions.Read(slidePart);
+        var charts = PptxCharts.Charts(slidePart);
         return new
         {
             Path = address.CanonicalSlidePath,
             Index = address.SlideIndex,
             Background = PptxDoc.BackgroundHex(slidePart),
+            Transition = transition?.Kind,
+            TransitionDuration = transition?.Duration,
             ShapeCount = shapes.Count,
             Shapes = shapes.Select(s => new
             {
@@ -381,6 +385,9 @@ internal static class PptxQueryEngine
                 Name = s.Name,
                 Text = Snippet(PptxDoc.ShapeText(s.Element)),
             }).ToList<object>(),
+            Charts = charts.Count == 0
+                ? null
+                : charts.Select(c => (object)Units.Inv($"{address.CanonicalSlidePath}/chart[{c.Index}]")).ToList(),
             Notes = notes.Length == 0 ? null : Snippet(notes),
         };
     }
@@ -404,23 +411,30 @@ internal static class PptxQueryEngine
 
         var geometry = PptxDoc.Geometry(view.Element);
         var firstParagraph = (view.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
+        var chartIndex = PptxCharts.IndexOf(slidePart, view.Element);
         return new
         {
             Path = view.CanonicalPath(address.SlideIndex),
             OrdinalPath = view.OrdinalPath(address.SlideIndex),
+            ChartPath = chartIndex is { } ci ? Units.Inv($"{address.CanonicalSlidePath}/chart[{ci}]") : null,
             Slide = address.SlideIndex,
             Id = view.Id,
             Ordinal = view.Ordinal,
+            ZIndex = view.Ordinal, // paint order: 1 = painted first (bottom)
             Kind = view.Kind,
             Name = view.Name,
             Placeholder = PptxDoc.PlaceholderType(view.Element),
+            Geometry = PptxDoc.GeometryToken(view.Element),
+            Flip = PptxDoc.FlipToken(view.Element),
             Text = PptxDoc.ShapeText(view.Element),
             X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
             W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
             H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
             Fill = PptxDoc.FillHex(view.Element),
+            LineColor = PptxDoc.LineHex(view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
+            Chart = PptxCharts.Summary(slidePart, view.Element),
         };
     }
 

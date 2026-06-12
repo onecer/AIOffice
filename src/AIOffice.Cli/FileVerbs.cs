@@ -75,6 +75,11 @@ public sealed class FileVerbs
         var handler = ResolveHandler(file, kindOverride: null);
         var dryRun = args.HasFlag("dry-run");
 
+        // M3 cross-doc bridge (same path as MCP office_edit): pptx chart ops may
+        // pull categories/series from a workbook via props.dataFrom; expanded
+        // BEFORE the rev guard and snapshot so a bad source range writes nothing.
+        ops = AIOffice.Mcp.CrossDocDataFrom.Expand(ops, handler.Kind, _workspace, _handlers.Registry);
+
         // Optimistic concurrency: verified BEFORE any write or snapshot.
         if (args.GetOption("expect-rev") is { } expected)
         {
@@ -124,11 +129,14 @@ public sealed class FileVerbs
         });
         var handler = ResolveHandler(file, kindOverride: null);
 
-        // PNG is cross-format plumbing (handler artifact -> headless-browser
-        // screenshot), so it is orchestrated here instead of inside handlers.
-        return args.GetOption("to") == "png"
-            ? AIOffice.Render.PngRenderVerb.Execute(handler, ctx)
-            : handler.Render(ctx);
+        // PNG/PDF are cross-format plumbing (handler artifact -> headless
+        // browser), so they are orchestrated here instead of inside handlers.
+        return args.GetOption("to") switch
+        {
+            "png" => AIOffice.Render.PngRenderVerb.Execute(handler, ctx),
+            "pdf" => AIOffice.Render.PdfRenderVerb.Execute(handler, ctx),
+            _ => handler.Render(ctx),
+        };
     }
 
     public Envelope Validate(ParsedArgs args)

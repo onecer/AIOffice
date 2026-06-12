@@ -24,11 +24,12 @@ internal static class WordAddress
         ["body"] = ["p", "table"],
         ["header"] = ["p", "table"],
         ["footer"] = ["p", "table"],
-        ["p"] = ["run"],
+        ["p"] = ["run", "link"],
         ["table"] = ["tr"],
         ["tr"] = ["tc"],
         ["tc"] = ["p", "table"],
         ["run"] = [],
+        ["link"] = [],
     };
 
     public static ResolvedNode Resolve(WordprocessingDocument doc, DocPath path)
@@ -165,6 +166,7 @@ internal static class WordAddress
         "p" => [.. parent.ChildElements.OfType<Paragraph>()],
         "table" => [.. parent.ChildElements.OfType<Table>()],
         "run" => [.. parent.ChildElements.OfType<Run>()],
+        "link" => [.. parent.ChildElements.OfType<Hyperlink>()],
         "tr" => [.. parent.ChildElements.OfType<TableRow>()],
         "tc" => [.. parent.ChildElements.OfType<TableCell>()],
         _ => [],
@@ -303,6 +305,13 @@ internal static class WordAddress
                     {
                         runIndex++;
                         yield return new ResolvedNode(run, Canon(pPath, "run", runIndex), "run");
+                    }
+
+                    var linkIndex = 0;
+                    foreach (var link in paragraph.ChildElements.OfType<Hyperlink>())
+                    {
+                        linkIndex++;
+                        yield return new ResolvedNode(link, Canon(pPath, "link", linkIndex), "link");
                     }
 
                     break;

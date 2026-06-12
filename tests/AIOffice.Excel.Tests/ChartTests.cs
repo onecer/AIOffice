@@ -222,19 +222,21 @@ public sealed class ChartTests : ExcelTestBase
     }
 
     [Fact]
-    public void Other_chart_kinds_are_unsupported_naming_bar_line_pie()
+    public void Other_chart_kinds_are_unsupported_naming_the_supported_set()
     {
         var file = CreateDataWorkbook();
 
         var envelope = EditOps(file, AddOp("/Sheet1", "chart",
-            ("kind", "scatter"), ("dataRange", "A1:B5"), ("anchor", "E2")));
+            ("kind", "bubble"), ("dataRange", "A1:B5"), ("anchor", "E2")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Contains("bar", envelope.Error.Suggestion, StringComparison.Ordinal);
         Assert.Contains("line", envelope.Error.Suggestion, StringComparison.Ordinal);
         Assert.Contains("pie", envelope.Error.Suggestion, StringComparison.Ordinal);
-        Assert.Equal(["bar", "line", "pie"], envelope.Error.Candidates!);
+        Assert.Contains("scatter", envelope.Error.Suggestion, StringComparison.Ordinal);
+        Assert.Contains("area", envelope.Error.Suggestion, StringComparison.Ordinal);
+        Assert.Equal(["bar", "line", "pie", "scatter", "area"], envelope.Error.Candidates!);
     }
 
     [Fact]

@@ -404,3 +404,143 @@ $ AIOFFICE_MAX_FILE_MB=0 aioffice read bin.docx   → file_too_large ✓
 - Images are PNG/JPEG only (header-sniffed); SVG answers a typed error.
 - **Large-file streaming did NOT ship** — it needs a dedicated benchmark-driven pass; M2 ships the `file_too_large` size guard (default 50 MB, `AIOFFICE_MAX_FILE_MB`) instead. Moved to M3.
 - M0 gap 6 (validate envelope shape drift) — **still open**, punted again; carry to M3.
+
+---
+
+# AIOffice 0.4.0 (M3) — Integration Smoke Report
+
+Date: 2026-06-12 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0) · Browser: Google Chrome (auto-detected)
+All commands below were actually executed via `dotnet run --project src/AIOffice.Cli --` in a temp workspace (`/tmp/aio-m3-smoke`); outputs are trimmed but real.
+
+## M3.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+已成功生成。 0 个警告 0 个错误
+```
+
+Integration fixes applied (drift found while integrating the M3 worker drops):
+
+| Drift found | Fix |
+| --- | --- |
+| `WordHandler.OpenPackage` did not wrap `System.IO.FileFormatException` (System.IO.Packaging's "not a package" signal) — with the size cap now unlimited, a huge non-zip `.docx` crashed with an unwrapped exception instead of a typed envelope | Added `FileFormatException` to the `format_corrupt` catch list (xlsx/pptx already wrapped it via their broader catch) |
+| `tests/AIOffice.{Word,Pptx}.Tests/FileSizeGuardTests` were written for the M2 50 MB *default* and went red after the cap flip | Rewritten to pin `AIOFFICE_MAX_FILE_MB=50` explicitly (comment cites the M3 功能第一 directive) + a new test asserting an oversized file PASSES the guard when the env var is unset (Excel's equivalent had already been updated by its worker) |
+| `tests/AIOffice.Core.Tests/FileSizeGuardTests.Env_var_overrides_the_default_limit` asserted the old 50 MB fallback | Rewritten: unset/unparsable env → `MaxFileMb == null` (unlimited); added a 200 MB-sparse-file pass test |
+
+## M3.2 Tests — PASS (724/724)
+
+```
+$ dotnet test AIOffice.sln
+AIOffice.Core.Tests     112 passed   (was 111; size-cap flip tests rewritten + unlimited-default test)
+AIOffice.Word.Tests     186 passed   (lists, links, bookmarks, footnotes, sections, format revisions, replies)
+AIOffice.Excel.Tests    168 passed   (streaming, scatter/area, names, sheet props; ~39 MB fixture generated per run)
+AIOffice.Pptx.Tests     159 passed   (charts, transitions, geometries, z-order)
+AIOffice.Mcp.Tests       44 passed   (was 32; +12 CrossDocDataFrom incl. one over the real MCP wire; token budget still ≤3500)
+AIOffice.Render.Tests    31 passed   (was 21; +10 PdfRenderer incl. one against real Chrome)
+AIOffice.Preview.Tests   24 passed
+```
+
+## M3.3 docx — PASS
+
+```
+create report.docx → edit (5 list ops: number ×2 + nested level 1, bullet + nested)
+$ read --view text
+  /body/p[3] "1. Step one" · /body/p[4] "  1. Nested under one" · /body/p[5] "2. Step two"
+  /body/p[6] "• Bullet point" · /body/p[7] "  • Nested bullet"                              ✓ markers
+$ render --to html      → has <ol>: True · has <ul>: True (real nested lists)               ✓
+edit: bookmark "Steps" on /body/p[3] + external link + anchor link + footnote on /body/p[8]
+$ validate              → valid:true, count:0                                               ✓
+$ edit --set /section[1] pageSize=A4 orientation=landscape; get /section[1]
+  → {orientation:"landscape", pageSize:"A4", widthCm:29.7, heightCm:21}                     ✓
+edit: comment (author Reviewer) on /body/p[3]; then add type:reply on /comment[@id=1]
+$ read --view comments  → count:2, comment id=1 with replies:[{id:2, parentId:1,
+                          author:"Author2", text:"Yes — verified."}]                        ✓ thread
+$ render report.docx --to pdf → {format:"pdf", written:…/report.pdf, sizeBytes:24793}
+$ head -c5 report.pdf   → 2550 4446 2d  (%PDF-)                                             ✓ magic bytes
+```
+
+## M3.4 xlsx — PASS
+
+```
+$ dotnet run --project /tmp/aio-bigbook -- large.xlsx 330000   # verbatim port of the Excel
+  test helper BigWorkbookGenerator (StreamingTestSupport.cs)   → 43,350,767 bytes (41.3 MB)
+$ read large.xlsx --view stats   (AIOFFICE_MAX_FILE_MB unset)
+  → {streamed:true, usedRange:"A1:F330000", cells:1980000, formulas:330000} in 2211 ms      ✓ fast path
+$ get large.xlsx /Sheet1/E310000 → {value:620000, formula:"=A310000*2", streamed:true}      ✓ deep cell
+$ AIOFFICE_MAX_FILE_MB=1 read large.xlsx → ok:false, code:file_too_large,
+  suggestion:"Raise or unset AIOFFICE_MAX_FILE_MB (it is an opt-in cap; default is unlimited)…" ✓ opt-in cap
+metrics.xlsx: 5×3 quarter table + numeric X/Y block, then one atomic batch:
+  add chart kind:scatter dataRange:E1:F4 · add type:name path:/Sheet1/B2:C5 name:SalesData
+  set /Sheet1/D6 value:"=SUM(SalesData)" · freezeRows:1 · autoFilter on A1:C5 · printArea:A1:F10
+$ get /Sheet1/D6        → {value:150, formula:"=SUM(SalesData)", cachedValue:150}           ✓ name evaluates
+$ get /name[@name=SalesData] → {refersTo:"Sheet1!$B$2:$C$5", ranges:["/Sheet1/B2:C5"]}      ✓
+$ get /Sheet1/chart[1]  → {chartKind:"scatter", title:"Growth", dataRange:"E1:F4"}           ✓
+$ get /Sheet1           → freezeRows:1 · autoFilter:"A1:C5" · pageSetup.printArea:"A1:F10"  ✓
+$ validate metrics.xlsx → valid:true, errors:0                                              ✓
+(NOTE: first attempt used `add chart` with a RANGE path → typed invalid_args
+ "add chart targets a sheet path like /Sheet1; the data location goes in props.dataRange"
+ and the whole 6-op batch wrote NOTHING — atomicity held.)
+```
+
+## M3.5 pptx — PASS
+
+```
+deck.pptx: slide 2 added · literal bar chart (2 series) on /slide[1] · fade transition 0.5s
+           ellipse + arrow + line shapes on /slide[2]
+edit: {"op":"add","type":"chart","props":{kind:"bar", dataFrom:"metrics.xlsx!Sheet1/A1:C5"}}
+$ get /slide[2]/chart[1] → title "From metrics.xlsx" · categories [Q1,Q2,Q3,Q4]
+                           series [(North,[10,15,12,18]), (South,[20,25,22,28])]            ✓ dataFrom
+z-order: move shape[@id=3] front + shape[@id=4] back → ok                                   ✓
+$ get /slide[1]          → {transition:"fade", transitionDuration:"0.5s"}                   ✓
+$ render --to svg --scope /slide[2]
+  → 11 <rect> (mini chart bars), <ellipse>, <polygon> (arrow), <line>, 5× data-aio-path     ✓ mini-chart
+$ render deck.pptx --to pdf → {format:"pdf", written:…/deck.pdf, sizeBytes:35874, pages:2}
+  head -c5 → %PDF- · pdf page tree /Count 2 (one page per slide)                            ✓ multi-page
+$ validate deck.pptx     → valid:true, count:0                                              ✓
+Every chart add carries the honest warning: chart_data_not_editable (literal caches,
+no embedded workbook — "Edit Data" in PowerPoint will prompt; planned M4).
+```
+
+## M3.6 MCP — PASS
+
+```
+$ aioffice mcp   (stdio JSON-RPC, driven by a python client)
+tools/list → 14 tools: office_create office_read office_query office_get office_edit
+  office_render office_validate office_template file_snapshot office_status office_help
+  office_schema preview_open preview_selection                                             ✓ still 14
+tools/call office_edit {file:"deck.pptx", ops:[{op:add, type:chart,
+  props:{kind:"line", dataFrom:"metrics.xlsx!Sheet1/A1:B5"}}]} → ok:true, applied:1         ✓ dataFrom over MCP
+tools/call office_get /slide[1]/chart[2] → title "MCP dataFrom", series [North], cats 4     ✓
+tools/call office_render {to:"pdf"} → ok:true, pages:2, written:…/deck-mcp.pdf              ✓ pdf over MCP
+Token budget test: tool surface ≈ 1,852 tokens of the 3,500 budget (pdf + dataFrom
+descriptions added with room to spare).
+```
+
+## M3.7 Manual-check fixtures regenerated (for a human in real Office)
+
+- `word-sample.docx` — + numbered/nested/bulleted lists, external+anchor links over a bookmark, a real footnote, a threaded comment reply, landscape A4 pages (worker-updated generator). validate: 0.
+- `excel-sample.xlsx` — + "Metrics" sheet: scatter chart, defined name `GrowthYs` powering a live `=SUM` (cached 32.6 asserted in the raw part), frozen header row, AutoFilter, print area (generator extended this round). validate: 0.
+- `pptx-showcase.pptx` — + native bar chart, fade transition 0.7s, ellipse/diamond/arrow geometries, flipped line, z-order exercise (worker-updated generator). validate: 0.
+
+## M3.8 Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice → 37,737,001 bytes (36.0 MiB; 0.3.0 was 37,667,545 — M3 adds ≈68 KB)
+$ aioffice doctor               → version 0.4.0 · limits {maxFileMb:"unlimited", maxFileMbDefault:"unlimited"} · 3 handlers ready
+$ create m.xlsx → edit 3×3 values → create d.pptx → edit add chart dataFrom:"m.xlsx!Sheet1/A1:C3"
+  → get /slide[1]/chart[1] → series [(North,[10,15]),(South,[20,25])] → validate valid:true  ✓ chart-from-xlsx loop
+$ render d.pptx --to pdf        → {pages:1, sizeBytes:16633}, magic %PDF-                    ✓
+$ AIOFFICE_MAX_FILE_MB=1 read big.docx (2 MB sparse) → file_too_large                        ✓ opt-in cap
+```
+
+## M3.9 Honest limits introduced/kept in M3
+
+- pptx chart data is a **literal cache** (c:strLit/c:numLit, no embedded workbook): PowerPoint renders it fine, but "Edit Data" prompts to create a workbook. Every projection says `dataEditable:false` and chart creation attaches a `chart_data_not_editable` warning. Embedded chart workbooks → M4 seed.
+- `dataFrom` is one-shot: the chart holds a snapshot of the workbook values, not a live link.
+- xlsx streaming is **read-only** (stats/text + cell/range get). Edits on huge workbooks still load the full ClosedXML DOM — they work, but slowly. Write-streaming → M4 seed.
+- docx footnotes shipped; **endnotes** did not (typed `unsupported_feature`) → M4 seed.
+- Writing **tracked formatting** is still rejected with the workaround named; M3 only resolves (accept/reject) existing w:rPrChange/w:pPrChange revisions.
+- docx page setup edits the existing `/section[1..n]`; inserting NEW section breaks → M4 seed.
+- PDF page count is reported for pptx (slides) only; docx/xlsx pagination is decided by the browser at print time and not echoed back.
+- M0 gap 6 (validate envelope shape drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in this very smoke; carry to M4.

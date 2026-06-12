@@ -14,10 +14,33 @@ namespace AIOffice.Pptx;
 /// </summary>
 internal static class PptxEditor
 {
-    private static readonly IReadOnlyList<string> AddTypes = ["slide", "shape", "textbox", "image"];
+    private static readonly IReadOnlyList<string> AddTypes = ["slide", "shape", "textbox", "image", "chart"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
+
+    /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
+    private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
+
+    /// <summary>The preset geometries add shape understands ("line" builds a connector instead).</summary>
+    private static readonly IReadOnlyDictionary<string, A.ShapeTypeValues> GeometryPresets =
+        new Dictionary<string, A.ShapeTypeValues>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["rect"] = A.ShapeTypeValues.Rectangle,
+            ["roundRect"] = A.ShapeTypeValues.RoundRectangle,
+            ["ellipse"] = A.ShapeTypeValues.Ellipse,
+            ["triangle"] = A.ShapeTypeValues.Triangle,
+            ["diamond"] = A.ShapeTypeValues.Diamond,
+            ["arrow"] = A.ShapeTypeValues.RightArrow,
+        };
+
+    private static readonly IReadOnlyList<string> GeometryTokens =
+        ["rect", "roundRect", "ellipse", "triangle", "diamond", "arrow", "line"];
+
+    private static readonly IReadOnlyList<string> ZOrderPositions = ["front", "back", "forward", "backward"];
+
+    /// <summary>Default stroke width for line shapes (1.5pt).</summary>
+    private const int LineWidthEmu = 19_050;
 
     /// <summary>Applies the op and returns the canonical path of the affected node.</summary>
     public static string Apply(PresentationPart presentation, EditOp op, Workspace workspace)
@@ -72,19 +95,26 @@ internal static class PptxEditor
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
+            case "chart":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "chart");
+                var id = PptxCharts.Add(slidePart, op.Props);
+                return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
+            }
+
             default:
                 throw new AiofficeException(
                     op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
-                    "Addable types today: slide, shape (textbox) and image (PNG/JPEG picture). " +
-                    "For tables/charts, build the deck and add them in PowerPoint for now.",
+                    "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture) " +
+                    "and chart (bar/line/pie). For tables, build the deck and add them in PowerPoint for now.",
                     candidates: AddTypes);
         }
     }
 
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape)
+        if (address.HasShape || address.IsChart)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -97,7 +127,7 @@ internal static class PptxEditor
 
     private static string AddSlide(PresentationPart presentation, PptxAddress address, string? position, JsonObject? props)
     {
-        if (address.HasShape)
+        if (address.HasShape || address.IsChart)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -223,6 +253,15 @@ internal static class PptxEditor
             return PptxNotes.Set(presentation, address, op.Props);
         }
 
+        if (address.IsChart)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Chart data and titles cannot be edited in place yet.",
+                "Remove the chart ({\"op\":\"remove\",\"path\":\"" + address.CanonicalChartPath + "\"}) " +
+                "and add it again with the new data; position/size/name sets target its shape path.");
+        }
+
         if (!address.HasShape)
         {
             return SetSlideProps(presentation, address, op.Props);
@@ -249,22 +288,42 @@ internal static class PptxEditor
         return view.CanonicalPath(address.SlideIndex);
     }
 
-    /// <summary>Slide-level set: today that is the solid background only.</summary>
+    /// <summary>Slide-level set: solid background, transition and transition duration.</summary>
     private static string SetSlideProps(PresentationPart presentation, PptxAddress address, JsonObject props)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        JsonNode? transitionNode = null, durationNode = null;
+        var hasTransition = false;
+        var hasDuration = false;
+
         foreach (var (key, value) in props)
         {
-            if (!string.Equals(key, "background", StringComparison.Ordinal))
+            switch (key)
             {
-                throw new AiofficeException(
-                    ErrorCodes.InvalidArgs,
-                    $"Prop '{key}' does not apply to a slide.",
-                    "Slide props: background. Shape props (text, fill, geometry, …) target /slide[i]/shape[j].",
-                    candidates: ["background"]);
+                case "background":
+                    SetBackground(slidePart, value);
+                    break;
+                case "transition":
+                    transitionNode = value;
+                    hasTransition = true;
+                    break;
+                case "transitionDuration":
+                    durationNode = value;
+                    hasDuration = true;
+                    break;
+                default:
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Prop '{key}' does not apply to a slide.",
+                        "Slide props: background, transition, transitionDuration. " +
+                        "Shape props (text, fill, geometry, …) target /slide[i]/shape[j].",
+                        candidates: ["background", "transition", "transitionDuration"]);
             }
+        }
 
-            SetBackground(slidePart, value);
+        if (hasTransition || hasDuration)
+        {
+            PptxTransitions.Set(slidePart, transitionNode, hasTransition, durationNode, hasDuration);
         }
 
         return address.CanonicalSlidePath;
@@ -314,6 +373,11 @@ internal static class PptxEditor
             return PptxNotes.Clear(presentation, address);
         }
 
+        if (address.IsChart)
+        {
+            return PptxCharts.Remove(presentation, address);
+        }
+
         if (address.RunIndex is not null)
         {
             throw new AiofficeException(
@@ -338,6 +402,7 @@ internal static class PptxEditor
         }
 
         var canonical = view.CanonicalPath(address.SlideIndex);
+        PptxCharts.DeletePartFor(slidePart, view.Element); // a chart frame must not orphan its part
         view.Element.Remove();
         return canonical;
     }
@@ -374,12 +439,9 @@ internal static class PptxEditor
                 "Move the slide itself ({\"op\":\"move\",\"path\":\"/slide[3]\",\"position\":\"1\"}), or set/remove the notes text.");
         }
 
-        if (address.HasShape)
+        if (address.HasShape || address.IsChart)
         {
-            throw new AiofficeException(
-                ErrorCodes.UnsupportedFeature,
-                "Only slides can be moved in this milestone.",
-                "To restyle shape stacking, remove the shape and add it again; slide moves use {\"op\":\"move\",\"path\":\"/slide[3]\",\"position\":\"1\"}.");
+            return MoveShapeZOrder(presentation, address, op.Position);
         }
 
         var slideIdList = presentation.Presentation?.SlideIdList
@@ -397,6 +459,67 @@ internal static class PptxEditor
         moving.Remove();
         slideIdList.InsertAt(moving, target - 1);
         return Units.Inv($"/slide[{target}]");
+    }
+
+    /// <summary>
+    /// Z-order move: reorders the shape (or chart frame) among the slide's
+    /// spTree drawing children. Paint order is document order, so "front" is
+    /// last and "back" is first.
+    /// </summary>
+    private static string MoveShapeZOrder(PresentationPart presentation, PptxAddress address, string? position)
+    {
+        if (address.ParagraphIndex is not null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "Paragraphs cannot be moved; move targets a shape or a slide.",
+                "Reorder text by setting paragraph texts, or move the whole shape: " +
+                "{\"op\":\"move\",\"path\":\"/slide[1]/shape[@id=5]\",\"position\":\"front\"}.");
+        }
+
+        var token = position?.Trim().ToLowerInvariant();
+        if (token is null || !ZOrderPositions.Contains(token, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown z-order position '{position ?? "(none)"}'.",
+                "Use front (paint last/topmost), back (paint first/bottom), forward or backward.",
+                candidates: ZOrderPositions);
+        }
+
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var view = address.IsChart
+            ? PptxCharts.Resolve(slidePart, address).View
+            : PptxDoc.ResolveShape(slidePart, address);
+
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var siblings = PptxDoc.Shapes(tree).Select(s => s.Element).ToList();
+        var element = view.Element;
+        var index = siblings.FindIndex(s => ReferenceEquals(s, element));
+
+        switch (token)
+        {
+            case "front" when index < siblings.Count - 1:
+                element.Remove();
+                tree.InsertAfter(element, siblings[^1]);
+                break;
+            case "back" when index > 0:
+                element.Remove();
+                tree.InsertBefore(element, siblings[0]);
+                break;
+            case "forward" when index < siblings.Count - 1:
+                element.Remove();
+                tree.InsertAfter(element, siblings[index + 1]);
+                break;
+            case "backward" when index > 0:
+                element.Remove();
+                tree.InsertBefore(element, siblings[index - 1]);
+                break;
+            default:
+                break; // already at the requested extreme: a no-op, not an error
+        }
+
+        return view.CanonicalPath(address.SlideIndex);
     }
 
     /// <summary>Move targets: a 1-based final index ("3"), or "before:/slide[k]" / "after:/slide[k]".</summary>
@@ -493,13 +616,25 @@ internal static class PptxEditor
         return shape;
     }
 
-    /// <summary>Adds a textbox shape from props (x/y/w/h, text, fontSize, bold, color, fill, align, name).</summary>
+    /// <summary>
+    /// Adds a shape from props: the default is a rectangle textbox; props.shape
+    /// picks a preset geometry (rect/roundRect/ellipse/triangle/diamond/arrow)
+    /// or "line" (a straight connector honoring props.flip).
+    /// </summary>
     private static uint AddTextBox(SlidePart slidePart, JsonObject? props)
     {
         props ??= [];
         foreach (var (key, _) in props)
         {
-            RequireKnownPropKey(key);
+            RequireKnownPropKey(key, AddShapePropKeys);
+        }
+
+        var geometry = props.TryGetPropertyValue("shape", out var shapeNode)
+            ? ParseGeometryToken(shapeNode)
+            : null;
+        if (string.Equals(geometry, "line", StringComparison.Ordinal))
+        {
+            return AddLine(slidePart, props);
         }
 
         var tree = PptxDoc.RequireShapeTree(slidePart);
@@ -525,13 +660,21 @@ internal static class PptxEditor
             : string.Empty;
         var name = props.TryGetPropertyValue("name", out var nameNode) && nameNode is not null
             ? J.ScalarText(nameNode)
-            : Units.Inv($"TextBox {id}");
+            : geometry is null
+                ? Units.Inv($"TextBox {id}")
+                : Units.Inv($"{char.ToUpperInvariant(geometry[0])}{geometry[1..]} {id}");
+
+        var transform = new A.Transform2D(
+            new A.Offset { X = x, Y = y },
+            new A.Extents { Cx = w, Cy = h });
+        ApplyFlip(transform, props);
 
         var shapeProperties = new P.ShapeProperties(
-            new A.Transform2D(
-                new A.Offset { X = x, Y = y },
-                new A.Extents { Cx = w, Cy = h }),
-            new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle });
+            transform,
+            new A.PresetGeometry(new A.AdjustValueList())
+            {
+                Preset = geometry is null ? A.ShapeTypeValues.Rectangle : GeometryPresets[geometry],
+            });
 
         if (props.TryGetPropertyValue("fill", out var fillNode))
         {
@@ -547,7 +690,9 @@ internal static class PptxEditor
         var shape = new P.Shape(
             new P.NonVisualShapeProperties(
                 new P.NonVisualDrawingProperties { Id = id, Name = name },
-                new P.NonVisualShapeDrawingProperties { TextBox = true },
+                geometry is null
+                    ? new P.NonVisualShapeDrawingProperties { TextBox = true }
+                    : new P.NonVisualShapeDrawingProperties(),
                 new P.ApplicationNonVisualDrawingProperties()),
             shapeProperties,
             body);
@@ -555,28 +700,117 @@ internal static class PptxEditor
         return id;
     }
 
-    private static void SetShapeProps(ShapeView view, JsonObject props)
+    /// <summary>
+    /// Adds a straight connector-style line spanning the x/y/w/h box. The
+    /// default runs top-left to bottom-right; flip "v"/"h" mirrors it. props.fill
+    /// sets the stroke color (a line has no area).
+    /// </summary>
+    private static uint AddLine(SlidePart slidePart, JsonObject props)
     {
-        if (view.Element is not P.Shape shape)
+        foreach (var key in new[] { "text", "title", "fontSize", "bold", "color", "align" })
         {
-            var nameOnly = props.Count == 1 && props.ContainsKey("name");
-            if (!nameOnly)
+            if (props.ContainsKey(key))
             {
                 throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    $"set on a '{view.Kind}' supports only the name prop in this milestone.",
-                    "Text, fill and geometry sets target text shapes; recreate other content in PowerPoint for now.");
+                    ErrorCodes.InvalidArgs,
+                    $"Prop '{key}' does not apply to a line.",
+                    "Lines take x, y, w, h, fill (the stroke color), flip and name; put text in a separate shape.");
             }
         }
 
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var id = PptxDoc.NextShapeId(tree);
+
+        var x = props.TryGetPropertyValue("x", out var xNode) ? Units.ParseLengthEmu("x", xNode) : Units.CmToEmu(2.5);
+        var y = props.TryGetPropertyValue("y", out var yNode) ? Units.ParseLengthEmu("y", yNode) : Units.CmToEmu(2.5);
+        var w = props.TryGetPropertyValue("w", out var wNode) ? Units.ParseLengthEmu("w", wNode) : Units.CmToEmu(10);
+        var h = props.TryGetPropertyValue("h", out var hNode) ? Units.ParseLengthEmu("h", hNode) : 0L;
+        var stroke = props.TryGetPropertyValue("fill", out var fillNode)
+            ? Units.ParseColorHex("fill", fillNode)
+            : "000000";
+        var name = props.TryGetPropertyValue("name", out var nameNode) && nameNode is not null
+            ? J.ScalarText(nameNode)
+            : Units.Inv($"Line {id}");
+
+        var transform = new A.Transform2D(
+            new A.Offset { X = x, Y = y },
+            new A.Extents { Cx = w, Cy = h });
+        ApplyFlip(transform, props);
+
+        tree.Append(new P.ConnectionShape(
+            new P.NonVisualConnectionShapeProperties(
+                new P.NonVisualDrawingProperties { Id = id, Name = name },
+                new P.NonVisualConnectorShapeDrawingProperties(),
+                new P.ApplicationNonVisualDrawingProperties()),
+            new P.ShapeProperties(
+                transform,
+                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Line },
+                new A.Outline(new A.SolidFill(new A.RgbColorModelHex { Val = stroke })) { Width = LineWidthEmu })));
+        return id;
+    }
+
+    /// <summary>Resolves a props.shape token to its canonical form or throws unsupported_feature.</summary>
+    private static string ParseGeometryToken(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        foreach (var token in GeometryTokens)
+        {
+            if (string.Equals(token, raw, StringComparison.OrdinalIgnoreCase))
+            {
+                return token;
+            }
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.UnsupportedFeature,
+            $"Shape geometry '{raw}' is not supported.",
+            "Supported geometries: rect, roundRect, ellipse, triangle, diamond, arrow, line. " +
+            "Pick the closest one and refine it in PowerPoint.",
+            candidates: GeometryTokens);
+    }
+
+    /// <summary>Applies props.flip ("v", "h" or "hv") to a transform.</summary>
+    private static void ApplyFlip(A.Transform2D transform, JsonObject props)
+    {
+        if (!props.TryGetPropertyValue("flip", out var node))
+        {
+            return;
+        }
+
+        var token = (node is null ? string.Empty : J.ScalarText(node)).Trim().ToLowerInvariant();
+        var (flipH, flipV) = token switch
+        {
+            "h" => (true, false),
+            "v" => (false, true),
+            "hv" or "vh" => (true, true),
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid flip value: {node?.ToJsonString() ?? "null"}",
+                "Use \"h\" (mirror horizontally), \"v\" (mirror vertically) or \"hv\".",
+                candidates: ["h", "v", "hv"]),
+        };
+
+        if (flipH)
+        {
+            transform.HorizontalFlip = true;
+        }
+
+        if (flipV)
+        {
+            transform.VerticalFlip = true;
+        }
+    }
+
+    private static void SetShapeProps(ShapeView view, JsonObject props)
+    {
         long? x = null, y = null, w = null, h = null;
 
         foreach (var (key, value) in props)
         {
-            switch (RequireKnownPropKey(key))
+            switch (RequireKnownPropKey(key, ShapePropKeys))
             {
-                case "text" or "title":
-                    ReplaceText((P.Shape)view.Element, value is null ? string.Empty : J.ScalarText(value));
+                case "text" or "title" when view.Element is P.Shape shape:
+                    ReplaceText(shape, value is null ? string.Empty : J.ScalarText(value));
                     break;
                 case "x":
                     x = Units.ParseLengthEmu(key, value);
@@ -590,22 +824,26 @@ internal static class PptxEditor
                 case "h":
                     h = Units.ParseLengthEmu(key, value);
                     break;
-                case "fill":
-                    SetFill((P.Shape)view.Element, Units.ParseColorHex(key, value));
+                case "fill" when view.Element is P.Shape shape:
+                    SetFill(shape, Units.ParseColorHex(key, value));
                     break;
-                case "fontSize":
-                    ApplyRunProps((P.Shape)view.Element, rPr => rPr.FontSize = Units.ParseFontSizeHundredths(key, value));
+                case "fill" when view.Element is P.ConnectionShape connector:
+                    // A line has no area; its visible color is the stroke.
+                    SetLineColor(connector, Units.ParseColorHex(key, value));
                     break;
-                case "bold":
-                    ApplyRunProps((P.Shape)view.Element, rPr => rPr.Bold = AsBool(key, value));
+                case "fontSize" when view.Element is P.Shape shape:
+                    ApplyRunProps(shape, rPr => rPr.FontSize = Units.ParseFontSizeHundredths(key, value));
                     break;
-                case "color":
+                case "bold" when view.Element is P.Shape shape:
+                    ApplyRunProps(shape, rPr => rPr.Bold = AsBool(key, value));
+                    break;
+                case "color" when view.Element is P.Shape shape:
                     var hex = Units.ParseColorHex(key, value);
-                    ApplyRunProps((P.Shape)view.Element, rPr => SetRunColor(rPr, hex));
+                    ApplyRunProps(shape, rPr => SetRunColor(rPr, hex));
                     break;
-                case "align":
+                case "align" when view.Element is P.Shape shape:
                     var alignment = ParseAlign(value) ?? throw InvalidAlign(value);
-                    foreach (var paragraph in ((P.Shape)view.Element).TextBody?.Elements<A.Paragraph>() ?? [])
+                    foreach (var paragraph in shape.TextBody?.Elements<A.Paragraph>() ?? [])
                     {
                         SetAlignment(paragraph, alignment);
                     }
@@ -615,12 +853,18 @@ internal static class PptxEditor
                     var nonVisual = PptxDoc.NonVisualProps(view.Element) ?? throw CorruptPresentation("shape has no p:cNvPr");
                     nonVisual.Name = value is null ? string.Empty : J.ScalarText(value);
                     break;
+                default:
+                    throw new AiofficeException(
+                        ErrorCodes.UnsupportedFeature,
+                        $"Prop '{key}' does not apply to a '{view.Kind}'.",
+                        "Pictures, charts, lines and groups take x, y, w, h and name (lines also fill for the " +
+                        "stroke color); text and styling props target text shapes.");
             }
         }
 
         if (x is not null || y is not null || w is not null || h is not null)
         {
-            SetGeometry((P.Shape)view.Element, x, y, w, h);
+            SetGeometry(view, x, y, w, h);
         }
     }
 
@@ -637,7 +881,7 @@ internal static class PptxEditor
         var paragraph = PptxDoc.ResolveParagraph(view, address);
         foreach (var (key, value) in props)
         {
-            switch (RequireKnownPropKey(key))
+            switch (RequireKnownPropKey(key, ShapePropKeys))
             {
                 case "text" or "title":
                     ReplaceParagraphText(paragraph, value is null ? string.Empty : J.ScalarText(value));
@@ -750,14 +994,31 @@ internal static class PptxEditor
         paragraph.Append(run);
     }
 
-    private static void SetGeometry(P.Shape shape, long? x, long? y, long? w, long? h)
+    private static void SetGeometry(ShapeView view, long? x, long? y, long? w, long? h)
     {
-        var properties = shape.ShapeProperties;
-        if (properties is null)
+        // Graphic frames (charts, tables) carry p:xfrm directly, not inside spPr.
+        if (view.Element is P.GraphicFrame frame)
         {
-            properties = new P.ShapeProperties();
-            shape.InsertAfter(properties, shape.NonVisualShapeProperties);
+            frame.Transform ??= new P.Transform(
+                new A.Offset { X = 0L, Y = 0L },
+                new A.Extents { Cx = Units.CmToEmu(10), Cy = Units.CmToEmu(3) });
+            ApplyOffsetExtents(
+                frame.Transform.Offset ??= new A.Offset { X = 0L, Y = 0L },
+                frame.Transform.Extents ??= new A.Extents { Cx = Units.CmToEmu(10), Cy = Units.CmToEmu(3) },
+                x, y, w, h);
+            return;
         }
+
+        var properties = view.Element switch
+        {
+            P.Shape s => s.ShapeProperties ?? InsertShapeProperties(s),
+            P.Picture p => p.ShapeProperties ??= new P.ShapeProperties(),
+            P.ConnectionShape c => c.ShapeProperties ??= new P.ShapeProperties(),
+            _ => throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"Geometry sets are not supported on a '{view.Kind}'.",
+                "Move/resize shapes, pictures, lines and charts; ungroup grouped content in PowerPoint first."),
+        };
 
         var transform = properties.Transform2D;
         if (transform is null)
@@ -768,28 +1029,59 @@ internal static class PptxEditor
             properties.InsertAt(transform, 0);
         }
 
-        transform.Offset ??= new A.Offset { X = 0L, Y = 0L };
-        transform.Extents ??= new A.Extents { Cx = Units.CmToEmu(10), Cy = Units.CmToEmu(3) };
+        ApplyOffsetExtents(
+            transform.Offset ??= new A.Offset { X = 0L, Y = 0L },
+            transform.Extents ??= new A.Extents { Cx = Units.CmToEmu(10), Cy = Units.CmToEmu(3) },
+            x, y, w, h);
+    }
 
+    private static P.ShapeProperties InsertShapeProperties(P.Shape shape)
+    {
+        var properties = new P.ShapeProperties();
+        shape.InsertAfter(properties, shape.NonVisualShapeProperties);
+        return properties;
+    }
+
+    private static void ApplyOffsetExtents(A.Offset offset, A.Extents extents, long? x, long? y, long? w, long? h)
+    {
         if (x is not null)
         {
-            transform.Offset.X = x;
+            offset.X = x;
         }
 
         if (y is not null)
         {
-            transform.Offset.Y = y;
+            offset.Y = y;
         }
 
         if (w is not null)
         {
-            transform.Extents.Cx = w;
+            extents.Cx = w;
         }
 
         if (h is not null)
         {
-            transform.Extents.Cy = h;
+            extents.Cy = h;
         }
+    }
+
+    /// <summary>Replaces a connector's outline color (the visible color of a line shape).</summary>
+    private static void SetLineColor(P.ConnectionShape connector, string hex)
+    {
+        var properties = connector.ShapeProperties ??= new P.ShapeProperties();
+        var outline = properties.GetFirstChild<A.Outline>();
+        if (outline is null)
+        {
+            outline = new A.Outline { Width = LineWidthEmu };
+            properties.Append(outline);
+        }
+
+        foreach (var fill in outline.ChildElements.Where(c => c is A.SolidFill or A.NoFill or A.GradientFill).ToList())
+        {
+            fill.Remove();
+        }
+
+        outline.InsertAt(new A.SolidFill(new A.RgbColorModelHex { Val = hex }), 0);
     }
 
     private static void SetFill(P.Shape shape, string hex)
@@ -907,9 +1199,9 @@ internal static class PptxEditor
             "Use true or false.");
     }
 
-    private static string RequireKnownPropKey(string key)
+    private static string RequireKnownPropKey(string key, IReadOnlyList<string> allowed)
     {
-        if (ShapePropKeys.Contains(key, StringComparer.Ordinal))
+        if (allowed.Contains(key, StringComparer.Ordinal))
         {
             return key;
         }
@@ -918,7 +1210,7 @@ internal static class PptxEditor
             ErrorCodes.InvalidArgs,
             $"Unknown shape prop '{key}'.",
             "Run 'aioffice help properties' for the per-type prop list.",
-            candidates: ShapePropKeys);
+            candidates: allowed);
     }
 
     private static AiofficeException CorruptPresentation(string detail) => new(

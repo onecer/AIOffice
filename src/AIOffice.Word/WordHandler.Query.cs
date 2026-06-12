@@ -1,12 +1,13 @@
 using System.Globalization;
 using AIOffice.Core;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace AIOffice.Word;
 
 public sealed partial class WordHandler
 {
-    private static readonly string[] QueryableElements = ["p", "run", "table", "tr", "tc", "*"];
+    private static readonly string[] QueryableElements = ["p", "run", "link", "table", "tr", "tc", "*"];
 
     public Envelope Get(CommandContext ctx)
     {
@@ -50,13 +51,37 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "section":
+                {
+                    var properties = GetSectionProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = SectionPath((int)properties["index"]!), type = "section", properties },
+                        meta);
+                }
+
+                case "bookmark":
+                {
+                    var properties = GetBookmarkProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = BookmarkPath((string)properties["name"]!), type = "bookmark", properties },
+                        meta);
+                }
+
+                case "footnote":
+                {
+                    var properties = GetFootnoteProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = FootnotePath((int)properties["id"]!), type = "footnote", properties },
+                        meta);
+                }
+
                 default:
                     break;
             }
 
             var node = WordAddress.Resolve(doc, docPath);
             return Envelope.Ok(
-                new { path = node.CanonicalPath, type = node.Type, properties = NodeProperties(node) },
+                new { path = node.CanonicalPath, type = node.Type, properties = NodeProperties(doc, node) },
                 meta);
         }
     }
@@ -86,7 +111,7 @@ public sealed partial class WordHandler
             _ = GetBody(doc, file); // a docx without a body is format_corrupt, even for header-only queries
             var matches = WordAddress.EnumerateAll(doc)
                 .Where(n => selector.Element == "*" || n.Type == selector.Element)
-                .Where(n => selector.Predicates.All(predicate => Matches(n, predicate)))
+                .Where(n => selector.Predicates.All(predicate => Matches(doc, n, predicate)))
                 .Select(n => new { path = n.CanonicalPath, type = n.Type, snippet = Snippet(n.Element.InnerText) })
                 .ToList();
 
@@ -98,17 +123,17 @@ public sealed partial class WordHandler
 
     // ------------------------------------------------------------ predicates
 
-    private static bool Matches(ResolvedNode node, SelectorPredicate predicate) => predicate switch
+    private static bool Matches(WordprocessingDocument doc, ResolvedNode node, SelectorPredicate predicate) => predicate switch
     {
         ContainsPredicate contains =>
             node.Element.InnerText.Contains(contains.Text, StringComparison.OrdinalIgnoreCase),
-        AttributePredicate attr => MatchesAttribute(node, attr),
+        AttributePredicate attr => MatchesAttribute(doc, node, attr),
         _ => false,
     };
 
-    private static bool MatchesAttribute(ResolvedNode node, AttributePredicate attr)
+    private static bool MatchesAttribute(WordprocessingDocument doc, ResolvedNode node, AttributePredicate attr)
     {
-        var actual = AttributeValue(node, attr.Attribute);
+        var actual = AttributeValue(doc, node, attr.Attribute);
 
         switch (attr.Op)
         {
@@ -148,7 +173,7 @@ public sealed partial class WordHandler
     }
 
     /// <summary>The comparable value of a selector attribute on one node.</summary>
-    private static string? AttributeValue(ResolvedNode node, string attribute)
+    private static string? AttributeValue(WordprocessingDocument doc, ResolvedNode node, string attribute)
     {
         var element = node.Element;
         var run = element as Run ?? (element as Paragraph)?.ChildElements.OfType<Run>().FirstOrDefault();
@@ -156,6 +181,9 @@ public sealed partial class WordHandler
         return attribute switch
         {
             "text" => element.InnerText,
+            "url" => element is Hyperlink hyperlink
+                ? ResolveLinkUrl(doc, hyperlink) ?? (hyperlink.Anchor?.Value is { } anchor ? "#" + anchor : null)
+                : null,
             "style" => element switch
             {
                 Paragraph p => p.ParagraphProperties?.ParagraphStyleId?.Val?.Value,
@@ -185,17 +213,18 @@ public sealed partial class WordHandler
     }
 
     private static readonly string[] KnownAttributes =
-        ["text", "style", "bold", "italic", "underline", "fontSize", "color", "alignment"];
+        ["text", "url", "style", "bold", "italic", "underline", "fontSize", "color", "alignment"];
 
     // -------------------------------------------------------------- get data
 
-    private static object NodeProperties(ResolvedNode node) => node.Element switch
+    private static object NodeProperties(WordprocessingDocument doc, ResolvedNode node) => node.Element switch
     {
         // Inline-image carriers answer as images (dimensions from the extent).
         Paragraph ip when ip.Descendants<Drawing>().Any() => ImageProperties(ip),
         Run ir when ir.Descendants<Drawing>().Any() => ImageProperties(ir),
-        Paragraph p => WordFormatting.ReadParagraphProps(p),
+        Paragraph p => ParagraphPropertiesShape(doc, p),
         Run r => WordFormatting.ReadRunProps(r),
+        Hyperlink => LinkProperties(doc, node),
         Table t => new Dictionary<string, object?>
         {
             ["rows"] = t.ChildElements.OfType<TableRow>().Count(),
@@ -212,6 +241,23 @@ public sealed partial class WordHandler
         },
         _ => new Dictionary<string, object?> { ["text"] = node.Element.InnerText },
     };
+
+    /// <summary>Paragraph get data: formatting props plus {list, level, number?} for list items.</summary>
+    private static Dictionary<string, object?> ParagraphPropertiesShape(WordprocessingDocument doc, Paragraph p)
+    {
+        var properties = WordFormatting.ReadParagraphProps(p);
+        if (ListInfoOf(doc, p) is { } info)
+        {
+            properties["list"] = info.Kind;
+            properties["level"] = info.Level;
+            if (info.Kind == "number")
+            {
+                properties["number"] = ComputeListNumber(doc, p, info);
+            }
+        }
+
+        return properties;
+    }
 
     private static string Snippet(string text) =>
         text.Length <= 80 ? text : text[..80] + "…";

@@ -103,16 +103,26 @@ public sealed partial class WordHandler
         {
             "accept" or "reject" => ApplyAcceptOrReject(doc, op),
             "set" when rootName == "style" => ApplySetStyle(doc, op),
+            "set" when rootName == "section" => ApplySetSection(doc, op),
             "set" => ApplySet(doc, op, session),
             // Part-backed adds cannot resolve their anchor through WordAddress
             // (the target part/list, not body content, receives the element).
             "add" when op.Type is "header" or "footer" => ApplyAddHeaderFooter(doc, file, op),
             "add" when op.Type == "style" => ApplyAddStyle(doc, op),
             "add" when op.Type == "comment" => ApplyAddComment(doc, op, session),
+            "add" when op.Type == "reply" => ApplyAddCommentReply(doc, op, session),
             "add" when op.Type == "image" => ApplyAddImage(doc, op, session),
+            "add" when op.Type == "link" && session.Track => throw TrackedStructureUnsupported("link"),
+            "add" when op.Type == "link" => ApplyAddLink(doc, op, session),
+            "add" when op.Type == "bookmark" => ApplyAddBookmark(doc, op),
+            "add" when op.Type == "footnote" && session.Track => throw TrackedStructureUnsupported("footnote"),
+            "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op),
+            "add" when op.Type == "endnote" => throw EndnotesUnsupported(),
             "add" => ApplyAdd(doc, op, session),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
+            "remove" when rootName == "bookmark" => ApplyRemoveBookmark(doc, op),
+            "remove" when rootName == "footnote" => ApplyRemoveFootnote(doc, op),
             "remove" when rootName == "revision" => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 "Revisions are not removed; they are accepted or rejected.",
@@ -184,10 +194,11 @@ public sealed partial class WordHandler
                 candidates: ["before", "after", "inside"]);
         }
 
-        // Tracked insertion is paragraph-scoped in M2; author resolution must run
+        // Tracked insertion is paragraph-scoped; author resolution must run
         // before BuildParagraph so props.author never reaches generic prop handling.
         var props = op.Props?.DeepClone().AsObject();
         var author = session.ResolveAuthor(props);
+        var listRequest = type == "p" && props is not null ? PopListProps(props) : null;
 
         OpenXmlElement created = type switch
         {
@@ -201,9 +212,11 @@ public sealed partial class WordHandler
             _ => throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"add --type {type} is not supported for docx.",
-                "Add p (use props.style=Heading1 for headings), tr (props.cells=[…]), table (props.rows/columns), " +
-                "or header/footer targeting /header[1] | /footer[1]. For runs, set text on the paragraph instead.",
-                candidates: ["p", "tr", "table", "header", "footer"]),
+                "Add p (props.style=Heading1 for headings, props.list=bullet|number for lists), tr (props.cells=[…]), " +
+                "table (props.rows/columns), image (props.src), link (props.url), bookmark (props.name), " +
+                "footnote (props.text), comment/reply, style, or header/footer targeting /header[1] | /footer[1]. " +
+                "For runs, set text on the paragraph instead.",
+                candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "comment", "reply", "style", "header", "footer"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.
@@ -236,12 +249,20 @@ public sealed partial class WordHandler
         }
 
         var canonical = Insert(doc, anchor, created, pos);
+
+        // List numbering needs the final position: neighbors decide whether the
+        // new item continues their sequence or starts a fresh one.
+        if (listRequest is not null && created is Paragraph listParagraph)
+        {
+            ApplyListNumbering(doc, listParagraph, listRequest);
+        }
+
         return new { op = "add", type, anchor = anchor.CanonicalPath, path = canonical };
     }
 
     private static AiofficeException TrackedStructureUnsupported(string type) => new(
         ErrorCodes.UnsupportedFeature,
-        $"Tracked '{type}' changes are not supported yet (M2 tracks paragraph content; w:trPr revisions arrive in M3).",
+        $"Tracked '{type}' additions are not supported (tracking covers paragraph text content).",
         "Run the op without track:true, or add tracked paragraphs instead.");
 
     /// <summary>Inserts at the validated position; appending to body keeps sectPr last.</summary>
@@ -284,14 +305,20 @@ public sealed partial class WordHandler
             return ApplyTrackedRemove(doc, node, op, session);
         }
 
+        if (node.Element is Hyperlink hyperlink)
+        {
+            RemoveLink(doc, hyperlink);
+            return new { op = "remove", path = node.CanonicalPath, type = "link" };
+        }
+
         if (node.Element is not (Paragraph or Table or TableRow))
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"remove is not supported on '{node.Type}'.",
                 node.Type is "header" or "footer"
-                    ? $"Removing a whole {node.Type} is not supported yet (M2). Blank it instead: set {node.CanonicalPath}/p[1] text to \"\"."
-                    : "Remove p, table or tr elements. To clear a run or cell, set its text to \"\" instead.");
+                    ? $"Removing a whole {node.Type} is not supported yet. Blank it instead: set {node.CanonicalPath}/p[1] text to \"\"."
+                    : "Remove p, table, tr or link elements. To clear a run or cell, set its text to \"\" instead.");
         }
 
         if (node.Element is Paragraph && node.Element.Parent is TableCell cell &&

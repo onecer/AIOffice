@@ -33,7 +33,7 @@ public sealed partial class WordHandler
 
             object data = view switch
             {
-                "text" => TextView(body, ctx.Args, warnings),
+                "text" => TextView(doc, body, ctx.Args, warnings),
                 "outline" => OutlineView(body),
                 "stats" => StatsView(body),
                 "revisions" => RevisionsView(doc),
@@ -48,13 +48,27 @@ public sealed partial class WordHandler
 
     // ----------------------------------------------------------------- text
 
-    /// <summary>Paragraph-per-line with canonical path prefixes; honors --range a..b and --max-bytes.</summary>
-    private static object TextView(Body body, System.Text.Json.Nodes.JsonObject args, List<Warning> warnings)
+    /// <summary>
+    /// Paragraph-per-line with canonical path prefixes; honors --range a..b and
+    /// --max-bytes. List items carry their "• " / "1. " markers, footnote
+    /// references show as [^n] and the notes themselves follow as a footnote
+    /// section.
+    /// </summary>
+    private static object TextView(
+        DocumentFormat.OpenXml.Packaging.WordprocessingDocument doc,
+        Body body,
+        System.Text.Json.Nodes.JsonObject args,
+        List<Warning> warnings)
     {
         var paragraphs = WordAddress.EnumerateBody(body)
             .Where(n => n.Type == "p")
-            .Select(n => new { path = n.CanonicalPath, text = n.Element.InnerText })
+            .Select(n => new { path = n.CanonicalPath, text = DisplayText(doc, n.Element) })
             .ToList();
+
+        var footnotes = EnumerateFootnotes(doc)
+            .Select(f => new { path = FootnotePath(f.Id), id = f.Id, text = FootnoteText(f.Footnote) })
+            .ToList();
+        var footnoteSection = footnotes.Count > 0 ? footnotes : null;
 
         var total = paragraphs.Count;
         var (from, to) = ParseRange(StringArg(args, "range"), total);
@@ -78,10 +92,10 @@ public sealed partial class WordHandler
                 kept.Add(line);
             }
 
-            return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = kept };
+            return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = kept, footnotes = footnoteSection };
         }
 
-        return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = window };
+        return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = window, footnotes = footnoteSection };
     }
 
     private static (int From, int To) ParseRange(string? range, int total)
@@ -210,12 +224,17 @@ public sealed partial class WordHandler
             .Select(r => Describe(r.Element, r.CanonicalPath, r.Type, 0))
             .ToList();
 
+        var bookmarks = EnumerateBookmarks(doc)
+            .Select(b => BookmarkShape(doc, b))
+            .ToList();
+
         return new
         {
             view = "structure",
             root = Describe(body, "/body", "body", 0),
             headers = headers.Count > 0 ? headers : null,
             footers = footers.Count > 0 ? footers : null,
+            bookmarks = bookmarks.Count > 0 ? bookmarks : null,
         };
 
         object Describe(OpenXmlElement element, string path, string type, int depth)
@@ -238,7 +257,7 @@ public sealed partial class WordHandler
     private static List<ResolvedNode> DirectAddressableChildren(OpenXmlElement element, string path)
     {
         var result = new List<ResolvedNode>();
-        int p = 0, table = 0, run = 0, tr = 0, tc = 0;
+        int p = 0, table = 0, run = 0, link = 0, tr = 0, tc = 0;
         foreach (var child in element.ChildElements)
         {
             switch (child)
@@ -251,6 +270,9 @@ public sealed partial class WordHandler
                     break;
                 case Run r:
                     result.Add(new ResolvedNode(r, $"{path}/run[{++run}]", "run"));
+                    break;
+                case Hyperlink h:
+                    result.Add(new ResolvedNode(h, $"{path}/link[{++link}]", "link"));
                     break;
                 case TableRow row:
                     result.Add(new ResolvedNode(row, $"{path}/tr[{++tr}]", "tr"));

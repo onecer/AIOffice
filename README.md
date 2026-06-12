@@ -292,7 +292,7 @@ Claude Desktop / Claude Code config:
 | `query <file> <selector>` | CSS-like selectors → canonical paths (`p[style=Heading1]`, `cell[value>100]`, `shape:contains('Q3')`) |
 | `get <file> <path>` | One node + its properties |
 | `edit <file> --ops <json\|@file>` | **Atomic** batch set/add/remove/move · `--dry-run` · `--expect-rev` · sugar `--set/--add/--remove` |
-| `render <file> [--to html\|svg\|text\|png] [--scope]` | The *look* step — html for docx/xlsx, svg per pptx slide, **png** via the system browser |
+| `render <file> [--to html\|svg\|text\|png\|pdf] [--scope]` | The *look* step — html for docx/xlsx, svg per pptx slide, **png/pdf** via the system browser (pptx pdf: whole deck, one page per slide) |
 | `validate <file>` | OOXML validation + lint with fix suggestions |
 | `template <file> --data <json\|@file>` | `{{key}}` merge across docx/xlsx/pptx (split-run safe) |
 | `snapshot <list\|restore> <file> [n]` | Pre-edit snapshot ring (20) |
@@ -308,15 +308,19 @@ Exit codes: `0` ok · `2` user error · `3` internal/format error · `4` sandbox
 
 **Addressing** (1-based): `/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/Sheet1/A1:C10` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]`.
 
-## What works today (M0 + M1 + M2)
+## What works today (M0 + M1 + M2 + M3)
 
-| Format | M0 (v0.1.0) | + M1 (v0.2.0) | + M2 (v0.3.0) |
-|---|---|---|---|
-| **.docx** | create · paragraphs/headings/styles · tables · text & formatting edits (bold/italic/color/alignment/size) · query/get · outline/text/stats/structure views · HTML render · `{{key}}` templates · validate | **headers/footers** (create + edit, `/header[1]/p[1]`) · PNG render · live preview | **tracked changes** (`--track --author`, `read --view revisions`, accept/reject by `/revision[@id=N]` or scope) · **comments** (add/read/remove, `/comment[@id=N]`) · **custom styles** (`/styles` add, `/style[@id=X]` set/get/remove) · **images** (PNG/JPEG, sandboxed `src`, aspect-keeping) |
-| **.xlsx** | create · typed cell writes (number/bool/string/date) · **formula evaluation with cached values** + honest warnings · number formats · merge · tables/sheets · range reads · query by value/formula · HTML render · templates · validate | **charts** (bar/line/pie, `add type:chart`) · PNG render · live preview | **pivot tables** (rows/columns/filters + sum/average/count/min/max values, `pivot[@name=X]`) · **conditional formatting** (cellIs/colorScale/dataBar/containsText) · **images** (anchored, PNG/JPEG) |
-| **.pptx** | create (validator-clean, opens in PowerPoint/Keynote) · add/reorder/remove slides · positioned text shapes (cm/EMU) · query/get with stable shape ids · **SVG render per slide** · templates · validate | shape **fill/font/color/align props** · **master/layout read addressing** · PNG render per slide · live preview | **slide backgrounds** (real `p:bg` solid fill) · **speaker notes** (`/slide[i]/notes` set/add/remove/get) · **images** (PNG/JPEG, stable `shape[@id=N]` paths) |
+| Format | M0 (v0.1.0) | + M1 (v0.2.0) | + M2 (v0.3.0) | + M3 (v0.4.0) |
+|---|---|---|---|---|
+| **.docx** | create · paragraphs/headings/styles · tables · text & formatting edits (bold/italic/color/alignment/size) · query/get · outline/text/stats/structure views · HTML render · `{{key}}` templates · validate | **headers/footers** (create + edit, `/header[1]/p[1]`) · PNG render · live preview | **tracked changes** (`--track --author`, `read --view revisions`, accept/reject by `/revision[@id=N]` or scope) · **comments** (add/read/remove, `/comment[@id=N]`) · **custom styles** (`/styles` add, `/style[@id=X]` set/get/remove) · **images** (PNG/JPEG, sandboxed `src`, aspect-keeping) | **lists** (numbered/bulleted, nested levels, restart; `1.`/`•` markers in text view, real `<ol>/<ul>` in HTML) · **hyperlinks** (external url + bookmark anchors) · **bookmarks** · **footnotes** · **page setup** (`/section[1]`: pageSize/orientation/margins) · **formatting-revision accept/reject** (w:rPrChange/w:pPrChange) · **threaded comment replies** (`add type:reply` on `/comment[@id=N]`) |
+| **.xlsx** | create · typed cell writes (number/bool/string/date) · **formula evaluation with cached values** + honest warnings · number formats · merge · tables/sheets · range reads · query by value/formula · HTML render · templates · validate | **charts** (bar/line/pie, `add type:chart`) · PNG render · live preview | **pivot tables** (rows/columns/filters + sum/average/count/min/max values, `pivot[@name=X]`) · **conditional formatting** (cellIs/colorScale/dataBar/containsText) · **images** (anchored, PNG/JPEG) | **streaming reads** for huge workbooks (SAX over raw XML — `read --view stats/text` and cell/range `get` without loading the DOM; a 41 MB / 330k-row book answers stats in ~2 s) · **scatter & area charts** · **defined names** (`/name[@name=X]`, live in formulas — `=SUM(SalesData)` evaluates) · **freeze panes** · **autoFilter** · **print setup** (orientation/paperSize/fitTo/printArea) |
+| **.pptx** | create (validator-clean, opens in PowerPoint/Keynote) · add/reorder/remove slides · positioned text shapes (cm/EMU) · query/get with stable shape ids · **SVG render per slide** · templates · validate | shape **fill/font/color/align props** · **master/layout read addressing** · PNG render per slide · live preview | **slide backgrounds** (real `p:bg` solid fill) · **speaker notes** (`/slide[i]/notes` set/add/remove/get) · **images** (PNG/JPEG, stable `shape[@id=N]` paths) | **native charts** (bar/line/pie with literal data caches, `/slide[i]/chart[k]`) · **`dataFrom` cross-doc data** (chart series pulled straight from a workbook) · **slide transitions** (fade/push/wipe + duration) · **preset geometries** (ellipse/triangle/diamond/arrow/roundRect + line connectors, flips) · **z-order** (`move` to front/back/forward/backward) |
 
-Cross-format in M2: a **file-size guard** — opening anything over 50 MB (env `AIOFFICE_MAX_FILE_MB`) fails fast with `file_too_large` and an actionable suggestion; `doctor` reports `limits.maxFileMb`.
+Cross-format in M3 (功能第一 — features first):
+
+- **`render --to pdf`** — docx/xlsx print to paged PDF, a pptx deck becomes one PDF with **one page per slide**, via the same system-browser pipeline as PNG (no browser → typed `unsupported_feature` with the workaround).
+- **Cross-document `dataFrom`** — `{"op":"add","type":"chart","props":{"dataFrom":"metrics.xlsx!Sheet1/A1:B5"}}` builds a pptx chart from live workbook data: first column → categories, header row → series names, remaining columns → series. Sandbox-resolved, candidates on a wrong range, identical over CLI and MCP.
+- **Size cap is now opt-in** — the M2 50 MB default is gone; files of any size open by default (huge xlsx reads go through the streaming path). Set `AIOFFICE_MAX_FILE_MB` to restore a hard `file_too_large` cap; `doctor` reports `limits.maxFileMb: "unlimited"` otherwise.
 
 The long-term capability ledger (vs. the strongest CLI in the field) lives in [docs/PARITY.md](docs/PARITY.md) — capability parity is the north star; the command surface is deliberately our own.
 
@@ -327,7 +331,7 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
    agent/human → │  src/AIOffice.Cli   (aioffice, 15 verbs)    │
    MCP client  → │  src/AIOffice.Mcp   (stdio, 14 tools, 1:1)  │
                  ├─────────────────────────────────────────────┤
-                 │  src/AIOffice.Render   (png via browser)    │
+                 │  src/AIOffice.Render  (png/pdf via browser) │
                  │  src/AIOffice.Preview  (live click-select)  │
                  └──────────────┬──────────────────────────────┘
                                 │ envelope · addressing · selectors
@@ -349,7 +353,7 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
 
 Born from studying an excellent office CLI that ships **zero automated tests** — AIOffice takes the opposite stance:
 
-- **383 tests** across 7 projects (Core 104 · Word 73 · Pptx 72 · Excel 59 · MCP 30 · Preview 24 · Render 21), green on every commit.
+- **724 tests** across 7 projects (Core 112 · Word 186 · Pptx 159 · Excel 168 · MCP 44 · Preview 24 · Render 31), green on every commit.
 - **Round-trip law**: open → save with no edits must leave every zip part byte-identical; documented exceptions are asserted exactly.
 - **Independent oracle**: OpenXmlValidator must report 0 errors after every mutating test — the tool never grades its own homework.
 - **CI matrix**: macOS 14 + Windows, builds with warnings-as-errors, runs golden scripts, publishes and smokes the single-file binary.
@@ -360,7 +364,8 @@ Born from studying an excellent office CLI that ships **zero automated tests** �
 - **M0** — everything above; single-file publish; CI on macOS + Windows.
 - **M1 (shipped, v0.2.0)** — PNG render (system browser detection) · `preview_open`/`preview_selection` (live preview, human click-to-select) · docx headers/footers · pptx master/layout read addressing · xlsx charts (bar/line/pie).
 - **M2 (shipped, v0.3.0)** — tracked changes (`--track`/`--author`, accept/reject) · comments · style management · pivot tables · conditional formatting · images (all three formats) · pptx backgrounds & speaker notes · file-size guard (`file_too_large`, `AIOFFICE_MAX_FILE_MB`). Large-file *streaming* did **not** ship: it needs a dedicated benchmark-driven pass; M2 ships a size guard instead — moved to M3.
-- **M3** — large-file streaming (benchmarked) · cross-document workflows (xlsx data → pptx charts) · batch pipelines · capability plugins · full parity ledger burn-down.
+- **M3 (shipped, v0.4.0)** — 功能第一: docx lists/links/bookmarks/footnotes/page-setup/format-revision-resolve/comment-replies · xlsx streaming reads (SAX)/scatter+area charts/defined names/freeze/autoFilter/print setup · pptx native charts/transitions/preset geometries/z-order · cross-doc `dataFrom` (xlsx data → pptx charts, CLI & MCP) · `render --to pdf` (paged docx/xlsx; pptx one page per slide) · size cap flipped to opt-in (default unlimited).
+- **M4 (seeds)** — embedded chart workbooks (editable data in PowerPoint) · animations · endnotes · multi-section docx (insert section breaks) · write-streaming for huge workbooks · find/replace across runs · data validation · connectors & groups.
 
 ## Design statement
 

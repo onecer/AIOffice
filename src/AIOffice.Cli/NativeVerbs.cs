@@ -120,8 +120,9 @@ public sealed class NativeVerbs
             },
             limits = new
             {
-                maxFileMb = FileSizeGuard.MaxFileMb,
-                maxFileMbDefault = FileSizeGuard.DefaultMaxFileMb,
+                // M3: unlimited by default; AIOFFICE_MAX_FILE_MB is an opt-in cap.
+                maxFileMb = FileSizeGuard.MaxFileMb is { } mb ? (object)mb : "unlimited",
+                maxFileMbDefault = "unlimited",
                 maxFileMbEnv = FileSizeGuard.EnvVar,
             },
             handlers = _handlerStatuses.Select(h => new

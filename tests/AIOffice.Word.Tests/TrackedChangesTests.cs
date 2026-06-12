@@ -217,39 +217,111 @@ public sealed class TrackedChangesTests : WordTestBase
         Assert.Contains("track", ex.Suggestion, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Plants a Word-authored w:rPrChange: run is now bold, was previously unformatted.</summary>
+    private static void PlantRunFormatRevision(string file, int id = 901)
+    {
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: true);
+        var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+        var rPr = run.RunProperties ??= new RunProperties();
+        rPr.Bold = new Bold(); // the NEW formatting
+        rPr.AppendChild(new RunPropertiesChange
+        {
+            Id = id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Author = "Word User",
+            Date = DateTime.UtcNow,
+            PreviousRunProperties = new PreviousRunProperties(), // the OLD formatting: none
+        });
+    }
+
     [Fact]
-    public void Format_revisions_read_as_format_and_refuse_accept()
+    public void Format_revision_reads_as_format_and_accept_keeps_new_formatting()
     {
         var file = CreateDoc(title: "Formatted");
-
-        // Simulate a Word-authored formatting revision (w:rPrChange).
-        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: true))
-        {
-            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
-            var rPr = run.RunProperties ??= new RunProperties();
-            rPr.AppendChild(new RunPropertiesChange
-            {
-                Id = "901",
-                Author = "Word User",
-                Date = DateTime.UtcNow,
-                PreviousRunProperties = new PreviousRunProperties(),
-            });
-        }
+        PlantRunFormatRevision(file);
 
         var revisions = Revisions(file);
         var format = Assert.Single(revisions);
         Assert.Equal("format", format!["kind"]!.GetValue<string>());
         Assert.Equal(901, format["id"]!.GetValue<int>());
 
-        var ex = Assert.Throws<AiofficeException>(() =>
-            Edit(file, """[{"op":"accept","path":"/revision[@id=901]"}]"""));
-        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
+        Edit(file, """[{"op":"accept","path":"/revision[@id=901]"}]""");
 
-        // A scope op skips it honestly instead of failing the batch.
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+            Assert.NotNull(run.RunProperties?.Bold); // accept keeps the new formatting
+            Assert.Empty(doc.MainDocumentPart.Document.Body.Descendants<RunPropertiesChange>());
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Format_revision_reject_restores_the_previous_run_properties()
+    {
+        var file = CreateDoc(title: "Formatted");
+        PlantRunFormatRevision(file);
+
+        Edit(file, """[{"op":"reject","path":"/revision[@id=901]"}]""");
+
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+            Assert.Null(run.RunProperties?.Bold); // reject restores the old (unformatted) state
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Paragraph_format_revision_reject_restores_previous_paragraph_properties()
+    {
+        var file = CreateDoc(title: "Centered");
+
+        // Word-authored w:pPrChange: paragraph is now centered; the marker's inner
+        // pPr holds the COMPLETE previous properties (Heading1, no jc).
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: true))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+            var pPr = paragraph.ParagraphProperties ??= new ParagraphProperties();
+            pPr.Justification = new Justification { Val = JustificationValues.Center };
+            pPr.AppendChild(new ParagraphPropertiesChange
+            {
+                Id = "902",
+                Author = "Word User",
+                Date = DateTime.UtcNow,
+                ParagraphPropertiesExtended = new ParagraphPropertiesExtended(
+                    new ParagraphStyleId { Val = "Heading1" }),
+            });
+        }
+
+        Edit(file, """[{"op":"reject","path":"/revision[@id=902]"}]""");
+
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+            Assert.Null(paragraph.ParagraphProperties?.Justification); // the centering never happened
+            Assert.Equal("Heading1", paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value); // old props restored
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Scope_accept_resolves_format_revisions_too()
+    {
+        var file = CreateDoc(title: "Formatted");
+        PlantRunFormatRevision(file);
+
         var envelope = Edit(file, """[{"op":"accept","path":"/body"}]""");
+
         var summary = Data(envelope)["ops"]!.AsArray()[0]!;
-        Assert.Equal(0, summary["applied"]!.GetValue<int>());
-        Assert.Equal(1, summary["skippedFormat"]!.GetValue<int>());
+        Assert.Equal(1, summary["applied"]!.GetValue<int>());
+        Assert.Empty(Revisions(file));
+        AssertValidatesClean(file);
     }
 
     [Fact]

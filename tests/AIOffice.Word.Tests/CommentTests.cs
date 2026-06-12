@@ -111,7 +111,7 @@ public sealed class CommentTests : WordTestBase
     }
 
     [Fact]
-    public void Comment_replies_are_unsupported_until_m3()
+    public void Reply_props_on_a_comment_add_point_to_the_reply_op()
     {
         var file = CreateDoc(title: "Thread");
         Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root"}}]""");
@@ -119,8 +119,9 @@ public sealed class CommentTests : WordTestBase
         var ex = Assert.Throws<AiofficeException>(() =>
             Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"reply","replyTo":1}}]"""));
 
-        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
-        Assert.Contains("M3", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("\"type\":\"reply\"", ex.Suggestion, StringComparison.Ordinal);
+        Assert.Contains("/comment[@id=1]", ex.Suggestion, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -134,6 +135,109 @@ public sealed class CommentTests : WordTestBase
 
         Assert.Equal(ErrorCodes.InvalidPath, ex.Code);
         Assert.Contains("/comment[@id=1]", ex.Candidates!);
+    }
+
+    // ----------------------------------------------------------------- replies
+
+    [Fact]
+    public void Reply_threads_under_its_parent_in_the_comments_view()
+    {
+        var file = CreateDoc(title: "Discussion");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root","author":"Alice"}}]""");
+
+        var envelope = Edit(file, """[{"op":"add","path":"/comment[@id=1]","type":"reply","props":{"text":"agreed","author":"Bob"}}]""");
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("/comment[@id=2]", summary["path"]!.GetValue<string>());
+        Assert.Equal("/comment[@id=1]", summary["parent"]!.GetValue<string>());
+
+        var comments = Comments(file);
+        var root = Assert.Single(comments)!; // the reply nests instead of listing top-level
+        Assert.Equal("root", root["text"]!.GetValue<string>());
+        var reply = Assert.Single(root["replies"]!.AsArray())!;
+        Assert.Equal("agreed", reply["text"]!.GetValue<string>());
+        Assert.Equal("Bob", reply["author"]!.GetValue<string>());
+        Assert.Equal(1, reply["parentId"]!.GetValue<int>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Reply_wires_w15_parent_paraId_and_survives_reopen()
+    {
+        var file = CreateDoc(title: "Wired");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root"}}]""");
+        Edit(file, """[{"op":"add","path":"/comment[@id=1]","type":"reply","props":{"text":"child"}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var comments = doc.MainDocumentPart!.WordprocessingCommentsPart!.Comments!;
+            var byId = comments.Elements<Comment>().ToDictionary(c => c.Id!.Value!);
+            var rootParaId = byId["1"].Elements<Paragraph>().Last().ParagraphId!.Value;
+            var replyParaId = byId["2"].Elements<Paragraph>().Last().ParagraphId!.Value;
+            Assert.NotEqual(rootParaId, replyParaId);
+
+            var entry = Assert.Single(
+                doc.MainDocumentPart.WordprocessingCommentsExPart!.CommentsEx!
+                    .Elements<DocumentFormat.OpenXml.Office2013.Word.CommentEx>());
+            Assert.Equal(replyParaId, entry.ParaId!.Value);
+            Assert.Equal(rootParaId, entry.ParaIdParent!.Value);
+
+            // The reply anchors on the same content as its parent.
+            var body = doc.MainDocumentPart.Document!.Body!;
+            Assert.Equal(2, body.Descendants<CommentRangeStart>().Count());
+            Assert.Equal(2, body.Descendants<CommentReference>().Count());
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Get_reply_reports_parent_and_removing_the_parent_cascades()
+    {
+        var file = CreateDoc(title: "Cascade");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root"}}]""");
+        Edit(file, """[{"op":"add","path":"/comment[@id=1]","type":"reply","props":{"text":"child"}}]""");
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/comment[@id=2]" })));
+        Assert.Equal(1, got["properties"]!["parentId"]!.GetValue<int>());
+
+        Edit(file, """[{"op":"remove","path":"/comment[@id=1]"}]""");
+
+        Assert.Empty(Comments(file));
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            Assert.Empty(body.Descendants<CommentRangeStart>());
+            Assert.Empty(body.Descendants<CommentReference>());
+            Assert.Empty(
+                doc.MainDocumentPart.WordprocessingCommentsExPart?.CommentsEx?
+                    .Elements<DocumentFormat.OpenXml.Office2013.Word.CommentEx>() ?? []);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Reply_to_missing_comment_is_invalid_path()
+    {
+        var file = CreateDoc(title: "Orphan");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/comment[@id=7]","type":"reply","props":{"text":"x"}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidPath, ex.Code);
+    }
+
+    [Fact]
+    public void Reply_text_is_required()
+    {
+        var file = CreateDoc(title: "Quiet");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"root"}}]""");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/comment[@id=1]","type":"reply","props":{"author":"x"}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("text", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

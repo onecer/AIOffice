@@ -73,7 +73,7 @@ aioffice mcp [--workspace <dir>]
 | `invalid_path` | 元素路径不存在 | **必附 `candidates[]`**：服务端自动用路径末段元素名跑一次近似 query 回填 | 2 |
 | `stale_address` | `expect_rev` 与当前 rev 失配（文件被外部或并行修改） | 重新 `office_get` 拿新 rev 后重试；写入未发生 | 2 |
 | `unsupported_feature` | 能力在当前里程碑不可用（如 master/layout 编辑、scatter 图表） | **`suggestion` 必须给出 workaround** | 5 |
-| `file_too_large` | 文件超过大小守卫（默认 50MB，`AIOFFICE_MAX_FILE_MB` 可调），M2 起 | `suggestion` 提示拆分文件或调高环境变量 | 2 |
+| `file_too_large` | 文件超过 `AIOFFICE_MAX_FILE_MB` **opt-in** 上限（M3 起默认不限大小；M2 时默认 50MB） | `suggestion` 提示调高/取消环境变量或拆分文件 | 2 |
 | `format_corrupt` | 文件不是合法 OOXML / zip 损坏 | `suggestion` 提示 `office_validate` 与 `file_snapshot restore` | 3 |
 | `internal_error` | 未预期异常（我们的 bug） | `suggestion` 提示带 `office_status` 输出报 issue | 3 |
 | `formula_not_evaluated` | **warning（`meta.warnings`），非 error**：xlsx 公式无缓存值且本次未计算 | 读到的是公式文本而非值；data 中相应字段标注 | 0 |
@@ -257,7 +257,7 @@ aioffice mcp [--workspace <dir>]
           "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)" },
           "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image, comment, style, header, footer, chart, pivot, conditionalFormat" },
           "props": { "type": "object", "additionalProperties": { "type": "string" },
-            "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named" },
+            "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals" },
           "position": { "type": ["integer", "string"],
             "description": "add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append" }
         },
@@ -296,6 +296,8 @@ aioffice mcp [--workspace <dir>]
 
 > 注意示例最后一条：前面插入了一段，后续 ops 中的位置索引按**执行时点**解析（`/body/p[7]` 在插入后实际命中原第 7 段、现第 8 段）。同批内 ops 之间有索引依赖时，把目标排在插入/删除**之前**，或拆成两次 edit 用 query 重新寻址。
 
+**跨文档 dataFrom（M3）**：目标是 pptx 时，`add chart` 的 props 可用 `{"dataFrom":"metrics.xlsx!Sheet1/A1:B5"}` 取代字面量 categories/series——命令层（CLI 与 MCP 共用）经 workspace 沙箱解析工作簿、用 xlsx handler 读取区域：首列 → 分类，表头行 → 系列名，其余列 → 系列值（空格 = 数据缺口）。区域写错 → 类型化错误 + candidates（表名 / 最近 usedRange）；展开发生在 rev 守卫与快照**之前**，坏数据源不会写盘。带空格的表名用引号：`book.xlsx!'Q3 Data'/A1:C5`。
+
 **映射 CLI**：`aioffice edit <file> --ops <json|@file> [--track] [--author NAME] [--dry-run] [--expect-rev R]`；单 op 糖：`--set <path> k=v...`、`--add <path> --type T k=v...`、`--remove <path>`。
 
 **错误码**：`stale_address`、`invalid_path`（带 candidates）、`invalid_args`（坏 op / 未知 type / 坏 position）、`unsupported_feature`（该元素类型或属性尚未实现，suggestion 给替代做法）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
@@ -304,15 +306,15 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.6 `office_render`
 
-**用途**：把文档（或子树）渲染为可检视产物——「render → look → fix」循环的 look 步骤。docx/xlsx → html，pptx → 每页 svg（或 html）；`text` 全格式可用。**M1 起支持 `to=png`**：handler 产物（html/svg）→ headless 浏览器（Chrome/Edge，`office_status` 报告探测结果）截图；pptx 一次渲染一页（传 `scope`，缺省 `/slide[1]` + meta warning）。探测不到浏览器 → `unsupported_feature` + 安装建议。
+**用途**：把文档（或子树）渲染为可检视产物——「render → look → fix」循环的 look 步骤。docx/xlsx → html，pptx → 每页 svg（或 html）；`text` 全格式可用。**M1 起支持 `to=png`**：handler 产物（html/svg）→ headless 浏览器（Chrome/Edge，`office_status` 报告探测结果）截图；pptx 一次渲染一页（传 `scope`，缺省 `/slide[1]` + meta warning）。**M3 起支持 `to=pdf`**：同一浏览器管线 `--print-to-pdf --no-pdf-header-footer` 出分页 PDF——docx/xlsx A4 分页；pptx 整副 deck 一个 PDF、一页一片（`scope` 可缩到单页）。探测不到浏览器 → `unsupported_feature` + 安装建议。
 
 ```json
 {
   "type": "object",
   "properties": {
     "file": { "type": "string" },
-    "to": { "type": "string", "enum": ["html", "svg", "text", "png"], "default": "html",
-      "description": "html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope)" },
+    "to": { "type": "string", "enum": ["html", "svg", "text", "png", "pdf"], "default": "html",
+      "description": "html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope); pdf: paged print via local Chromium, written next to source (pptx: whole deck, one page per slide)" },
     "scope": { "type": "string", "description": "Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\"" },
     "output": { "type": "string", "description": "Output file or directory inside workspace (default: alongside source)" }
   },
@@ -324,6 +326,7 @@ aioffice mcp [--workspace <dir>]
 - html/svg/text：`data: { outputs: string[] /* absolute paths */, content?: string /* inlined when single text-format output ≤ 256 KB */ }`
 （单一 html/svg/text 产物且不超过 256 KB 时直接内联在 `content`，agent 无需再开文件；超限时只给路径并在 `meta.warnings` 标注。）
 - png：`data: { format: "png", scope?: string, written: string /* absolute path */, sizeBytes: number }`，**且** MCP result 的 `content` 附第二个 block：`{type:"image", mimeType:"image/png", data:<base64>}`——文件字节原样内联（不降采样），模型直接看图。
+- pdf：`data: { format: "pdf", scope?: string, written: string /* absolute path */, sizeBytes: number, pages?: number /* pptx：渲染的幻灯片页数 */ }`——PDF 是二进制且可能很大，**不**内联 image block，envelope 只带落盘路径。
 
 **示例**
 
@@ -341,9 +344,9 @@ aioffice mcp [--workspace <dir>]
 { "ok": true, "data": { "format": "png", "scope": "/slide[2]", "written": "/ws/deck.png", "sizeBytes": 48213 } }
 ```
 
-**映射 CLI**：`aioffice render <file> [--to html|svg|text|png] [--scope <path>] [-o out]`
+**映射 CLI**：`aioffice render <file> [--to html|svg|text|png|pdf] [--scope <path>] [-o out]`
 
-**错误码**：`unsupported_feature`（`to=png` 且探测不到 Chrome/Edge → suggestion 给安装路径与 html/svg 替代）、`invalid_path`（坏 scope，带 candidates）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+**错误码**：`unsupported_feature`（`to=png|pdf` 且探测不到 Chrome/Edge → suggestion 给安装路径与 html/svg 替代）、`invalid_path`（坏 scope，带 candidates）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
 
 ---
 
@@ -628,7 +631,7 @@ aioffice mcp [--workspace <dir>]
 | 工具 | 预算 (tokens) | 理由 |
 |---|---:|---|
 | `office_edit` | 620 | 唯一 fat tool，承载全部变更动词与 ops 语法 |
-| `office_render` | 260 | 4 种目标格式 + scope + png 行为说明 |
+| `office_render` | 320 | 5 种目标格式 + scope + png/pdf 行为说明 |
 | `office_read` | 240 | 4 种 view + range |
 | `office_query` | 230 | selector 示例占大头 |
 | `office_template` | 230 | merge 语义 + 占位符示例 |
@@ -722,7 +725,7 @@ You have aioffice MCP tools for real .docx/.xlsx/.pptx files. Rules:
 | `office_query` | `query <file> <selector>` | 返回规范路径 |
 | `office_get` | `get <file> <path>` | 单节点 + 属性 |
 | `office_edit` | `edit <file> --ops <json|@file> [--dry-run] [--expect-rev]` | 糖：`--set/--add/--remove` |
-| `office_render` | `render <file> [--to] [--scope] [-o]` | to: html/svg/text/png |
+| `office_render` | `render <file> [--to] [--scope] [-o]` | to: html/svg/text/png/pdf |
 | `office_validate` | `validate <file>` | OpenXmlValidator + lint |
 | `office_template` | `template <file> --data <json|@file> [-o]` | `{{key}}` 合并 |
 | `file_snapshot` | `snapshot <list|restore> <file> [n]` | 环形 20 份 |

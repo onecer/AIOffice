@@ -76,7 +76,7 @@ public static class ToolCatalog
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)"},
                   "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image, comment, style, header, footer, chart, pivot, conditionalFormat"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
-                    "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named"},
+                    "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
                   "position":{"type":["integer","string"],
                     "description":"add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append"}},
                  "required":["op","path"]}},
@@ -92,8 +92,8 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "to":{"type":"string","enum":["html","svg","text","png"],"default":"html",
-                "description":"html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope)"},
+              "to":{"type":"string","enum":["html","svg","text","png","pdf"],"default":"html",
+                "description":"html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope); pdf: paged print via local Chromium, written next to source (pptx: whole deck, one page per slide)"},
               "scope":{"type":"string","description":"Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\""},
               "output":{"type":"string","description":"Output file or directory inside workspace (default: alongside source)"}},
              "required":["file"]}
