@@ -103,6 +103,16 @@ public sealed partial class PptxHandler : IFormatHandler
             return PptxCharts.Detail(presentation, address);
         }
 
+        if (address.IsTable)
+        {
+            return PptxTables.Detail(presentation, address);
+        }
+
+        if (address.IsSmartArt)
+        {
+            return PptxSmartArt.Detail(presentation, address);
+        }
+
         if (address.IsAnimation)
         {
             return PptxAnimations.Detail(presentation, address);
@@ -428,12 +438,13 @@ public sealed partial class PptxHandler : IFormatHandler
                 "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
         }
 
-        if (address.HasShape || address.IsNotes || address.IsChart || address.IsAnimation || address.IsComment)
+        if (address.HasShape || address.IsNotes || address.IsChart || address.IsTable || address.IsSmartArt ||
+            address.IsAnimation || address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Render scope must be a slide, not '{scope}'.",
-                "Use --scope /slide[2]; shape/chart/notes-level rendering is not supported yet.");
+                "Use --scope /slide[2]; shape/chart/table/notes-level rendering is not supported yet.");
         }
 
         var part = PptxDoc.ResolveSlide(presentation, address.SlideIndex, scope);
@@ -481,7 +492,7 @@ public sealed partial class PptxHandler : IFormatHandler
             var body = string.Join(
                 '\n',
                 PptxDoc.Shapes(s.Part)
-                    .Select(shape => PptxDoc.ShapeText(shape.Element))
+                    .Select(shape => ShapeOrSmartArtText(s.Part, shape))
                     .Where(text => text.Length > 0));
             if (!includeNotes)
             {
@@ -498,6 +509,17 @@ public sealed partial class PptxHandler : IFormatHandler
             return body.Length == 0 ? section : body + "\n" + section;
         });
         return string.Join("\n\n", perSlide);
+    }
+
+    /// <summary>Shape text, with SmartArt frames contributing their node texts (indented per level).</summary>
+    private static string ShapeOrSmartArtText(SlidePart slidePart, ShapeView shape)
+    {
+        if (PptxSmartArt.DataPartOf(slidePart, shape.Element) is { } dataPart)
+        {
+            return string.Join('\n', PptxSmartArt.IndentedLines(dataPart));
+        }
+
+        return PptxDoc.ShapeText(shape.Element);
     }
 
     private static object BuildStats(List<SlideRef> slides)
@@ -546,6 +568,7 @@ public sealed partial class PptxHandler : IFormatHandler
             Slides = slides.Select(s =>
             {
                 var animations = PptxAnimations.List(s.Part);
+                var smartArts = PptxSmartArt.List(s.Part);
                 return new
                 {
                     Path = Units.Inv($"/slide[{s.Index}]"),
@@ -573,6 +596,9 @@ public sealed partial class PptxHandler : IFormatHandler
                     Animations = animations.Count == 0
                         ? null
                         : animations.Select(a => PptxAnimations.Project(a, s.Index, s.Part)).ToList(),
+                    SmartArt = smartArts.Count == 0
+                        ? null
+                        : smartArts.Select(d => PptxSmartArt.StructureRow(s.Part, s.Index, d.Index, d.View, d.Part)).ToList(),
                 };
             }).ToList<object>(),
         };

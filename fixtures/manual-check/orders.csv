@@ -1,0 +1,4 @@
+code,customer,date,q1,q2,q3,q4,status
+007,"Acme, Inc.",2026-06-12,120,135,150,162,Open
+042,Globex,2026-05-30,98,97,99,101,Paid
+113,Initech,2026-04-15,45,52,61,58,Open

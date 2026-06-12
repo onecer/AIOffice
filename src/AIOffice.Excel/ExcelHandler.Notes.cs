@@ -60,6 +60,15 @@ public sealed partial class ExcelHandler
         var path = ExcelPaths.CellPath(target.Sheet, cell.Address);
         if (cell.HasComment)
         {
+            if (ExcelComments.IsShadow(cell.GetComment()))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: {cell.Address} carries a threaded comment, which excludes a plain note.",
+                    "Reply to the thread instead ({op:add, type:reply, path:/Sheet/comment[@id=…]}); " +
+                    "run 'aioffice read --view comments' to find its path.");
+            }
+
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"ops[{index}]: {cell.Address} already has a note.",
@@ -117,13 +126,26 @@ public sealed partial class ExcelHandler
                 "Run 'aioffice read --view structure' to list noted cells.");
         }
 
+        if (ExcelComments.IsShadow(cell.GetComment()))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: {cell.Address} carries a threaded comment, not a note.",
+                "Remove the whole thread via its comment path ({op:remove, path:/Sheet/comment[@id=…]}); " +
+                "run 'aioffice read --view comments' to find it.");
+        }
+
         cell.Clear(XLClearOptions.Comments);
         return new { op = "remove", path, removed = "note" };
     }
 
-    /// <summary>The note block for cell get; null (omitted on the wire) when the cell has none.</summary>
+    /// <summary>
+    /// The note block for cell get; null (omitted on the wire) when the cell
+    /// has none. A threaded comment's legacy shadow is NOT a note — it shows
+    /// under <c>comment</c> instead (M5 note-vs-comment distinction).
+    /// </summary>
     private static object? NoteInfo(IXLCell cell) =>
-        cell.HasComment
+        cell.HasComment && !ExcelComments.IsShadow(cell.GetComment())
             ? new
             {
                 text = cell.GetComment().Text,
@@ -131,11 +153,11 @@ public sealed partial class ExcelHandler
             }
             : null;
 
-    /// <summary>Every noted cell on a sheet, for read --view structure.</summary>
+    /// <summary>Every noted cell on a sheet, for read --view structure (comment shadows excluded).</summary>
     private static List<object> NoteList(IXLWorksheet sheet) =>
         [.. sheet
             .CellsUsed(XLCellsUsedOptions.All)
-            .Where(c => c.HasComment)
+            .Where(c => c.HasComment && !ExcelComments.IsShadow(c.GetComment()))
             .Select(c => new
             {
                 cell = c.Address.ToString(),

@@ -9,7 +9,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] ReadViews =
-        ["text", "outline", "stats", "structure", "revisions", "comments", "styles"];
+        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown"];
 
     public Envelope Read(CommandContext ctx)
     {
@@ -20,7 +20,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use --view text, outline, stats, structure, revisions, comments or styles.",
+                "Use --view text, outline, stats, structure, revisions, comments, styles or markdown.",
                 candidates: ReadViews);
         }
 
@@ -39,6 +39,7 @@ public sealed partial class WordHandler
                 "revisions" => RevisionsView(doc),
                 "comments" => CommentsView(doc),
                 "styles" => StylesView(doc),
+                "markdown" => MarkdownView(doc, body),
                 _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 
@@ -222,11 +223,11 @@ public sealed partial class WordHandler
     {
         var headers = WordAddress.HeaderFooterRoots(doc)
             .Where(r => r.Type == "header")
-            .Select(r => Describe(r.Element, r.CanonicalPath, r.Type, 0))
+            .Select(DescribeHeaderFooter)
             .ToList();
         var footers = WordAddress.HeaderFooterRoots(doc)
             .Where(r => r.Type == "footer")
-            .Select(r => Describe(r.Element, r.CanonicalPath, r.Type, 0))
+            .Select(DescribeHeaderFooter)
             .ToList();
 
         var bookmarks = EnumerateBookmarks(doc)
@@ -261,6 +262,23 @@ public sealed partial class WordHandler
                 children = depth < maxDepth
                     ? children.Select(c => Describe(c.Element, c.CanonicalPath, c.Type, depth + 1)).ToList()
                     : null,
+            };
+        }
+
+        // Header/footer roots additionally carry their variant (default | firstPage | even).
+        object DescribeHeaderFooter(ResolvedNode root)
+        {
+            var part = OwningPart(doc, root.Element);
+            var children = DirectAddressableChildren(root.Element, root.CanonicalPath);
+            var snippet = root.Element.InnerText;
+            return new
+            {
+                type = root.Type,
+                path = root.CanonicalPath,
+                variant = part is null ? null : WordAddress.HeaderFooterVariantOf(doc, part) ?? "unreferenced",
+                text = snippet.Length > 60 ? snippet[..60] + "…" : (snippet.Length > 0 ? snippet : null),
+                childCount = children.Count,
+                children = children.Select(c => Describe(c.Element, c.CanonicalPath, c.Type, 1)).ToList(),
             };
         }
     }

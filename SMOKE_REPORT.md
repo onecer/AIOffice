@@ -684,3 +684,141 @@ Release automation landed with this milestone: pushing a `v*` tag runs `.github/
 - The document-wide `"/"` scope is a replace-only carve-out in `EditOp.ParseBatch`; `"/"` still does not resolve for get/set ops (DocPath requires ≥1 segment — the office_get schema's "/" mention predates this and remains aspirational).
 - xlsx in-place streaming **writes** for big existing sheets still load the ClosedXML DOM (M5 seed); only bulk writes into blank sheets stream.
 - M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in M4.5; carry to M5.
+
+---
+
+# AIOffice 0.6.0 (M5) — Integration Smoke Report
+
+Date: 2026-06-12 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+All commands below were actually executed; outputs are trimmed but real.
+Theme: the **markdown/csv bridge** — `create --from` + `read --view markdown|csv` — plus deep tables, fields, header variants, data validation, sparklines, threaded comments, hyperlinks, pptx tables, emphasis/exit animations, comment replies, SmartArt read.
+
+## M5.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+已成功生成。 0 个警告 0 个错误
+```
+
+No integration drift this round: the parallel M5 feature work (Word markdown import/export + deep tables + fields + header variants, Excel csv + dataValidation + sparklines + threaded comments + hyperlinks, Pptx tables + animation expansion + replies + SmartArt) built and tested green as handed over. Integrator additions: `IFormatHandler.CreateFrom` default interface hook (additive; non-importing formats refuse with `unsupported_feature`), `AIOffice.Mcp.Bridge` (shared CLI/MCP `--from` routing + import matrix + bridge-view guard), CLI `--from`/`--sheet` plumbing, MCP `office_create.from` + `office_read` view/sheet schema, schema/help refresh, Markdig in THIRD-PARTY-NOTICES.
+
+One honest correction along the way: Markdig's license is **BSD-2-Clause**, not MIT as the milestone brief said — the notices entry records the real license (verified from the nuspec).
+
+## M5.2 Tests — PASS (1053/1053 across 7 projects)
+
+```
+$ dotnet test AIOffice.sln
+AIOffice.Core.Tests     112 passed
+AIOffice.Word.Tests     300 passed   (+62: markdown bridge round-trips, deep tables, fields, header/footer variants)
+AIOffice.Excel.Tests    260 passed   (+44: csv bridge, dataValidation, sparklines, threaded comments, hyperlinks)
+AIOffice.Pptx.Tests     264 passed   (+64: tables, emphasis/exit animations, comment replies, SmartArt)
+AIOffice.Mcp.Tests       62 passed   (+12 BridgeTests: --from routing + matrix errors, sandbox/file_not_found on source,
+                                      default-hook unsupported_feature, bridge-view guard, create-from + dataValidation
+                                      + csv view over a REAL in-process MCP wire; tools/list still 14)
+AIOffice.Preview.Tests   24 passed
+AIOffice.Render.Tests    31 passed
+```
+
+Token budget test still green: the 14-tool surface (now with `from`, markdown/csv views, `sheet`, and the field/dataValidation/sparkline/reply type vocabulary) measures ≈ 2082 tokens of the 3500 budget — no assertion change needed.
+
+## M5.3 docx smoke (temp workspace /tmp/aioffice-m5-smoke) — PASS
+
+```
+$ write notes.md  (h1 + bold/italic/inline-code/link + nested bullets + two-level numbered list + pipe table + code block)
+$ aioffice create report.docx --from notes.md
+  → {"created":"…/report.docx","kind":"docx","source":"…/notes.md","format":"markdown"}        ✓
+$ read --view outline  → "Q2 Operations Report" + Highlights/Action items/Numbers headings      ✓
+$ read --view markdown → full GFM back: # h1, ## h2, **bold**, [docs link](…), "- one",
+  4-space nested sub-bullets, "1. Ship M5" + nested "1. word-sample.docx", | Region | Q1 | Q2 |,
+  fenced code block, final paragraph                                                            ✓ structure round-trips
+$ validate → {"valid":true,"count":0}                                                           ✓
+$ edit: add 4x4 table → set table[2] borders=all headerRow=true columnWidths=[4cm,3cm,3cm,3cm]
+        set tr[1]/tc[1] mergeRight:2 · tr[2]/tc[1] mergeDown:2
+$ render --to html → <td … colspan="2">Spanning header</td> · <td … rowspan="2">Tall cell</td>  ✓ real spans
+$ validate → valid:true                                                                         ✓
+$ edit: add /header[firstPage] "Q2 Operations — cover" + footer fields pageNumber/numPages
+$ get /header[firstPage] → {"variant":"firstPage","text":"Q2 Operations — cover"}               ✓
+$ get /footer[1]/p[1]    → {"text":"Page 1 of 1","fields":["pageNumber","numPages"]}            ✓ Page X of Y
+$ read --view structure → headers/footers/tables all listed with canonical paths · validate → 0 ✓
+```
+
+## M5.4 xlsx smoke — PASS
+
+```
+$ orders.csv: header + 007,"Acme, Inc.",2026-06-12,1234.5 + 042,Globex,2026-06-13,99
+$ aioffice create orders.xlsx --from orders.csv
+  → {"kind":"xlsx","sheet":"Sheet1","delimiter":",","rows":3,"columns":4,"cells":12}            ✓
+$ get /Sheet1/A2 → {"value":"007","type":"text"}                                                ✓ leading zero kept
+$ read --view csv → code,customer,date,total\r\n007,"Acme, Inc.",2026-06-12,1234.5\r\n042,…     ✓ semantically equal (RFC 4180 CRLF, quotes back)
+$ edit: dataValidation list ["Open","Paid","Refunded"] on E2:E10 + wholeNumber between 0..100000 on D2:D10
+$ read --view structure → dataValidations: [{path:/Sheet1/dataValidation[1],dvKind:list,values:[…]},
+                                            {…dataValidation[2],dvKind:wholeNumber,operator:between}]  ✓ 2 rules
+$ validate → valid:true                                                                         ✓
+$ add comment on /Sheet1/B2 (author Reviewer) → path /Sheet1/comment[@id=B1B71570-…]            ✓ thread root (GUID id)
+$ add reply on that path (author Author) → {"replies":1}
+$ read --view comments → one thread: root "Is this the right customer?" + reply
+  "Yes — confirmed with sales." nested under replies                                            ✓ thread shape
+$ add sparkline /Sheet1/F2 (column, D2:D3) → /Sheet1/sparkline[1] · validate → valid:true       ✓
+$ edit: set G1 hyperlink=https://example.com/docs (+tooltip) · G2 hyperlink=#Notes!A1 (internal, sheet added in same batch)
+$ get G1/G2 → both hyperlinks read back · validate → valid:true                                 ✓
+```
+
+## M5.5 pptx smoke — PASS
+
+```
+$ create deck.pptx --title "M5 deck"
+$ add table 3x4 headerRow style=medium on /slide[1] → /slide[1]/table[1]
+  set tr[1]/tc[1] {"text":"Merged header","mergeRight":2}   (pptx merge counts = cells to ABSORB)
+$ render --to svg --scope /slide[1] → 10 elements carry data-aio-path="/slide[1]/table[1]…"     ✓ grid drawn
+$ add animation pulse + fadeOut(0.5s) on the title shape
+$ read --view structure → animations in play order:
+  [{path:/slide[1]/animation[1],class:"emphasis",effect:"pulse"},
+   {path:/slide[1]/animation[2],class:"exit",effect:"fadeOut",duration:"0.5s"}]                 ✓
+$ add comment (Reviewer) → /slide[1]/comment[@id=1]; add reply on it (Author) → comment[@id=2]
+$ read --view comments → thread: "Tighten the title" + nested reply "Done." with parentId:1     ✓ p15 threading
+$ validate → valid:true                                                                         ✓
+```
+
+## M5.6 MCP wire — PASS
+
+```
+$ aioffice mcp --workspace /tmp/aioffice-m5-smoke   (JSON-RPC over stdio, python driver)
+initialize → serverInfo {"name":"aioffice","version":"0.6.0"}
+tools/list → 14 tools (unchanged count); office_create.inputSchema now has "from"                ✓
+tools/call office_create {"file":"wire.xlsx","from":"orders.csv"}
+  → ok:true {"kind":"xlsx","sheet":"Sheet1","delimiter":",","rows":3,"columns":4,"cells":12}     ✓ import over the wire
+tools/call office_edit {"file":"wire.xlsx","ops":[{"op":"add","path":"/Sheet1/D2:D10",
+  "type":"dataValidation","props":{"kind":"list","values":["Open","Paid"]}}]}
+  → ok:true [{"path":"/Sheet1/dataValidation[1]","dvKind":"list","range":"D2:D10"}]              ✓ dataValidation over the wire
+tools/call office_read {"file":"wire.xlsx","view":"csv"} → first line "sku,qty"                  ✓ csv view over the wire
+```
+
+## M5.7 Manual-check fixtures regenerated (for a human in real Office)
+
+- `report.docx` (+ its source `notes.md`) — created **from markdown** (`create --from notes.md`), then a second deep table (merged 4-col header, mergeDown cell with shading, full borders, column widths), a **first-page-only header**, an all-pages header, and a **"Page X of Y"** field footer. validate: 0. Check: heading styles from markdown, the table spans, and that page 2 shows the regular header while page 1 shows the cover header.
+- `orders.xlsx` (+ its source `orders.csv`) — imported **from csv** (leading-zero `007`/`042`/`113` codes must show as text, left-aligned), **status dropdown** on H2:H10 (please check the dropdown arrows appear in Excel), wholeNumber rule on the quarters, a **line/column/winLoss sparkline** per row in column I, a **threaded comment + reply** on B2, and a hyperlink in J1. validate: 0.
+- `deck.pptx` — **native 3x4 table** with a merged 3-column header and the *medium* style (please check the table looks right in PowerPoint — header fill + banded rows), a **pulse** emphasis shape and a **fadeOut** exit shape (run the slideshow to see both), and a **comment thread** (root + reply). validate: 0.
+
+## M5.8 Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice → 38,067,433 bytes (36.3 MiB; 0.5.0 was 37,792,009 — M5 adds ≈269 KB, mostly Markdig)
+$ aioffice doctor → version 0.6.0 · handlers docx/xlsx/pptx all ready
+$ md loop:  notes.md → create loop.docx --from notes.md → read --view markdown
+  → "# Binary Smoke" + "## Loop" + "**one**" + "| a | b |" all round-trip → validate valid:true ✓
+$ csv loop: orders.csv ("007","A, B",12.5) → create loop.xlsx --from orders.csv
+  → get A2 {"value":"007","type":"text"} → read --view csv → 007,"A, B",12.5 → validate true    ✓
+```
+
+## M5.9 Honest limits introduced/kept in M5
+
+- **Merge-count semantics differ by format** (each side pinned by its own tests): docx `mergeRight/mergeDown` is the resulting TOTAL span (1 = unmerge); pptx counts the cells to ABSORB (`mergeRight:1` → span 2). `office_help docx/table` and `pptx/table` both spell this out.
+- The markdown bridge round-trips **structure**, not bytes: code-block language hints are dropped on export (` ``` ` without the language), inline code in the HTML render is plain text, and raw HTML blocks degrade to warnings on import.
+- csv import routes only `.csv`/`.tsv` at the command layer (the documented matrix); the Excel handler itself also accepts `.txt` when called directly — kept off the public matrix on purpose.
+- `read --view csv` emits CRLF line endings (RFC 4180) regardless of the source file's endings — semantically equal, not byte-equal.
+- pptx animation expansion covers 4 emphasis + 3 exit presets; the full upstream preset set (15 emphasis + 16 exit), effect chains and motion paths stay deep water (M6 seed: timeline editing).
+- SmartArt is **read-only**; edits answer `unsupported_feature` naming the diagram part. Modern pptx threaded-comment *part* (p188) still unshipped — M5 replies thread classic comments via p15.
+- xlsx in-place streaming **writes** for big existing sheets still load the ClosedXML DOM (M6 seed); the csv import reuses the M4 blank-sheet SAX path.
+- MCP `office_create {overwrite:true}` on an existing file still hits the handler's "File already exists" guard (pre-existing M0 behavior, applies to `from` too) — delete first or pick a new name; carry to M6.
+- M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in M5.3/M5.4; carry to M6.

@@ -23,10 +23,11 @@ public static class ToolCatalog
     [
         Make(
             "office_create",
-            "Create a blank .docx/.xlsx/.pptx inside the workspace; kind inferred from the extension.",
+            "Create a blank .docx/.xlsx/.pptx inside the workspace (kind inferred from the extension), or import one via 'from' (markdown→docx, csv→xlsx).",
             """
             {"type":"object","properties":{
               "file":{"type":"string","description":"Target path ending in .docx/.xlsx/.pptx, inside workspace"},
+              "from":{"type":"string","description":"Import source: .md/.markdown -> .docx (headings/lists/tables/links/code), .csv/.tsv -> .xlsx (typed cells; leading-zero codes stay text). Mismatched pairs fail with the valid matrix"},
               "kind":{"type":"string","enum":["docx","xlsx","pptx"],"description":"Override when extension is non-standard"},
               "title":{"type":"string","description":"Document title written to core properties"},
               "overwrite":{"type":"boolean","default":false}},
@@ -38,9 +39,10 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "view":{"type":"string","enum":["outline","text","stats","structure","revisions","comments","styles"],"default":"outline",
-                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only"},
-              "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx"},
+              "view":{"type":"string","enum":["outline","text","stats","structure","revisions","comments","styles","markdown","csv"],"default":"outline",
+                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only; markdown: docx body as GFM markdown (round-trips office_create from); csv: one xlsx sheet as RFC-4180 csv"},
+              "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx; csv view also takes 'A1:C10'"},
+              "sheet":{"type":"string","description":"csv view: sheet name (default: first sheet)"},
               "max_bytes":{"type":"integer","description":"Cap payload size; truncation reported in meta.warnings and data.truncated"}},
              "required":["file"]}
             """),
@@ -74,9 +76,9 @@ public static class ToolCatalog
                   "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject"],
                     "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\""},
-                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation"},
+                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation, field, dataValidation, sparkline"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
-                    "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
+                    "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
                   "position":{"type":["integer","string"],
                     "description":"add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append"}},
                  "required":["op","path"]}},

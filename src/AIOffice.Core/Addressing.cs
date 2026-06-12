@@ -61,6 +61,9 @@ public sealed record PathSegment
     /// <summary>Stable-id selector value for <c>element[@id=…]</c> / <c>element[@name=…]</c> segments (e.g. shape[@id=7], revision[@id=3], bookmark[@name=Results]); null otherwise.</summary>
     public string? Id { get; init; }
 
+    /// <summary>Named-variant selector for the fixed variant vocabulary (docx M5 <c>header[firstPage]</c>, <c>footer[even]</c>); null otherwise.</summary>
+    public string? Variant { get; init; }
+
     /// <summary>The attribute the id selector matched on: "id" (default) or "name" (e.g. bookmark[@name=Results]); null for non-id segments.</summary>
     public string? IdAttribute { get; init; }
 
@@ -74,11 +77,13 @@ public sealed record PathSegment
     {
         PathSegmentKind.Element => Id is { } id
             ? string.Create(CultureInfo.InvariantCulture, $"{Name}[@{IdAttribute ?? "id"}={id}]")
-            : Letter is { } letter
-                ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{letter}]")
-                : Index is { } i
-                    ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
-                    : Name!,
+            : Variant is { } variant
+                ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{variant}]")
+                : Letter is { } letter
+                    ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{letter}]")
+                    : Index is { } i
+                        ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
+                        : Name!,
         PathSegmentKind.Name => Quote(Name!),
         PathSegmentKind.Cell => Start!.Value.ToString(),
         PathSegmentKind.Range => $"{Start!.Value}:{End!.Value}",
@@ -112,6 +117,11 @@ public sealed partial record DocPath
 
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name)=([A-Za-z0-9_.-]+)\]$")]
     private static partial Regex IdElement();
+
+    // Named variants are a closed vocabulary (docx M5 header/footer types), so
+    // arbitrary words in brackets (p[abc]) stay rejected as malformed indices.
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[(default|firstPage|even)\]$")]
+    private static partial Regex NamedVariantElement();
 
     [GeneratedRegex(@"^([A-Z]{1,3})([0-9]{1,7})$")]
     private static partial Regex CellPattern();
@@ -246,6 +256,17 @@ public sealed partial record DocPath
                 Name = byId.Groups[1].Value,
                 IdAttribute = byId.Groups[2].Value,
                 Id = byId.Groups[3].Value,
+            };
+        }
+
+        var variant = NamedVariantElement().Match(raw);
+        if (variant.Success)
+        {
+            return new PathSegment
+            {
+                Kind = PathSegmentKind.Element,
+                Name = variant.Groups[1].Value,
+                Variant = variant.Groups[2].Value,
             };
         }
 

@@ -258,7 +258,7 @@ public sealed class EditTests : IDisposable
     public void AddUnsupportedType_IsTypedUnsupportedFeature()
     {
         Create();
-        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("add", "/slide[1]", type: "table")]);
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("add", "/slide[1]", type: "video")]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
         Assert.Equal(ExitCodes.UnsupportedFeature, envelope.ExitCode);

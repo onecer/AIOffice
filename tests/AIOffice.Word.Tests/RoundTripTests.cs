@@ -170,6 +170,57 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the M5 surface: merged/styled tables, fldSimple
+    /// fields, first-page/even headers (titlePg + settings) must survive a
+    /// no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_m5_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "M5 round trip");
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"table","props":{"rows":3,"columns":3}},
+              {"op":"set","path":"/body/table[1]","props":{"borders":"outer","shading":"F7F7F7","headerRow":true,"columnWidths":["3cm","3cm","3cm"],"width":"100%","alignment":"center","cellPaddingCm":0.15}},
+              {"op":"set","path":"/body/table[1]/tr[2]/tc[1]","props":{"mergeRight":2}},
+              {"op":"set","path":"/body/table[1]/tr[2]/tc[2]","props":{"mergeDown":2}},
+              {"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"valign":"center"}},
+              {"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"date","format":"yyyy-MM-dd"}},
+              {"op":"add","path":"/header[firstPage]","type":"header","props":{"text":"First"}},
+              {"op":"add","path":"/footer[even]","type":"footer","props":{"text":"Even"}},
+              {"op":"add","path":"/footer[1]","type":"footer","props":{"text":"Page "}},
+              {"op":"add","path":"/footer[default]/p[1]","type":"field","props":{"kind":"pageNumber"}},
+              {"op":"add","path":"/footer[default]/p[1]","type":"field","props":{"kind":"numPages","leadingText":" of "}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body;
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            _ = doc.MainDocumentPart.DocumentSettingsPart?.Settings;
+            foreach (var headerPart in doc.MainDocumentPart.HeaderParts)
+            {
+                _ = headerPart.Header;
+            }
+
+            foreach (var footerPart in doc.MainDocumentPart.FooterParts)
+            {
+                _ = footerPart.Footer;
+            }
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

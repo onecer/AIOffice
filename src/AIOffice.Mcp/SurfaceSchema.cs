@@ -36,21 +36,25 @@ public static class SurfaceSchema
 
     private static readonly IReadOnlyList<VerbInfo> Verbs =
     [
-        Verb("create", "Create a blank document; kind inferred from the extension.", "office_create",
+        Verb("create", "Create a blank document (kind inferred from the extension), or import via --from (md→docx, csv→xlsx).", "office_create",
             [("file", "target path ending in .docx/.xlsx/.pptx"),
+             ("--from", "import source: .md/.markdown → .docx, .csv/.tsv → .xlsx; mismatched pairs → invalid_args with the matrix"),
              ("--kind", "docx|xlsx|pptx, overrides extension inference"),
              ("--title", "document title written to core properties"),
              ("--overwrite", "replace an existing file")],
             [ErrorCodes.InvalidArgs, ErrorCodes.SandboxDenied, ErrorCodes.UnsupportedFeature, ErrorCodes.InternalError],
-            [("aioffice create out/q4.pptx --title 'Q4 Review'", "kind pptx inferred from extension")]),
+            [("aioffice create out/q4.pptx --title 'Q4 Review'", "kind pptx inferred from extension"),
+             ("aioffice create report.docx --from notes.md", "markdown bridge: headings/lists/tables/links/code become real docx")]),
 
-        Verb("read", "Read a document as outline, plain text, stats or full structure tree.", "office_read",
+        Verb("read", "Read a document as outline, plain text, stats, full structure tree, markdown (docx) or csv (xlsx).", "office_read",
             [("file", "document path"),
-             ("--view", "outline|text|stats|structure (default outline)"),
-             ("--range", "scope 'a..b' (1-based): paragraphs/slides/rows"),
+             ("--view", "outline|text|stats|structure (default outline); docx adds revisions|comments|styles|markdown; xlsx adds csv"),
+             ("--range", "scope 'a..b' (1-based): paragraphs/slides/rows; csv view also takes A1:C10"),
+             ("--sheet", "csv view: sheet name (default first)"),
              ("--max-bytes", "cap payload; truncation flagged in warnings")],
-            [ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.InvalidArgs],
-            [("aioffice read report.docx --view outline", "headings/tables skeleton with canonical paths")]),
+            [ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.InvalidArgs, ErrorCodes.UnsupportedFeature],
+            [("aioffice read report.docx --view outline", "headings/tables skeleton with canonical paths"),
+             ("aioffice read report.docx --view markdown", "the whole body back as GFM markdown")]),
 
         Verb("query", "Find elements with a CSS-like selector; returns canonical paths.", "office_query",
             [("file", "document path"),

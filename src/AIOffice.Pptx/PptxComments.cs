@@ -4,6 +4,7 @@ using AIOffice.Core;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using P = DocumentFormat.OpenXml.Presentation;
+using P15 = DocumentFormat.OpenXml.Office2013.PowerPoint;
 
 namespace AIOffice.Pptx;
 
@@ -12,7 +13,9 @@ namespace AIOffice.Pptx;
 /// compatibility: one deck-wide commentAuthors part (p:cmAuthorLst, deduplicated
 /// by name) plus one comments part per slide (p:cmLst of p:cm). Comment ids
 /// (p:cm/@idx) are kept globally unique so /slide[i]/comment[@id=N] is stable.
-/// Replies are reserved for M5.
+/// Replies are threaded the way PowerPoint 2013+ does it on classic parts: a
+/// reply is a p:cm whose extLst carries p15:threadingInfo/p15:parentCm pointing
+/// at the parent's authorId + idx.
 /// </summary>
 internal static class PptxComments
 {
@@ -20,6 +23,11 @@ internal static class PptxComments
     public const string DefaultAuthor = "AIOffice";
 
     private static readonly IReadOnlyList<string> AddProps = ["text", "author", "x", "y"];
+
+    private static readonly IReadOnlyList<string> ReplyProps = ["text", "author"];
+
+    /// <summary>PowerPoint's extension uri for p15 comment threading info.</summary>
+    private const string ThreadingExtensionUri = "{C676402C-5697-4E1C-873F-D02D1690AC5C}";
 
     // ----- add ---------------------------------------------------------------------
 
@@ -32,7 +40,11 @@ internal static class PptxComments
             if (string.Equals(key, "replyTo", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(key, "parent", StringComparison.OrdinalIgnoreCase))
             {
-                throw RepliesUnsupported();
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Comments take no '{key}' prop; replies target the parent comment's path.",
+                    "Use {\"op\":\"add\",\"path\":\"/slide[2]/comment[@id=1]\",\"type\":\"reply\"," +
+                    "\"props\":{\"text\":\"...\"}}.");
             }
 
             if (!AddProps.Contains(key, StringComparer.Ordinal))
@@ -86,12 +98,83 @@ internal static class PptxComments
         return Units.Inv($"/slide[{address.SlideIndex}]/comment[@id={index}]");
     }
 
-    /// <summary>Replies are an M5 capability; adds targeting a comment path land here.</summary>
-    public static AiofficeException RepliesUnsupported() => new(
-        ErrorCodes.UnsupportedFeature,
-        "Comment replies are not supported yet (planned M5).",
-        "Add a top-level comment on the slide instead: {\"op\":\"add\",\"path\":\"/slide[2]\"," +
-        "\"type\":\"comment\",\"props\":{\"text\":\"...\"}}.");
+    /// <summary>
+    /// add /slide[i]/comment[@id=N] type:reply — appends a threaded reply (a
+    /// p:cm carrying p15:parentCm) and returns its own comment path.
+    /// </summary>
+    public static string AddReply(PresentationPart presentation, PptxAddress address, JsonObject? props)
+    {
+        props ??= [];
+        foreach (var (key, _) in props)
+        {
+            if (!ReplyProps.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown reply prop '{key}'.",
+                    "Reply props: text (required), author. Replies sit at their parent's anchor.",
+                    candidates: ReplyProps);
+            }
+        }
+
+        if (!props.TryGetPropertyValue("text", out var textNode) || textNode is null ||
+            J.ScalarText(textNode).Length == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "add reply requires props.text.",
+                "Pass the reply text, e.g. {\"op\":\"add\",\"path\":\"" + address.CanonicalCommentPath +
+                "\",\"type\":\"reply\",\"props\":{\"text\":\"Agreed\",\"author\":\"Riley\"}}.");
+        }
+
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var parent = Resolve(slidePart, address);
+        if (ParentIdOf(parent) is { } grandparent)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{address.CanonicalCommentPath}' is itself a reply; threads are one level deep.",
+                Units.Inv($"Reply to the thread's root instead: {address.CanonicalSlidePath}/comment[@id={grandparent}]."));
+        }
+
+        var authorName = props.TryGetPropertyValue("author", out var authorNode) && authorNode is not null &&
+            J.ScalarText(authorNode).Trim().Length > 0
+                ? J.ScalarText(authorNode).Trim()
+                : DefaultAuthor;
+        var author = EnsureAuthor(presentation, authorName);
+        var index = NextCommentIndex(presentation);
+        var parentPosition = parent.GetFirstChild<P.Position>();
+
+        var reply = new P.Comment(
+            new P.Position { X = parentPosition?.X?.Value ?? 0L, Y = parentPosition?.Y?.Value ?? 0L },
+            new P.Text(J.ScalarText(textNode)),
+            new P.CommentExtensionList(new P.CommentExtension(
+                new P15.ThreadingInfo(new P15.ParentCommentIdentifier
+                {
+                    AuthorId = parent.AuthorId?.Value ?? 0,
+                    Index = parent.Index?.Value ?? 0,
+                }))
+            {
+                Uri = ThreadingExtensionUri,
+            }))
+        {
+            AuthorId = author.Id!.Value,
+            DateTime = DateTime.UtcNow,
+            Index = index,
+        };
+
+        slidePart.SlideCommentsPart!.CommentList!.Append(reply);
+        if ((author.LastIndex?.Value ?? 0) < index)
+        {
+            author.LastIndex = index;
+        }
+
+        return Units.Inv($"/slide[{address.SlideIndex}]/comment[@id={index}]");
+    }
+
+    /// <summary>The parent comment idx a reply points at (p15:parentCm); null for root comments.</summary>
+    public static uint? ParentIdOf(P.Comment comment) =>
+        comment.Descendants<P15.ParentCommentIdentifier>().FirstOrDefault()?.Index?.Value;
 
     /// <summary>The deck's author entry for a name (case-insensitive dedup), created on first use.</summary>
     private static P.CommentAuthor EnsureAuthor(PresentationPart presentation, string name)
@@ -181,32 +264,42 @@ internal static class PptxComments
                 Units.Inv($"{address.CanonicalSlidePath}/comment[@id={c.Index?.Value}]"))]);
     }
 
+    /// <summary>The replies threaded under a comment, in document (idx) order.</summary>
+    public static List<P.Comment> RepliesOf(SlidePart slidePart, uint parentId) =>
+        [.. Comments(slidePart).Where(c => ParentIdOf(c) == parentId)];
+
     /// <summary>The `get` projection for /slide[i]/comment[@id=N].</summary>
     public static object Detail(PresentationPart presentation, PptxAddress address)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var comment = Resolve(slidePart, address);
-        return Project(presentation, comment, address.SlideIndex);
+        return Project(presentation, slidePart, comment, address.SlideIndex);
     }
 
-    /// <summary>The `read --view comments` projection: every comment across the deck's slides.</summary>
+    /// <summary>The `read --view comments` projection: root comments per slide with nested replies.</summary>
     public static object CommentsView(PresentationPart presentation, IEnumerable<(int Index, SlidePart Part)> slides)
     {
         var rows = new List<object>();
         foreach (var (index, slidePart) in slides)
         {
-            rows.AddRange(Comments(slidePart).Select(comment => Project(presentation, comment, index)));
+            rows.AddRange(Comments(slidePart)
+                .Where(comment => ParentIdOf(comment) is null)
+                .Select(comment => Project(presentation, slidePart, comment, index)));
         }
 
         return new { View = "comments", Count = rows.Count, Comments = rows };
     }
 
-    private static object Project(PresentationPart presentation, P.Comment comment, int slideIndex)
+    private static object Project(PresentationPart presentation, SlidePart slidePart, P.Comment comment, int slideIndex)
     {
         var author = presentation.CommentAuthorsPart?.CommentAuthorList?
             .Elements<P.CommentAuthor>()
             .FirstOrDefault(a => a.Id?.Value == comment.AuthorId?.Value);
         var position = comment.GetFirstChild<P.Position>();
+        var parentId = ParentIdOf(comment);
+        List<P.Comment> replies = parentId is null && comment.Index?.Value is { } id
+            ? RepliesOf(slidePart, id)
+            : [];
         return new
         {
             Path = Units.Inv($"/slide[{slideIndex}]/comment[@id={comment.Index?.Value}]"),
@@ -218,16 +311,32 @@ internal static class PptxComments
             X = position?.X?.Value is { } x ? Units.EmuToCm(x) : (double?)null,
             Y = position?.Y?.Value is { } y ? Units.EmuToCm(y) : (double?)null,
             Date = comment.DateTime?.Value.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+            ParentId = parentId,
+            ParentPath = parentId is { } pid ? Units.Inv($"/slide[{slideIndex}]/comment[@id={pid}]") : null,
+            Replies = replies.Count == 0
+                ? null
+                : replies.Select(reply => Project(presentation, slidePart, reply, slideIndex)).ToList(),
         };
     }
 
     // ----- remove ---------------------------------------------------------------------
 
-    /// <summary>remove /slide[i]/comment[@id=N]: drops the comment (and the part when it empties).</summary>
+    /// <summary>
+    /// remove /slide[i]/comment[@id=N]: drops the comment — replies individually,
+    /// roots together with their replies (and the part when it empties).
+    /// </summary>
     public static string Remove(PresentationPart presentation, PptxAddress address)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var comment = Resolve(slidePart, address);
+        if (ParentIdOf(comment) is null && comment.Index?.Value is { } id)
+        {
+            foreach (var reply in RepliesOf(slidePart, id))
+            {
+                reply.Remove(); // a root takes its thread with it; replies never orphan
+            }
+        }
+
         comment.Remove();
 
         if (slidePart.SlideCommentsPart is { } part &&

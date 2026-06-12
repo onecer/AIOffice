@@ -154,7 +154,7 @@ public sealed class CommentTests : IDisposable
     }
 
     [Fact]
-    public void Reply_OnCommentPath_IsTypedUnsupported()
+    public void AddComment_OnCommentPath_PointsAtTypeReply()
     {
         CreateDeck();
         AddComment("/slide[2]", "root comment");
@@ -163,8 +163,8 @@ public sealed class CommentTests : IDisposable
             "add", "/slide[2]/comment[@id=1]", type: "comment",
             props: TestEnv.Props(("text", "a reply")))]);
 
-        var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Contains("M5", error.Message, StringComparison.Ordinal);
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        Assert.Contains("reply", error.Suggestion, StringComparison.Ordinal);
     }
 
     [Fact]

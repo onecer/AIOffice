@@ -67,9 +67,21 @@ public sealed partial class ExcelHandler
                     {
                         var bold = cell.Style.Font.Bold;
                         var italic = cell.Style.Font.Italic;
+                        var hyperlink = cell.HasHyperlink ? cell.GetHyperlink() : null;
                         sb.Append("<td data-aio-path=\"");
                         ExcelValues.AppendEscaped(sb, ExcelPaths.CellPath(sheet, cell.Address));
                         sb.Append("\">");
+                        if (hyperlink is not null)
+                        {
+                            sb.Append("<a href=\"");
+                            ExcelValues.AppendEscaped(
+                                sb,
+                                hyperlink.IsExternal
+                                    ? hyperlink.ExternalAddress.ToString()
+                                    : "#" + hyperlink.InternalAddress);
+                            sb.Append("\">");
+                        }
+
                         if (bold)
                         {
                             sb.Append("<strong>");
@@ -89,6 +101,11 @@ public sealed partial class ExcelHandler
                         if (bold)
                         {
                             sb.Append("</strong>");
+                        }
+
+                        if (hyperlink is not null)
+                        {
+                            sb.Append("</a>");
                         }
 
                         sb.Append("</td>");

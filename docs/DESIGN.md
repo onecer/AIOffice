@@ -127,28 +127,34 @@ aioffice <verb> [<file>] [args...] [flags...]
 #### `create` — 新建文档
 
 ```
-aioffice create <file> [--kind docx|xlsx|pptx] [--title <T>]
+aioffice create <file> [--from <source>] [--kind docx|xlsx|pptx] [--title <T>]
 ```
 
 - `--kind` 默认由扩展名推断；显式给出且与扩展名冲突 → `invalid_args`。
-- 产出最小合法文档：docx = 空 body + 默认样式部件；xlsx = 单 `Sheet1`；pptx = 单标题版式空白演示。`--title` 写入 core properties（及 pptx 首页标题占位符）。
+- 产出最小合法文档：docx = 空 body + 默认样式部件；xlsx = 单 `Sheet1`；pptx = 单标题版式空白演示。`--title` 写入 core properties（及 pptx 首页标题占位符 / xlsx 首 sheet 名）。
 - 文件已存在 → `invalid_args`（suggestion 提示换名或先删除；v0 刻意不提供 `--force`，破坏性默认是错误的）。
+- **M5 导入桥** `--from <source>`：按**源扩展名**路由——`.md`/`.markdown` → docx 导入器（Markdig GFM：标题/列表/表格/链接/代码/图片）、`.csv`/`.tsv` → xlsx 导入器（RFC 4180，类型化单元格，前导零保文本）；源/目标不匹配 → `invalid_args` 且 suggestion 给全矩阵；源路径必经 workspace 沙箱。处理器侧钩子是 `IFormatHandler.CreateFrom(ctx, sourcePath)` 的**默认接口实现**（额外能力增量加入，无导入器格式默认 `unsupported_feature`），命令层路由在 `AIOffice.Mcp.Bridge`（CLI create 与 MCP office_create 共用）。
 
 ```bash
 aioffice create report.docx --title "Q3 Review"
 # => { "ok": true, "data": { "file": "report.docx", "kind": "docx" }, "meta": { "rev": "..." } }
+aioffice create report.docx --from notes.md      # markdown -> docx
+aioffice create orders.xlsx --from orders.csv    # csv -> xlsx
 ```
 
 #### `read` — 整体读取
 
 ```
-aioffice read <file> [--view outline|text|stats|structure] [--range a..b] [--max-bytes N]
+aioffice read <file> [--view outline|text|stats|structure|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]
 ```
 
 - `--view outline`（默认）：标题树 / sheet 清单 / slide 标题清单。
 - `--view text`：纯文本线性化（docx 段落、xlsx 单元格值 TSV 风格、pptx 形状文本）。
 - `--view stats`：计数面板（段落/字数/sheet/行列已用区域/slide/shape 数、part 数、文件大小）。
 - `--view structure`：浅层节点树（带规范路径），是 AI 后续 `get`/`edit` 的地址来源之一。
+- `--view markdown`（M5，docx 专属）：body 导出为 GFM markdown，与 `create --from` 导入结构 round-trip。
+- `--view csv`（M5，xlsx 专属）：单 sheet 以 RFC 4180 csv 导出，`--sheet` 选表（缺省首个）、`--range A1:C10` 限窗。
+- 桥接视图用错格式（如对 xlsx 要 markdown）→ `unsupported_feature`，suggestion 列出该格式的全部有效视图（命令层 `Bridge.GuardBridgeView`，CLI 与 MCP 共用）。
 - `--range a..b`：限定输出窗口（docx 段落序号、xlsx 行号、pptx slide 序号），1-based 闭区间。
 - `--max-bytes N`：输出 data 超限即截断并在 `meta.warnings` 标注 `truncated`。
 
@@ -586,9 +592,20 @@ public sealed class AiofficeError : Exception
 - ✅ 发版自动化：`.github/workflows/release.yml` —— push `v*` tag → build -warnaserror → 全量 test → 6 rid 单文件 self-contained publish → `SHA256SUMS` → `gh release create`（说明由 `scripts/release-notes-template.md` 渲染）。
 - ⏭ 留给 M5 的种子：pptx 批注回复、xlsx 现代线程批注、大工作簿**就地写入**流式、插件机制、SmartArt 读取、动画预设扩容（强调/退出/motion path）、数据验证、连接线/组合。
 
-### M5 — 能力深化（规划）
+### M5 — markdown/csv 桥 + 能力深化（已交付，v0.6.0）
 
-- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M5 窗口），或显式标记"不做 + 理由"。
+- ✅ **markdown/csv 桥**（AI 原生旗舰）：`IFormatHandler` 增量获得 `CreateFrom(ctx, sourcePath)` 默认接口实现（无导入器格式 = `unsupported_feature` + workaround）；命令层路由器 `AIOffice.Mcp.Bridge`（CLI `create --from` 与 MCP `office_create.from` 共用）按源扩展名路由并校验导入矩阵（`.md/.markdown → .docx，.csv/.tsv → .xlsx`），源路径先过沙箱再进 handler。
+  - docx 导入：Markdig（BSD-2-Clause）GFM AST 走查——标题→Heading 样式、粗/斜/删/行内代码 run、嵌套列表（复用 M3 编号机制）、管道表格（表头加粗）、链接/图片（沙箱解析）/引用/代码块/分隔线；raw HTML 与缺图降级 warning。导出：`read --view markdown` 把 body 写回 GFM，结构与导入 round-trip（测试钉死）。
+  - xlsx 导入：RFC 4180 解析（引号/嵌入逗号换行）、分隔符嗅探（`, ; tab |`）或 `delimiter` 强制；类型化与单格 set 一致，**前导零码保文本**；>50k 单元格复用 M4 SAX 流式写。导出：`read --view csv [--sheet][--range]`。
+  - 桥接视图用错格式 → `unsupported_feature` 并列出该格式有效视图（`Bridge.GuardBridgeView`）。
+- ✅ docx：深表格（表级 borders/shading/headerRow/width/columnWidths/alignment/cellPadding + 单元格 mergeRight/mergeDown/valign，HTML 渲染真 colspan/rowspan）、域（pageNumber/numPages/date/docTitle + leadingText，「Page X of Y」页脚）、首页/奇偶页眉页脚变体（`/header[firstPage]`、`/header[even]`，自动接线 w:titlePg / w:evenAndOddHeaders）。
+- ✅ xlsx：数据验证（list 下拉——字面值或 sourceRange；wholeNumber/decimal/date/textLength + 算子；allowBlank/提示语/errorStyle）、迷你图（line/column/winLoss + color/markers，x14 extLst）、线程批注（真 xl/threadedComments + persons part，`reply` op，legacy note 退化镜像）、单元格超链接（外链/`#Sheet!A1` 内链 + tooltip）。
+- ✅ pptx：原生表格（a:tbl 手写——rows×cols/headerRow/columnWidths + light/medium/dark 直绘样式 + mergeRight/mergeDown，SVG 渲染真网格）、强调动画（pulse/grow/spin/colorPulse）与退出动画（fadeOut/flyOut/wipeOut，尾帧 hide set）、批注回复线程（p15 threadingInfo/parentCm）、SmartArt 只读（structure/get 输出连接序节点树）。
+- ⏭ 留给 M6 的种子：大工作簿**就地写入**流式、插件机制（外部格式 handler）、公式（OMML）、RTL 深化、现代 pptx 线程批注 part、动画时间轴编辑（效果链/motion path）、连接线/组合。
+
+### M6 — 能力深化（规划）
+
+- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M6 窗口），或显式标记"不做 + 理由"。
 - docx 移动修订、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景与母版编辑。
 
 ---

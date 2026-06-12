@@ -34,6 +34,23 @@ listing the supported set; capabilities not built yet answer
 | text      | string | on `tc`: cell text                     |
 | style     | string | named table style                      |
 
+Deep tables (M5) — `set` on the table:
+
+| prop          | type     | notes                                        |
+|---------------|----------|----------------------------------------------|
+| borders       | string   | all · outer · none (+ borderColor, borderWidthPt) |
+| shading       | string   | hex RGB fill                                 |
+| headerRow     | bool     | bolds row 1 + repeats it on every page       |
+| width         | length   | `"12cm"` or `"100%"`                        |
+| columnWidths  | array    | one per column, e.g. `["3cm","auto","2.5cm"]`|
+| alignment     | string   | left · center · right                       |
+| cellPaddingCm | number   | uniform cell padding                        |
+
+and `set` on a cell (`/body/table[1]/tr[1]/tc[1]`): `mergeRight: N`
+(gridSpan), `mergeDown: N` (vMerge chain; 1 unmerges), `shading`, `valign:
+top|center|bottom`. Merged-away cells disappear from `get`/`render`;
+`render --to html` emits real `colspan`/`rowspan`.
+
 ## add positions
 
 `{op:"add", path:"/body", type:"p", position:"inside"}` appends to the body;
@@ -41,7 +58,29 @@ listing the supported set; capabilities not built yet answer
 
 Headers/footers are addressable (`/header[1]/p[1]`) for read/set, and created
 with `{op:"add", path:"/header[1]", type:"header", props:{text, align?}}`
-(same for `footer`).
+(same for `footer`). M5 variants: `/header[firstPage]` and `/header[even]`
+(same for footers) — adding them wires `w:titlePg` / `w:evenAndOddHeaders`
+automatically, all three variants coexist, and `get` reports the variant.
+
+## field (M5)
+
+| prop        | type   | notes                                          |
+|-------------|--------|------------------------------------------------|
+| kind        | string | pageNumber (PAGE) · numPages (NUMPAGES) · date (DATE) · docTitle (TITLE) |
+| format      | string | date only: a format picture, e.g. `"yyyy"`     |
+| leadingText | string | literal text emitted before the field          |
+
+`'Page X of Y'` footer: add a `pageNumber` field to `/footer[1]/p[1]`, then a
+`numPages` field with `leadingText:" of "`.
+
+## markdown bridge (M5)
+
+`aioffice create report.docx --from notes.md` imports GFM markdown: headings →
+Heading styles, bold/italic/strike/code runs, nested bullet/number lists, pipe
+tables (header row bolded), links, images (sandbox-resolved), blockquotes,
+code blocks, horizontal rules; raw HTML and missing images degrade to
+`meta.warnings`. `aioffice read report.docx --view markdown` exports the body
+back as GFM — structure round-trips with the importer.
 
 ## list (M3)
 

@@ -222,12 +222,14 @@ public sealed partial class WordHandler
         return pgMar;
     }
 
-    /// <summary>CT_SectPr child order, used to insert pgSz/pgMar at their schema position.</summary>
+    /// <summary>CT_SectPr child order, used to insert pgSz/pgMar/titlePg at their schema position.</summary>
     private static readonly Type[] SectPrOrder =
     [
         typeof(HeaderReference), typeof(FooterReference), typeof(FootnoteProperties), typeof(EndnoteProperties),
         typeof(SectionType), typeof(PageSize), typeof(PageMargin), typeof(PaperSource), typeof(PageBorders),
-        typeof(LineNumberType), typeof(PageNumberType), typeof(Columns),
+        typeof(LineNumberType), typeof(PageNumberType), typeof(Columns), typeof(FormProtection),
+        typeof(VerticalTextAlignmentOnPage), typeof(NoEndnote), typeof(TitlePage), typeof(TextDirection),
+        typeof(BiDi), typeof(GutterOnRight), typeof(DocGrid), typeof(PrinterSettingsReference),
     ];
 
     private static void InsertSectionChild(SectionProperties sectPr, OpenXmlElement child)

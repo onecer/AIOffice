@@ -64,6 +64,11 @@ internal static class WordAddress
 
             case "header":
             {
+                if (root.Variant is { } headerVariant)
+                {
+                    return ResolveVariantRoot(doc, "header", headerVariant);
+                }
+
                 var headers = doc.MainDocumentPart?.HeaderParts.ToList() ?? [];
                 var index = root.Index ?? 1;
                 if (headers.Count == 0)
@@ -90,6 +95,11 @@ internal static class WordAddress
 
             case "footer":
             {
+                if (root.Variant is { } footerVariant)
+                {
+                    return ResolveVariantRoot(doc, "footer", footerVariant);
+                }
+
                 var footers = doc.MainDocumentPart?.FooterParts.ToList() ?? [];
                 var index = root.Index ?? 1;
                 if (footers.Count == 0)
@@ -117,6 +127,104 @@ internal static class WordAddress
             default:
                 throw Invalid($"Unknown docx root '{root.ToCanonicalString()}'; paths start at /body, /header[n] or /footer[n].", RootCandidates(doc));
         }
+    }
+
+    // ------------------------------------------------------- named variants
+
+    /// <summary>The named header/footer variants of the addressing grammar (M5).</summary>
+    internal static readonly string[] HeaderFooterVariants = ["default", "firstPage", "even"];
+
+    /// <summary>Maps a variant name to its OOXML header/footer reference type.</summary>
+    internal static HeaderFooterValues VariantReferenceType(string variant) => variant switch
+    {
+        "firstPage" => HeaderFooterValues.First,
+        "even" => HeaderFooterValues.Even,
+        _ => HeaderFooterValues.Default,
+    };
+
+    /// <summary>
+    /// The header/footer part a named variant resolves to: the first
+    /// w:headerReference / w:footerReference of that type in any sectPr,
+    /// in document order. Null when no section references one.
+    /// </summary>
+    internal static OpenXmlPart? FindReferencedPart(WordprocessingDocument doc, string kind, string variant)
+    {
+        var main = doc.MainDocumentPart;
+        if (main?.Document?.Body is not { } body)
+        {
+            return null;
+        }
+
+        var type = VariantReferenceType(variant);
+        foreach (var sectPr in body.Descendants<SectionProperties>())
+        {
+            var relId = kind == "header"
+                ? sectPr.Elements<HeaderReference>()
+                    .FirstOrDefault(r => (r.Type?.Value ?? HeaderFooterValues.Default) == type)?.Id?.Value
+                : sectPr.Elements<FooterReference>()
+                    .FirstOrDefault(r => (r.Type?.Value ?? HeaderFooterValues.Default) == type)?.Id?.Value;
+
+            if (relId is { Length: > 0 })
+            {
+                try
+                {
+                    return main.GetPartById(relId);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Dangling reference: keep scanning later sections.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The variant name ("default" | "firstPage" | "even") a part is referenced as, or null when unreferenced.</summary>
+    internal static string? HeaderFooterVariantOf(WordprocessingDocument doc, OpenXmlPart part) =>
+        HeaderFooterVariants.FirstOrDefault(variant =>
+            ReferenceEquals(FindReferencedPart(doc, part is HeaderPart ? "header" : "footer", variant), part));
+
+    /// <summary>Named paths of the variants that exist for one kind (e.g. ["/header[default]", "/header[even]"]).</summary>
+    internal static IReadOnlyList<string> ExistingVariantPaths(WordprocessingDocument doc, string kind) =>
+        [.. HeaderFooterVariants
+            .Where(variant => FindReferencedPart(doc, kind, variant) is not null)
+            .Select(variant => $"/{kind}[{variant}]")];
+
+    /// <summary>Resolves /header[firstPage]-style roots; canonical paths stay numeric (part order).</summary>
+    private static (OpenXmlElement El, string Path, string Type) ResolveVariantRoot(
+        WordprocessingDocument doc, string kind, string variant)
+    {
+        var part = FindReferencedPart(doc, kind, variant);
+        if (part is null)
+        {
+            var existing = ExistingVariantPaths(doc, kind);
+            throw Invalid(
+                $"/{kind}[{variant}] does not exist. Create it with " +
+                $"{{\"op\":\"add\",\"path\":\"/{kind}[{variant}]\",\"type\":\"{kind}\",\"props\":{{\"text\":\"…\"}}}}.",
+                existing.Count > 0 ? existing : ["/body"]);
+        }
+
+        OpenXmlElement? element;
+        int index;
+        if (part is HeaderPart headerPart)
+        {
+            element = headerPart.Header;
+            index = (doc.MainDocumentPart?.HeaderParts.ToList() ?? []).IndexOf(headerPart) + 1;
+        }
+        else
+        {
+            var footerPart = (FooterPart)part;
+            element = footerPart.Footer;
+            index = (doc.MainDocumentPart?.FooterParts.ToList() ?? []).IndexOf(footerPart) + 1;
+        }
+
+        return element is null
+            ? throw new AiofficeException(
+                ErrorCodes.FormatCorrupt,
+                $"/{kind}[{variant}] exists but its part is empty.",
+                "Re-export the file from Word, or address /body instead.")
+            : ((OpenXmlElement El, string Path, string Type))(element, Canon(string.Empty, kind, index), kind);
     }
 
     private static (OpenXmlElement El, string Path, string Type) ResolveChild(

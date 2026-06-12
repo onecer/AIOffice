@@ -71,6 +71,26 @@ internal static class PptxRenderer
             return;
         }
 
+        if (PptxTables.TableOf(shape.Element) is { } table &&
+            PptxTables.IndexOf(slidePart, shape.Element) is { } tableIndex)
+        {
+            AppendTable(svg, table, slideIndex, tableIndex, x, y, w, h);
+            svg.Append("  </g>\n");
+            return;
+        }
+
+        if (PptxSmartArt.DataPartOf(slidePart, shape.Element) is not null)
+        {
+            // SmartArt is read-only: a labeled placeholder box, never a fake redraw.
+            var layout = PptxSmartArt.LayoutName(slidePart, shape.Element);
+            svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
+            svg.Append("fill=\"none\" stroke=\"#999999\" stroke-dasharray=\"4 3\"/>\n");
+            svg.Append(Units.Inv($"    <text x=\"{x + (w / 2):0.#}\" y=\"{y + (h / 2):0.#}\" font-size=\"12\" "));
+            svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#666666\">[smartart]{(layout is null ? string.Empty : " " + Escape(layout))}</text>\n"));
+            svg.Append("  </g>\n");
+            return;
+        }
+
         AppendOutline(svg, shape, x, y, w, h, fill);
 
         if (shape.Kind == "picture")
@@ -174,6 +194,92 @@ internal static class PptxRenderer
                 svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" {paint}{dash}/>\n"));
                 return;
             }
+        }
+    }
+
+    // ----- tables ----------------------------------------------------------------
+
+    /// <summary>
+    /// Draws the table grid truthfully: per-cell rects (merged blocks span their
+    /// full grid area, covered cells are skipped), cell fills, and text runs —
+    /// each visible cell wrapped in a g carrying its data-aio-path.
+    /// </summary>
+    private static void AppendTable(StringBuilder svg, A.Table table, int slideIndex, int tableIndex, double x, double y, double w, double h)
+    {
+        var colWidths = (table.TableGrid?.Elements<A.GridColumn>() ?? [])
+            .Select(c => Units.EmuToPx(c.Width?.Value ?? 0))
+            .ToList();
+        var rows = table.Elements<A.TableRow>().ToList();
+        var rowHeights = rows.Select(r => Units.EmuToPx(r.Height?.Value ?? 0)).ToList();
+
+        // Scale the grid into the frame box so the drawing stays truthful to it.
+        var sumW = colWidths.Sum();
+        var sumH = rowHeights.Sum();
+        var scaleX = sumW > 0 ? w / sumW : 1;
+        var scaleY = sumH > 0 ? h / sumH : 1;
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var cells = rows[r].Elements<A.TableCell>().ToList();
+            for (var c = 0; c < cells.Count && c < colWidths.Count; c++)
+            {
+                var cell = cells[c];
+                if (PptxTables.IsCovered(cell))
+                {
+                    continue;
+                }
+
+                var gridSpan = Math.Max(cell.GridSpan?.Value ?? 1, 1);
+                var rowSpan = Math.Max(cell.RowSpan?.Value ?? 1, 1);
+                var cellX = x + (colWidths.Take(c).Sum() * scaleX);
+                var cellY = y + (rowHeights.Take(r).Sum() * scaleY);
+                var cellW = colWidths.Skip(c).Take(gridSpan).Sum() * scaleX;
+                var cellH = rowHeights.Skip(r).Take(rowSpan).Sum() * scaleY;
+                var fill = PptxTables.CellFillHex(cell)?.ToLowerInvariant();
+
+                var path = Units.Inv($"/slide[{slideIndex}]/table[{tableIndex}]/tr[{r + 1}]/tc[{c + 1}]");
+                svg.Append(Units.Inv($"    <g data-aio-path=\"{Escape(path)}\">\n"));
+                svg.Append(Units.Inv($"      <rect x=\"{cellX:0.#}\" y=\"{cellY:0.#}\" width=\"{cellW:0.#}\" height=\"{cellH:0.#}\" "));
+                svg.Append(Units.Inv($"fill=\"{(fill is null ? "none" : "#" + fill)}\" stroke=\"#999999\"/>\n"));
+                AppendCellText(svg, cell, cellX, cellY, cellW);
+                svg.Append("    </g>\n");
+            }
+        }
+    }
+
+    private static void AppendCellText(StringBuilder svg, A.TableCell cell, double x, double y, double w)
+    {
+        if (cell.TextBody is not { } body)
+        {
+            return;
+        }
+
+        var cursorY = y + 2;
+        foreach (var paragraph in body.Elements<A.Paragraph>())
+        {
+            var text = PptxDoc.ParagraphText(paragraph);
+            var runProperties = paragraph.Elements<A.Run>().FirstOrDefault()?.RunProperties;
+            var fontPt = runProperties?.FontSize?.Value is { } size ? size / 100.0 : DefaultFontPt;
+            var fontPx = fontPt * 4.0 / 3.0;
+            var bold = runProperties?.Bold?.Value == true;
+            var color = runProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value ?? "111111";
+
+            var alignment = paragraph.ParagraphProperties?.Alignment;
+            var (anchor, textX) = alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Center
+                ? ("middle", x + (w / 2))
+                : alignment is not null && alignment.Value == A.TextAlignmentTypeValues.Right
+                    ? ("end", x + w - 4)
+                    : ("start", x + 4);
+
+            var baseline = cursorY + fontPx;
+            if (text.Length > 0)
+            {
+                svg.Append(Units.Inv($"      <text x=\"{textX:0.#}\" y=\"{baseline:0.#}\" font-size=\"{fontPx:0.#}\" "));
+                svg.Append(Units.Inv($"text-anchor=\"{anchor}\"{(bold ? " font-weight=\"bold\"" : string.Empty)} "));
+                svg.Append(Units.Inv($"fill=\"#{color}\">{Escape(text.Replace('\n', ' '))}</text>\n"));
+            }
+
+            cursorY += fontPx * 1.35;
         }
     }
 

@@ -249,24 +249,17 @@ public sealed partial class WordHandler
         Paragraph p => ParagraphPropertiesShape(doc, p),
         Run r => WordFormatting.ReadRunProps(r),
         Hyperlink => LinkProperties(doc, node),
-        Table t => new Dictionary<string, object?>
-        {
-            ["rows"] = t.ChildElements.OfType<TableRow>().Count(),
-            ["columns"] = t.ChildElements.OfType<TableRow>().FirstOrDefault()?.ChildElements.OfType<TableCell>().Count() ?? 0,
-        },
+        Table t => TableGetShape(t),
         TableRow row => new Dictionary<string, object?>
         {
             ["cells"] = row.ChildElements.OfType<TableCell>().Select(c => c.InnerText).ToList(),
         },
-        TableCell cell => new Dictionary<string, object?>
-        {
-            ["text"] = cell.InnerText,
-            ["paragraphs"] = cell.ChildElements.OfType<Paragraph>().Count(),
-        },
+        TableCell cell => CellGetShape(cell),
+        Header or Footer => HeaderFooterProperties(doc, node),
         _ => new Dictionary<string, object?> { ["text"] = node.Element.InnerText },
     };
 
-    /// <summary>Paragraph get data: formatting props plus {list, level, number?} for list items.</summary>
+    /// <summary>Paragraph get data: formatting props plus {list, level, number?} for list items and field kinds.</summary>
     private static Dictionary<string, object?> ParagraphPropertiesShape(WordprocessingDocument doc, Paragraph p)
     {
         var properties = WordFormatting.ReadParagraphProps(p);
@@ -278,6 +271,14 @@ public sealed partial class WordHandler
             {
                 properties["number"] = ComputeListNumber(doc, p, info);
             }
+        }
+
+        var fields = p.ChildElements.OfType<SimpleField>()
+            .Select(f => FieldKindName(f.Instruction?.Value))
+            .ToList();
+        if (fields.Count > 0)
+        {
+            properties["fields"] = fields;
         }
 
         return properties;

@@ -27,6 +27,16 @@ slide incl. notes) and reports aggregate {replacements, locations}. On docx,
 add --track to record every hit as a w:del+w:ins revision pair. The same op is
 available in --ops batches as {"op":"replace","path":"<scope>|/","props":{...}}.
 
+Markdown/csv bridge (M5):
+
+    aioffice create report.docx --from notes.md     # GFM markdown -> real docx
+    aioffice read   report.docx --view markdown     # docx body -> GFM markdown
+    aioffice create orders.xlsx --from orders.csv   # typed cells; 007 stays text
+    aioffice read   orders.xlsx --view csv          # one sheet -> RFC 4180 csv
+
+Matrix: .md/.markdown -> .docx, .csv/.tsv -> .xlsx; any other pair fails with
+the matrix in the suggestion.
+
 Global flags: `--json` (compact; default when stdout is not a TTY), `--pretty`,
 `--workspace <dir>` (sandbox root, default cwd, also AIOFFICE_WORKSPACE),
 `--quiet` (suppress success envelopes).

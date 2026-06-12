@@ -20,6 +20,10 @@ internal enum PptxRootKind
 /// /slide[2]/shape[@id=7]      (stable id — the canonical form aioffice emits)
 /// /slide[2]/shape[3]/p[1]
 /// /slide[2]/chart[1]          (1-based chart index on the slide)
+/// /slide[2]/table[1]          (1-based table index on the slide)
+/// /slide[2]/table[1]/tr[2]    (1-based row in the table)
+/// /slide[2]/table[1]/tr[2]/tc[3] (1-based cell in the row)
+/// /slide[2]/smartart[1]       (1-based SmartArt index on the slide; read-only)
 /// /slide[2]/animation[1]      (1-based animation index on the slide)
 /// /slide[2]/comment[@id=3]    (stable comment id on the slide)
 /// /master[1]                  (read-only in this milestone)
@@ -32,7 +36,8 @@ internal sealed partial record PptxAddress
 {
     public const string GrammarHint =
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
-        "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
+        "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
+        "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
         "/master[1], /master[1]/layout[2] or /master[1]/shape[1]; " +
         "indices are 1-based, @id is the stable id from query/get.";
 
@@ -50,6 +55,18 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^chart\[([0-9]+)\]$")]
     private static partial Regex ChartSegment();
+
+    [GeneratedRegex(@"^table\[([0-9]+)\]$")]
+    private static partial Regex TableSegment();
+
+    [GeneratedRegex(@"^tr\[([0-9]+)\]$")]
+    private static partial Regex TableRowSegment();
+
+    [GeneratedRegex(@"^tc\[([0-9]+)\]$")]
+    private static partial Regex TableCellSegment();
+
+    [GeneratedRegex(@"^smartart\[([0-9]+)\]$")]
+    private static partial Regex SmartArtSegment();
 
     [GeneratedRegex(@"^animation\[([0-9]+)\]$")]
     private static partial Regex AnimationSegment();
@@ -88,6 +105,18 @@ internal sealed partial record PptxAddress
     /// <summary>1-based chart index on the slide (/slide[i]/chart[k]); null otherwise.</summary>
     public int? ChartIndex { get; init; }
 
+    /// <summary>1-based table index on the slide (/slide[i]/table[k]); null otherwise.</summary>
+    public int? TableIndex { get; init; }
+
+    /// <summary>1-based row index inside the table (/slide[i]/table[k]/tr[r]); null otherwise.</summary>
+    public int? TableRowIndex { get; init; }
+
+    /// <summary>1-based cell index inside the row (/slide[i]/table[k]/tr[r]/tc[c]); null otherwise.</summary>
+    public int? TableCellIndex { get; init; }
+
+    /// <summary>1-based SmartArt index on the slide (/slide[i]/smartart[k]); null otherwise.</summary>
+    public int? SmartArtIndex { get; init; }
+
     /// <summary>1-based animation index on the slide (/slide[i]/animation[k]); null otherwise.</summary>
     public int? AnimationIndex { get; init; }
 
@@ -105,6 +134,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses a chart by index (/slide[i]/chart[k]).</summary>
     public bool IsChart => ChartIndex.HasValue;
+
+    /// <summary>True when the path addresses a table (or a row/cell inside one).</summary>
+    public bool IsTable => TableIndex.HasValue;
+
+    /// <summary>True when the path addresses a SmartArt diagram by index (/slide[i]/smartart[k]).</summary>
+    public bool IsSmartArt => SmartArtIndex.HasValue;
 
     /// <summary>True when the path addresses an animation by index (/slide[i]/animation[k]).</summary>
     public bool IsAnimation => AnimationIndex.HasValue;
@@ -178,6 +213,24 @@ internal sealed partial record PptxAddress
             return address with { ChartIndex = ParseIndex(chartMatch.Groups[1].Value, raw) };
         }
 
+        if (TableSegment().Match(segments[1]) is { Success: true } tableMatch)
+        {
+            return ParseTableTail(raw, segments, address with
+            {
+                TableIndex = ParseIndex(tableMatch.Groups[1].Value, raw),
+            });
+        }
+
+        if (SmartArtSegment().Match(segments[1]) is { Success: true } smartArtMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow smartart[k].");
+            }
+
+            return address with { SmartArtIndex = ParseIndex(smartArtMatch.Groups[1].Value, raw) };
+        }
+
         if (AnimationSegment().Match(segments[1]) is { Success: true } animationMatch)
         {
             if (segments.Length > 2)
@@ -199,7 +252,8 @@ internal sealed partial record PptxAddress
         }
 
         var shaped = WithShapeSegment(address, segments[1], raw,
-            $"The second segment must be notes, chart[k], animation[k], comment[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
+            $"shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -226,6 +280,35 @@ internal sealed partial record PptxAddress
         }
 
         return shaped with { RunIndex = ParseIndex(run.Groups[1].Value, raw) };
+    }
+
+    /// <summary>Parses the optional /tr[r]/tc[c] tail after table[k].</summary>
+    private static PptxAddress ParseTableTail(string raw, string[] segments, PptxAddress address)
+    {
+        if (segments.Length == 2)
+        {
+            return address;
+        }
+
+        var rowMatch = TableRowSegment().Match(segments[2]);
+        if (!rowMatch.Success)
+        {
+            throw Invalid(raw, $"After table[k] comes tr[r]; got '{segments[2]}'.");
+        }
+
+        address = address with { TableRowIndex = ParseIndex(rowMatch.Groups[1].Value, raw) };
+        if (segments.Length == 3)
+        {
+            return address;
+        }
+
+        var cellMatch = TableCellSegment().Match(segments[3]);
+        if (!cellMatch.Success || segments.Length > 4)
+        {
+            throw Invalid(raw, "Nothing can follow tr[r] except tc[c].");
+        }
+
+        return address with { TableCellIndex = ParseIndex(cellMatch.Groups[1].Value, raw) };
     }
 
     private static PptxAddress ParseMasterTail(string raw, string[] segments, int masterIndex)
@@ -289,6 +372,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical chart-index path (/slide[i]/chart[k]) of the addressed chart.</summary>
     public string CanonicalChartPath => Units.Inv($"/slide[{SlideIndex}]/chart[{ChartIndex}]");
+
+    /// <summary>The canonical table path (/slide[i]/table[k]) of the addressed table.</summary>
+    public string CanonicalTablePath => Units.Inv($"/slide[{SlideIndex}]/table[{TableIndex}]");
+
+    /// <summary>The canonical SmartArt path (/slide[i]/smartart[k]) of the addressed diagram.</summary>
+    public string CanonicalSmartArtPath => Units.Inv($"/slide[{SlideIndex}]/smartart[{SmartArtIndex}]");
 
     /// <summary>The canonical animation-index path (/slide[i]/animation[k]) of the addressed animation.</summary>
     public string CanonicalAnimationPath => Units.Inv($"/slide[{SlideIndex}]/animation[{AnimationIndex}]");

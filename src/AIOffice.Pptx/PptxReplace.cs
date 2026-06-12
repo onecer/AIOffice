@@ -31,12 +31,14 @@ internal static class PptxReplace
     public static PptxReplaceResult Apply(PresentationPart presentation, EditOp op)
     {
         var address = PptxAddress.Parse(op.Path);
-        if (address.IsChart || address.IsAnimation || address.IsComment || address.ParagraphIndex is not null)
+        if (address.IsChart || address.IsTable || address.IsSmartArt || address.IsAnimation || address.IsComment ||
+            address.ParagraphIndex is not null)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"replace scopes to a slide, a shape or the notes, not '{op.Path}'.",
-                "Use /slide[2] (all its text), /slide[2]/shape[@id=N] (one shape) or /slide[2]/notes.");
+                "Use /slide[2] (all its text), /slide[2]/shape[@id=N] (one shape) or /slide[2]/notes; " +
+                "set table cell text via {\"op\":\"set\",...,\"props\":{\"text\":\"...\"}}.");
         }
 
         var spec = ParseSpec(op, allowIncludeNotes: !address.HasShape && !address.IsNotes);

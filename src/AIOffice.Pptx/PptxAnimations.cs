@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using AIOffice.Core;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx;
@@ -12,6 +13,7 @@ internal sealed record AnimationView(
     int Index,
     P.ParallelTimeNode Par,
     P.CommonTimeNode TimeNode,
+    string Class,
     string Effect,
     string Trigger,
     uint? ShapeId,
@@ -20,17 +22,28 @@ internal sealed record AnimationView(
     string? Direction);
 
 /// <summary>
-/// Entrance animations (p:timing): add via
+/// Shape animations (p:timing): add via
 /// <c>{"op":"add","path":"/slide[i]/shape[@id=N]","type":"animation","props":{...}}</c>,
 /// addressed as /slide[i]/animation[k] for get/remove. The timing tree follows
 /// PowerPoint's shape — tmRoot par → mainSeq → one par per click group, effects
-/// nested two pars deep with the standard preset class/id/subtype and a
-/// style.visibility set behavior (plus animEffect/anim per effect).
+/// nested two pars deep with the standard preset class/id/subtype. Entrances
+/// carry a style.visibility "visible" set, exits hide the shape at the end, and
+/// emphasis effects animate in place (scale/rotation/color behaviors).
 /// </summary>
 internal static class PptxAnimations
 {
-    /// <summary>The effects aioffice can add. Everything else is unsupported_feature.</summary>
-    public static readonly IReadOnlyList<string> Effects = ["appear", "fade", "flyIn", "wipe"];
+    /// <summary>The entrance effects aioffice can add.</summary>
+    public static readonly IReadOnlyList<string> EntranceEffects = ["appear", "fade", "flyIn", "wipe"];
+
+    /// <summary>The emphasis effects aioffice can add.</summary>
+    public static readonly IReadOnlyList<string> EmphasisEffects = ["pulse", "grow", "spin", "colorPulse"];
+
+    /// <summary>The exit effects aioffice can add.</summary>
+    public static readonly IReadOnlyList<string> ExitEffects = ["fadeOut", "flyOut", "wipeOut"];
+
+    /// <summary>Every effect aioffice can add. Everything else is unsupported_feature.</summary>
+    public static readonly IReadOnlyList<string> Effects =
+        [.. EntranceEffects, .. EmphasisEffects, .. ExitEffects];
 
     /// <summary>The triggers aioffice understands.</summary>
     public static readonly IReadOnlyList<string> Triggers = ["click", "afterPrevious", "withPrevious"];
@@ -38,12 +51,24 @@ internal static class PptxAnimations
     private static readonly IReadOnlyList<string> Directions = ["left", "right", "top", "bottom"];
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["effect", "trigger", "duration", "delay", "direction"];
+        ["effect", "trigger", "duration", "delay", "direction", "color"];
 
     private const int AppearPresetId = 1;
     private const int FlyInPresetId = 2;
     private const int FadePresetId = 10;
     private const int WipePresetId = 22;
+
+    private const int GrowPresetId = 6; // Grow/Shrink
+    private const int SpinPresetId = 8;
+    private const int PulsePresetId = 35;
+    private const int ColorPulsePresetId = 36;
+
+    /// <summary>360 degrees in OOXML 60000ths-of-a-degree units.</summary>
+    private const int FullTurn = 21_600_000;
+
+    /// <summary>Pulse scales to 106%, grow to 150% (percent * 1000, PowerPoint's defaults).</summary>
+    private const int PulseScale = 106_000;
+    private const int GrowScale = 150_000;
 
     // ----- add -------------------------------------------------------------------
 
@@ -88,7 +113,14 @@ internal static class PptxAnimations
         return Units.Inv($"/slide[{address.SlideIndex}]/animation[{index}]");
     }
 
-    private sealed record EffectSpec(string Effect, string Trigger, long DurationMs, long DelayMs, string Direction);
+    private sealed record EffectSpec(
+        string Class, string Effect, string Trigger, long DurationMs, long DelayMs, string Direction, string ColorHex);
+
+    /// <summary>The preset class of an aioffice effect token ("entrance", "emphasis" or "exit").</summary>
+    private static string ClassOf(string effect) =>
+        EmphasisEffects.Contains(effect, StringComparer.Ordinal) ? "emphasis"
+        : ExitEffects.Contains(effect, StringComparer.Ordinal) ? "exit"
+        : "entrance";
 
     private static EffectSpec ParseProps(JsonObject? props)
     {
@@ -100,7 +132,7 @@ internal static class PptxAnimations
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown animation prop '{key}'.",
-                    "Animation props: effect, trigger, duration, delay, direction.",
+                    "Animation props: effect, trigger, duration, delay, direction, color (colorPulse only).",
                     candidates: AddProps);
             }
         }
@@ -108,14 +140,16 @@ internal static class PptxAnimations
         var effect = Token(props, "effect") ?? throw new AiofficeException(
             ErrorCodes.InvalidArgs,
             "add animation needs the 'effect' prop.",
-            "Pass one of appear, fade, flyIn or wipe, e.g. {\"effect\":\"fade\",\"trigger\":\"click\"}.",
+            "Pass an entrance (appear, fade, flyIn, wipe), emphasis (pulse, grow, spin, colorPulse) " +
+            "or exit (fadeOut, flyOut, wipeOut), e.g. {\"effect\":\"fade\",\"trigger\":\"click\"}.",
             candidates: Effects);
         if (!Effects.Contains(effect, StringComparer.OrdinalIgnoreCase))
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"Animation effect '{effect}' is not supported.",
-                "Supported effects: appear, fade, flyIn, wipe. Pick the closest one and refine it in PowerPoint.",
+                "Supported effects — entrance: appear, fade, flyIn, wipe; emphasis: pulse, grow, spin, colorPulse; " +
+                "exit: fadeOut, flyOut, wipeOut. Pick the closest one and refine it in PowerPoint.",
                 candidates: Effects);
         }
 
@@ -136,12 +170,12 @@ internal static class PptxAnimations
         var direction = Token(props, "direction");
         if (direction is not null)
         {
-            if (effect is not ("flyIn" or "wipe"))
+            if (effect is not ("flyIn" or "wipe" or "flyOut" or "wipeOut"))
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Prop 'direction' does not apply to '{effect}'.",
-                    "Only flyIn and wipe take a direction (left, right, top, bottom).");
+                    "Only flyIn, wipe, flyOut and wipeOut take a direction (left, right, top, bottom).");
             }
 
             if (!Directions.Contains(direction, StringComparer.OrdinalIgnoreCase))
@@ -154,6 +188,20 @@ internal static class PptxAnimations
             }
 
             direction = Directions.First(d => string.Equals(d, direction, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var colorHex = "ED7D31"; // the accent the color pulse swings to by default
+        if (props.TryGetPropertyValue("color", out var colorNode))
+        {
+            if (effect != "colorPulse")
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Prop 'color' does not apply to '{effect}'.",
+                    "Only colorPulse takes a color (the fill it pulses to), e.g. {\"effect\":\"colorPulse\",\"color\":\"FF0000\"}.");
+            }
+
+            colorHex = Units.ParseColorHex("color", colorNode);
         }
 
         var durationMs = props.TryGetPropertyValue("duration", out var durationNode)
@@ -171,7 +219,7 @@ internal static class PptxAnimations
             ? ParseSecondsMs("delay", delayNode, max: 600, allowZero: true)
             : 0;
 
-        return new EffectSpec(effect, trigger, durationMs, delayMs, direction ?? "bottom");
+        return new EffectSpec(ClassOf(effect), effect, trigger, durationMs, delayMs, direction ?? "bottom", colorHex);
     }
 
     private static string? Token(JsonObject props, string key) =>
@@ -319,36 +367,55 @@ internal static class PptxAnimations
         return inner;
     }
 
-    /// <summary>The effect par: preset cTn + visibility set + per-effect behaviors.</summary>
+    /// <summary>The direction subtype shared by flyIn/flyOut and wipe/wipeOut presets.</summary>
+    private static int DirectionSubtype(string effect, string direction) => effect switch
+    {
+        "flyIn" or "flyOut" => direction switch
+        {
+            "left" => 8,
+            "right" => 2,
+            "top" => 1,
+            _ => 4, // bottom
+        },
+        _ => direction switch // wipe / wipeOut
+        {
+            "left" => 2,
+            "right" => 8,
+            "top" => 4,
+            _ => 1, // bottom
+        },
+    };
+
+    /// <summary>The effect par: preset cTn + per-class behaviors (visibility sets, anims, scale/rot/color).</summary>
     private static P.ParallelTimeNode BuildEffectPar(EffectSpec spec, uint shapeId, ref uint nextId)
     {
         var (presetId, presetSubtype) = spec.Effect switch
         {
             "appear" => (AppearPresetId, 0),
             "fade" => (FadePresetId, 0),
-            "flyIn" => (FlyInPresetId, spec.Direction switch
-            {
-                "left" => 8,
-                "right" => 2,
-                "top" => 1,
-                _ => 4, // bottom
-            }),
-            _ => (WipePresetId, spec.Direction switch // "wipe"
-            {
-                "left" => 2,
-                "right" => 8,
-                "top" => 4,
-                _ => 1, // bottom
-            }),
+            "flyIn" or "flyOut" => (FlyInPresetId, DirectionSubtype(spec.Effect, spec.Direction)),
+            "wipe" or "wipeOut" => (WipePresetId, DirectionSubtype(spec.Effect, spec.Direction)),
+            "fadeOut" => (FadePresetId, 0),
+            "pulse" => (PulsePresetId, 0),
+            "grow" => (GrowPresetId, 0),
+            "spin" => (SpinPresetId, 0),
+            _ => (ColorPulsePresetId, 0), // colorPulse
         };
 
-        var children = new P.ChildTimeNodeList(BuildVisibilitySet(shapeId, ref nextId));
+        var children = spec.Class == "entrance"
+            ? new P.ChildTimeNodeList(BuildVisibilitySet(shapeId, "visible", delayMs: 0, ref nextId))
+            : new P.ChildTimeNodeList();
+
         switch (spec.Effect)
         {
             case "fade":
-                children.Append(BuildAnimateEffect(shapeId, "fade", spec.DurationMs, ref nextId));
+                children.Append(BuildAnimateEffect(shapeId, "fade", transitionIn: true, spec.DurationMs, ref nextId));
+                break;
+            case "fadeOut":
+                children.Append(BuildAnimateEffect(shapeId, "fade", transitionIn: false, spec.DurationMs, ref nextId));
                 break;
             case "wipe":
+            {
                 var filter = spec.Direction switch
                 {
                     "left" => "wipe(right)",
@@ -356,21 +423,60 @@ internal static class PptxAnimations
                     "top" => "wipe(down)",
                     _ => "wipe(up)",
                 };
-                children.Append(BuildAnimateEffect(shapeId, filter, spec.DurationMs, ref nextId));
+                children.Append(BuildAnimateEffect(shapeId, filter, transitionIn: true, spec.DurationMs, ref nextId));
                 break;
-            case "flyIn":
-                var (fromX, fromY) = spec.Direction switch
+            }
+
+            case "wipeOut":
+            {
+                // The shape disappears wiping toward the named edge.
+                var filter = spec.Direction switch
                 {
-                    "left" => ("0-#ppt_w/2", "#ppt_y"),
-                    "right" => ("1+#ppt_w/2", "#ppt_y"),
-                    "top" => ("#ppt_x", "0-#ppt_h/2"),
-                    _ => ("#ppt_x", "1+#ppt_h/2"), // bottom
+                    "left" => "wipe(left)",
+                    "right" => "wipe(right)",
+                    "top" => "wipe(up)",
+                    _ => "wipe(down)",
                 };
+                children.Append(BuildAnimateEffect(shapeId, filter, transitionIn: false, spec.DurationMs, ref nextId));
+                break;
+            }
+
+            case "flyIn":
+            {
+                var (fromX, fromY) = OffSlide(spec.Direction);
                 children.Append(BuildAnimate(shapeId, "ppt_x", fromX, "#ppt_x", spec.DurationMs, ref nextId));
                 children.Append(BuildAnimate(shapeId, "ppt_y", fromY, "#ppt_y", spec.DurationMs, ref nextId));
                 break;
+            }
+
+            case "flyOut":
+            {
+                var (toX, toY) = OffSlide(spec.Direction);
+                children.Append(BuildAnimate(shapeId, "ppt_x", "#ppt_x", toX, spec.DurationMs, ref nextId));
+                children.Append(BuildAnimate(shapeId, "ppt_y", "#ppt_y", toY, spec.DurationMs, ref nextId));
+                break;
+            }
+
+            case "pulse":
+                children.Append(BuildAnimateScale(shapeId, PulseScale, autoReverse: true, spec.DurationMs, ref nextId));
+                break;
+            case "grow":
+                children.Append(BuildAnimateScale(shapeId, GrowScale, autoReverse: false, spec.DurationMs, ref nextId));
+                break;
+            case "spin":
+                children.Append(BuildAnimateRotation(shapeId, FullTurn, spec.DurationMs, ref nextId));
+                break;
+            case "colorPulse":
+                children.Append(BuildAnimateColor(shapeId, spec.ColorHex, spec.DurationMs, ref nextId));
+                break;
             default:
                 break; // appear: visibility only
+        }
+
+        if (spec.Class == "exit")
+        {
+            // Exits hide the shape when the effect ends (PowerPoint's dur-1 convention).
+            children.Append(BuildVisibilitySet(shapeId, "hidden", Math.Max(spec.DurationMs - 1, 0), ref nextId));
         }
 
         var effectNode = new P.CommonTimeNode(
@@ -382,7 +488,12 @@ internal static class PptxAnimations
         {
             Id = nextId,
             PresetId = presetId,
-            PresetClass = P.TimeNodePresetClassValues.Entrance,
+            PresetClass = spec.Class switch
+            {
+                "emphasis" => P.TimeNodePresetClassValues.Emphasis,
+                "exit" => P.TimeNodePresetClassValues.Exit,
+                _ => P.TimeNodePresetClassValues.Entrance,
+            },
             PresetSubtype = presetSubtype,
             Fill = P.TimeNodeFillValues.Hold,
             GroupId = 0,
@@ -397,9 +508,18 @@ internal static class PptxAnimations
         return new P.ParallelTimeNode(effectNode);
     }
 
-    private static P.SetBehavior BuildVisibilitySet(uint shapeId, ref uint nextId) => new(
+    /// <summary>The off-slide position fly effects start from (entrance) or end at (exit).</summary>
+    private static (string X, string Y) OffSlide(string direction) => direction switch
+    {
+        "left" => ("0-#ppt_w/2", "#ppt_y"),
+        "right" => ("1+#ppt_w/2", "#ppt_y"),
+        "top" => ("#ppt_x", "0-#ppt_h/2"),
+        _ => ("#ppt_x", "1+#ppt_h/2"), // bottom
+    };
+
+    private static P.SetBehavior BuildVisibilitySet(uint shapeId, string value, long delayMs, ref uint nextId) => new(
         new P.CommonBehavior(
-            new P.CommonTimeNode(new P.StartConditionList(new P.Condition { Delay = "0" }))
+            new P.CommonTimeNode(new P.StartConditionList(new P.Condition { Delay = Inv(delayMs) }))
             {
                 Id = nextId++,
                 Duration = "1",
@@ -407,14 +527,51 @@ internal static class PptxAnimations
             },
             new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) }),
             new P.AttributeNameList(new P.AttributeName("style.visibility"))),
-        new P.ToVariantValue(new P.StringVariantValue { Val = "visible" }));
+        new P.ToVariantValue(new P.StringVariantValue { Val = value }));
 
-    private static P.AnimateEffect BuildAnimateEffect(uint shapeId, string filter, long durationMs, ref uint nextId) => new(
+    /// <summary>p:animScale to the given percent*1000 (autoRev plays it back for pulse-style effects).</summary>
+    private static P.AnimateScale BuildAnimateScale(uint shapeId, int scale, bool autoReverse, long durationMs, ref uint nextId)
+    {
+        var timeNode = new P.CommonTimeNode { Id = nextId++, Duration = Inv(durationMs), Fill = P.TimeNodeFillValues.Hold };
+        if (autoReverse)
+        {
+            timeNode.AutoReverse = true;
+        }
+
+        return new P.AnimateScale(
+            new P.CommonBehavior(
+                timeNode,
+                new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) })),
+            new P.ToPosition { X = scale, Y = scale });
+    }
+
+    /// <summary>p:animRot by the given 60000ths-of-a-degree angle (the "r" presentation attribute).</summary>
+    private static P.AnimateRotation BuildAnimateRotation(uint shapeId, int by, long durationMs, ref uint nextId) => new(
+        new P.CommonBehavior(
+            new P.CommonTimeNode { Id = nextId++, Duration = Inv(durationMs), Fill = P.TimeNodeFillValues.Hold },
+            new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) }),
+            new P.AttributeNameList(new P.AttributeName("r"))))
+    {
+        By = by,
+    };
+
+    /// <summary>p:animClr pulsing the fill color to the given hex and back (autoRev).</summary>
+    private static P.AnimateColor BuildAnimateColor(uint shapeId, string hex, long durationMs, ref uint nextId) => new(
+        new P.CommonBehavior(
+            new P.CommonTimeNode { Id = nextId++, Duration = Inv(durationMs), Fill = P.TimeNodeFillValues.Hold, AutoReverse = true },
+            new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) }),
+            new P.AttributeNameList(new P.AttributeName("fillcolor"))),
+        new P.ToColor(new A.RgbColorModelHex { Val = hex }))
+    {
+        ColorSpace = P.AnimateColorSpaceValues.Rgb,
+    };
+
+    private static P.AnimateEffect BuildAnimateEffect(uint shapeId, string filter, bool transitionIn, long durationMs, ref uint nextId) => new(
         new P.CommonBehavior(
             new P.CommonTimeNode { Id = nextId++, Duration = Inv(durationMs) },
             new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) })))
     {
-        Transition = P.AnimateEffectTransitionValues.In,
+        Transition = transitionIn ? P.AnimateEffectTransitionValues.In : P.AnimateEffectTransitionValues.Out,
         Filter = filter,
     };
 
@@ -461,24 +618,39 @@ internal static class PptxAnimations
                 continue;
             }
 
-            var presetId = node.PresetId?.Value;
-            var effect = presetId switch
+            var presetClass = node.PresetClass?.Value;
+            var cls = presetClass switch
             {
-                AppearPresetId => "appear",
-                FadePresetId => "fade",
-                FlyInPresetId => "flyIn",
-                WipePresetId => "wipe",
-                { } other => Units.Inv($"preset{other}"), // foreign decks: truthful, not pretty
-                null => "unknown",
+                { } c when c == P.TimeNodePresetClassValues.Emphasis => "emphasis",
+                { } c when c == P.TimeNodePresetClassValues.Exit => "exit",
+                _ => "entrance",
+            };
+
+            var presetId = node.PresetId?.Value;
+            var effect = (cls, presetId) switch
+            {
+                ("entrance", AppearPresetId) => "appear",
+                ("entrance", FadePresetId) => "fade",
+                ("entrance", FlyInPresetId) => "flyIn",
+                ("entrance", WipePresetId) => "wipe",
+                ("emphasis", PulsePresetId) => "pulse",
+                ("emphasis", GrowPresetId) => "grow",
+                ("emphasis", SpinPresetId) => "spin",
+                ("emphasis", ColorPulsePresetId) => "colorPulse",
+                ("exit", FadePresetId) => "fadeOut",
+                ("exit", FlyInPresetId) => "flyOut",
+                ("exit", WipePresetId) => "wipeOut",
+                (_, { } other) => Units.Inv($"preset{other}"), // foreign decks: truthful, not pretty
+                (_, null) => "unknown",
             };
 
             var direction = effect switch
             {
-                "flyIn" => node.PresetSubtype?.Value switch
+                "flyIn" or "flyOut" => node.PresetSubtype?.Value switch
                 {
                     8 => "left", 2 => "right", 1 => "top", 4 => "bottom", _ => null,
                 },
-                "wipe" => node.PresetSubtype?.Value switch
+                "wipe" or "wipeOut" => node.PresetSubtype?.Value switch
                 {
                     2 => "left", 8 => "right", 4 => "top", 1 => "bottom", _ => null,
                 },
@@ -489,6 +661,7 @@ internal static class PptxAnimations
                 views.Count + 1,
                 par,
                 node,
+                cls,
                 effect,
                 trigger,
                 FirstShapeTargetId(par),
@@ -585,6 +758,7 @@ internal static class PptxAnimations
             Index = view.Index,
             Target = targetPath,
             TargetShapeId = view.ShapeId,
+            Class = view.Class,
             Effect = view.Effect,
             Trigger = view.Trigger,
             Duration = view.Duration,

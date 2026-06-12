@@ -17,6 +17,9 @@ internal enum ExcelTargetKind
     Pivot,
     ConditionalFormat,
     Image,
+    DataValidation,
+    Sparkline,
+    Comment,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -52,13 +55,24 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based per-sheet image index when <see cref="Kind"/> is Image.</summary>
     public int? ImageIndex { get; init; }
+
+    /// <summary>1-based per-sheet data-validation index when <see cref="Kind"/> is DataValidation.</summary>
+    public int? DataValidationIndex { get; init; }
+
+    /// <summary>1-based per-sheet sparkline index when <see cref="Kind"/> is Sparkline.</summary>
+    public int? SparklineIndex { get; init; }
+
+    /// <summary>Bare thread GUID when <see cref="Kind"/> is Comment (<c>comment[@id=…]</c>).</summary>
+    public string? CommentId { get; init; }
 }
 
 /// <summary>
 /// xlsx addressing: <c>/Sheet1/A1</c>, <c>/Sheet1/A1:C10</c>, <c>/Sheet1/row[3]</c>,
 /// <c>/Sheet1/col[C]</c>, <c>/Sheet1/chart[1]</c>, <c>/Sheet1/pivot[1]</c>,
 /// <c>/Pivot/pivot[@name=Sales]</c>, <c>/Sheet1/conditionalFormat[1]</c>,
-/// <c>/Sheet1/image[1]</c>, <c>/'Q3 Data'/B2</c>.
+/// <c>/Sheet1/image[1]</c>, <c>/Sheet1/dataValidation[1]</c>,
+/// <c>/Sheet1/sparkline[1]</c>, <c>/Sheet1/comment[@id=GUID]</c>,
+/// <c>/'Q3 Data'/B2</c>.
 /// Resolution failures throw <c>invalid_path</c> with nearest-match candidates,
 /// as the envelope contract requires.
 /// </summary>
@@ -212,13 +226,34 @@ internal static partial class ExcelPaths
                 segment.Index is { } imageIndex:
                 return new ExcelTarget { Kind = ExcelTargetKind.Image, Sheet = sheet, ImageIndex = imageIndex };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "dataValidation", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } validationIndex:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.DataValidation,
+                    Sheet = sheet,
+                    DataValidationIndex = validationIndex,
+                };
+
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "sparkline", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } sparklineIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Sparkline, Sheet = sheet, SparklineIndex = sparklineIndex };
+
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "comment", StringComparison.OrdinalIgnoreCase) &&
+                segment is { Id: { } commentId, IdAttribute: "id" }:
+                return new ExcelTarget { Kind = ExcelTargetKind.Comment, Sheet = sheet, CommentId = commentId };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
                     $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], col[C], chart[n], pivot[n], " +
-                    $"conditionalFormat[n] or image[n] in: {pathText}",
+                    $"conditionalFormat[n], image[n], dataValidation[n], sparkline[n] or comment[@id=…] in: {pathText}",
                     "After the sheet name use A1, A1:C10, row[3], col[C], chart[1], pivot[1] (or pivot[@name=X]), " +
-                    "conditionalFormat[1] or image[1]; column letters are uppercase.",
+                    "conditionalFormat[1], image[1], dataValidation[1], sparkline[1] or comment[@id=GUID]; " +
+                    "column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
     }
@@ -232,6 +267,12 @@ internal static partial class ExcelPaths
 
     public static string ImagePath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/image[{index}]");
+
+    public static string DataValidationPath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/dataValidation[{index}]");
+
+    public static string SparklinePath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/sparkline[{index}]");
 
     /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
     public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>
@@ -290,7 +331,7 @@ internal static partial class ExcelPaths
         [
             basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/col[A]",
             basePath + "/chart[1]", basePath + "/pivot[1]", basePath + "/conditionalFormat[1]",
-            basePath + "/image[1]",
+            basePath + "/image[1]", basePath + "/dataValidation[1]", basePath + "/sparkline[1]",
         ];
     }
 

@@ -73,20 +73,24 @@ public sealed class HeaderFooterTests : WordTestBase
         Assert.Contains("/header[1]/p[1]", ex.Suggestion, StringComparison.Ordinal);
     }
 
+    // The M2-era refusal test (first/even -> unsupported_feature) is gone on
+    // purpose: M5 implements those variants for real, and the new behavior is
+    // pinned in HeaderFooterVariantTests. props.type spellings still work as
+    // aliases of the named-variant paths.
     [Theory]
-    [InlineData("first")]
-    [InlineData("even")]
-    public void First_page_and_even_odd_types_are_unsupported_naming_default(string headerType)
+    [InlineData("first", "firstPage")]
+    [InlineData("even", "even")]
+    public void Legacy_props_type_spellings_create_real_variants(string headerType, string expectedVariant)
     {
         var file = CreateDoc(title: "Doc");
 
-        var ex = Assert.Throws<AiofficeException>(() => Edit(
+        var envelope = Edit(
             file,
-            $$$"""[{"op":"add","path":"/header[1]","type":"header","props":{"type":"{{{headerType}}}","text":"x"}}]"""));
+            $$$"""[{"op":"add","path":"/header[1]","type":"header","props":{"type":"{{{headerType}}}","text":"x"}}]""");
 
-        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
-        Assert.Contains("default", ex.Suggestion, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("M2", ex.Message, StringComparison.Ordinal);
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal(expectedVariant, summary["variant"]!.GetValue<string>());
+        AssertValidatesClean(file);
     }
 
     [Fact]

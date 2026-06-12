@@ -141,6 +141,47 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>The round-trip law over the M5 surface: tables (with merges), replies, emphasis/exit animations.</summary>
+    [Fact]
+    public void M5Features_ReadSideVerbs_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Immutable"))));
+        var added = TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "pulse me"))),
+            TestEnv.Op("add", "/slide[1]", type: "table", props: TestEnv.Props(
+                ("rows", 3), ("cols", 3), ("headerRow", true), ("style", "medium"), ("w", "20cm"))),
+        ]));
+        var shapePath = added["results"]![0]!["target"]!.GetValue<string>();
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", "/slide[1]/table[1]/tr[1]/tc[1]", props: TestEnv.Props(("text", "Region"))),
+            TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[1]", props: TestEnv.Props(("mergeDown", 1))),
+            TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(("effect", "pulse"))),
+            TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(
+                ("effect", "fadeOut"), ("trigger", "afterPrevious"))),
+            TestEnv.Op("add", "/slide[1]", type: "comment", props: TestEnv.Props(
+                ("text", "thread root"), ("author", "Dana"))),
+        ]));
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[1]/comment[@id=1]", type: "reply", props: TestEnv.Props(
+                ("text", "threaded reply"), ("author", "Riley"))),
+        ]));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "outline"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "structure"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "comments"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/animation[2]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/comment[@id=2]"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "tc:contains('Region')"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "table"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {
@@ -263,6 +304,48 @@ public sealed class RoundTripTests : IDisposable
                 ("text", "Added by aioffice M4 — check the comments pane."), ("author", "AIOffice"))),
             TestEnv.Op("replace", "/slide[5]", props: TestEnv.Props(
                 ("find", "PLACEHOLDER"), ("replace", "(replaced by aioffice)"))),
+        ]));
+
+        // M5 surface: a native styled table with merges, an emphasis + exit animation pair
+        // and a threaded comment reply.
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[6]", type: "slide", props: TestEnv.Props(
+                ("title", "M5: tables, replies & emphasis/exit"))),
+            TestEnv.Op("add", "/slide[6]", type: "table", props: TestEnv.Props(
+                ("rows", 4), ("cols", 4), ("headerRow", true), ("style", "medium"),
+                ("x", "2cm"), ("y", "5cm"), ("w", "20cm"))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[1]/tc[1]", props: TestEnv.Props(("text", "Region"))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[1]/tc[2]", props: TestEnv.Props(("text", "Q1"))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[1]/tc[3]", props: TestEnv.Props(("text", "Q2"))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[1]/tc[4]", props: TestEnv.Props(("text", "Total"))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[2]/tc[1]", props: TestEnv.Props(
+                ("text", "EMEA (merged down)"), ("mergeDown", 1))),
+            TestEnv.Op("set", "/slide[6]/table[1]/tr[4]/tc[1]", props: TestEnv.Props(
+                ("text", "Grand total (merged right)"), ("mergeRight", 2), ("align", "center"))),
+            TestEnv.Op("add", "/slide[6]", type: "shape", props: TestEnv.Props(
+                ("x", "23cm"), ("y", "5cm"), ("w", "8cm"), ("h", "4cm"),
+                ("text", "Pulses, then fades out"), ("fill", "FFC000"))),
+        ]));
+        var slide6 = TestEnv.AssertOk(handler.Get(
+            new CommandContext
+            {
+                Workspace = ws,
+                File = ctx.File,
+                Args = new JsonObject { ["path"] = "/slide[6]" },
+            }));
+        var pulsingShape = slide6["shapes"]!.AsArray()
+            .Single(s => s!["text"]!.GetValue<string>().Contains("Pulses", StringComparison.Ordinal))!["path"]!
+            .GetValue<string>();
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", pulsingShape, type: "animation", props: TestEnv.Props(("effect", "pulse"))),
+            TestEnv.Op("add", pulsingShape, type: "animation", props: TestEnv.Props(
+                ("effect", "fadeOut"), ("trigger", "afterPrevious"), ("delay", "1s"))),
+            TestEnv.Op("add", "/slide[6]", type: "comment", props: TestEnv.Props(
+                ("text", "M5 thread root — expand to see the reply."), ("author", "AIOffice"))),
+        ]));
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[6]/comment[@id=2]", type: "reply", props: TestEnv.Props(
+                ("text", "Threaded reply added by aioffice M5."), ("author", "Reviewer"))),
         ]));
 
         var validation = TestEnv.AssertOk(handler.Validate(

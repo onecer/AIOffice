@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：M2 规格（v0.3.0）：**工具数维持 14 个**——M2 没有新工具，而是给 `office_edit` 增加 `track` / `author`（docx 修订）与 accept/reject op、给 `office_read` 增加 revisions/comments/styles 视图；新增错误码 `file_too_large`（大文件守卫）。
+> 状态：M5 规格（v0.6.0）：**工具数维持 14 个**——桥接只加参数不加工具：`office_create` 新增可选 `from`（markdown → docx / csv → xlsx 导入），`office_read` 的 view 枚举扩为 `markdown`（docx 专属导出）与 `csv`（xlsx 专属导出，新增 `sheet` 参数）；`office_edit` 的 add type 词表扩入 `field` / `dataValidation` / `sparkline` / `reply`（及 pptx `table`）。此前 M2 给 `office_edit` 增加 `track`/`author` 与 accept/reject op、给 `office_read` 增加 revisions/comments/styles 视图；错误码自 M2 起含 `file_too_large`（大文件守卫）。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -91,13 +91,14 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.1 `office_create`
 
-**用途**：新建空白 .docx / .xlsx / .pptx（类型由扩展名推断）。
+**用途**：新建空白 .docx / .xlsx / .pptx（类型由扩展名推断），或经 `from`（M5）从 markdown / csv 导入。
 
 ```json
 {
   "type": "object",
   "properties": {
     "file": { "type": "string", "description": "Target path ending in .docx/.xlsx/.pptx, inside workspace; kind inferred from extension" },
+    "from": { "type": "string", "description": "Import source: .md/.markdown -> .docx (headings/lists/tables/links/code), .csv/.tsv -> .xlsx (typed cells; leading-zero codes stay text). Mismatched pairs fail with the valid matrix" },
     "kind": { "type": "string", "enum": ["docx", "xlsx", "pptx"], "description": "Override when extension is non-standard" },
     "title": { "type": "string", "description": "Document title written to core properties" },
     "overwrite": { "type": "boolean", "default": false }
@@ -106,7 +107,7 @@ aioffice mcp [--workspace <dir>]
 }
 ```
 
-**result**：`data: { created: string /* absolute path */, kind: "docx"|"xlsx"|"pptx" }`
+**result**：`data: { created: string /* absolute path */, kind: "docx"|"xlsx"|"pptx" }`；带 `from` 时附 `source`（绝对路径）与逐格式导入统计（docx：`format:"markdown"`；xlsx：`sheet/delimiter/rows/columns/cells/streamed`）。
 
 **示例**
 
@@ -115,11 +116,15 @@ aioffice mcp [--workspace <dir>]
 { "file": "out/q4.pptx", "title": "Q4 Review" }
 // result
 { "ok": true, "data": { "created": "/ws/out/q4.pptx", "kind": "pptx" } }
+// call（M5 导入桥）
+{ "file": "report.docx", "from": "notes.md" }
+// result
+{ "ok": true, "data": { "created": "/ws/report.docx", "kind": "docx", "source": "/ws/notes.md", "format": "markdown" } }
 ```
 
-**映射 CLI**：`aioffice create <file> [--kind docx|xlsx|pptx] [--title T]`
+**映射 CLI**：`aioffice create <file> [--from notes.md|data.csv] [--kind docx|xlsx|pptx] [--title T]`
 
-**错误码**：`invalid_args`（扩展名无法推断且未传 `kind`；目标已存在且未 `overwrite`）、`sandbox_denied`、`internal_error`。
+**错误码**：`invalid_args`（扩展名无法推断且未传 `kind`；目标已存在且未 `overwrite`；`from` 源/目标不匹配——suggestion 给全矩阵 `.md/.markdown → .docx, .csv/.tsv → .xlsx`）、`file_not_found`（`from` 源不存在）、`sandbox_denied`（目标或 `from` 源越界）、`internal_error`。
 
 ---
 
@@ -132,16 +137,17 @@ aioffice mcp [--workspace <dir>]
   "type": "object",
   "properties": {
     "file": { "type": "string" },
-    "view": { "type": "string", "enum": ["outline", "text", "stats", "structure", "revisions", "comments", "styles"], "default": "outline",
-      "description": "outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only (M2)" },
-    "range": { "type": "string", "description": "Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx" },
+    "view": { "type": "string", "enum": ["outline", "text", "stats", "structure", "revisions", "comments", "styles", "markdown", "csv"], "default": "outline",
+      "description": "outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only (M2); markdown: docx body as GFM (M5, round-trips office_create from); csv: one xlsx sheet as RFC 4180 csv (M5)" },
+    "range": { "type": "string", "description": "Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx; csv view also takes 'A1:C10'" },
+    "sheet": { "type": "string", "description": "csv view: sheet name (default: first sheet)" },
     "max_bytes": { "type": "integer", "description": "Cap payload size; truncation reported in meta.warnings and data.truncated" }
   },
   "required": ["file"]
 }
 ```
 
-**result**：随 view 变化——`outline`: `{ outline: [{ path, kind, text?, children? }] }`；`text`: `{ text: string, truncated: boolean }`；`stats`: `{ paragraphs?, words?, tables?, sheets?, usedRange?, slides?, shapes? }`；`structure`: `{ tree: Node, truncated: boolean }`。
+**result**：随 view 变化——`outline`: `{ outline: [{ path, kind, text?, children? }] }`；`text`: `{ text: string, truncated: boolean }`；`stats`: `{ paragraphs?, words?, tables?, sheets?, usedRange?, slides?, shapes? }`；`structure`: `{ tree: Node, truncated: boolean }`；`markdown`（M5）: `{ view:"markdown", markdown: string }`；`csv`（M5）: `{ view:"csv", sheet, range?, content, truncated }`。桥接视图用错格式（如对 xlsx 要 markdown）→ `unsupported_feature`，suggestion 列出该格式的全部有效视图。
 
 **示例**
 
@@ -156,9 +162,9 @@ aioffice mcp [--workspace <dir>]
 ] } }
 ```
 
-**映射 CLI**：`aioffice read <file> [--view outline|text|stats|structure|revisions|comments|styles] [--range a..b] [--max-bytes N]`
+**映射 CLI**：`aioffice read <file> [--view outline|text|stats|structure|revisions|comments|styles|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]`
 
-**错误码**：`file_not_found`、`sandbox_denied`、`format_corrupt`、`invalid_args`（坏 range）。
+**错误码**：`file_not_found`、`sandbox_denied`、`format_corrupt`、`invalid_args`（坏 range / 未知 view，candidates 列出全部）、`unsupported_feature`（桥接视图用错格式）。
 
 ---
 
@@ -255,9 +261,9 @@ aioffice mcp [--workspace <dir>]
           "op": { "type": "string", "enum": ["set", "add", "remove", "move", "replace", "accept", "reject"],
             "description": "accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning" },
           "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\"" },
-          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation" },
+          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation, field, dataValidation, sparkline" },
           "props": { "type": "object", "additionalProperties": { "type": "string" },
-            "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals" },
+            "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals" },
           "position": { "type": ["integer", "string"],
             "description": "add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append" }
         },
@@ -647,7 +653,7 @@ aioffice mcp [--workspace <dir>]
 | `preview_open` | 300 | M1 转正，吃掉当年预留额度的大头 |
 | `preview_selection` | 180 | M1 转正 |
 | **M1 小计（14 工具）** | **3020** | v0 小计 2540 + preview 预留 480，预算如约未重谈 |
-| 措辞浮动预留 | 480 | description 迭代余量 |
+| 措辞浮动预留 | 480 | description 迭代余量（M5 的 `from`/新视图/新 type 词表从这里支出，实测全表 ≈ 2082 tokens，余量充足） |
 | **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关 |
 
 预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。

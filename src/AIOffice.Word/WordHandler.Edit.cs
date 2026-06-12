@@ -118,6 +118,8 @@ public sealed partial class WordHandler
             "add" when op.Type == "image" => ApplyAddImage(doc, op, session),
             "add" when op.Type == "link" && session.Track => throw TrackedStructureUnsupported("link"),
             "add" when op.Type == "link" => ApplyAddLink(doc, op, session),
+            "add" when op.Type == "field" && session.Track => throw TrackedStructureUnsupported("field"),
+            "add" when op.Type == "field" => ApplyAddField(doc, op),
             "add" when op.Type == "bookmark" => ApplyAddBookmark(doc, op),
             "add" when op.Type == "footnote" && session.Track => throw TrackedStructureUnsupported("footnote"),
             "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op),
@@ -158,6 +160,18 @@ public sealed partial class WordHandler
             return ApplyTrackedSet(doc, node, props, session);
         }
 
+        // Tables and cells take structured props (arrays, merge counts), so they
+        // bypass the stringly-typed paragraph/run prop loop.
+        if (node.Element is Table table)
+        {
+            return ApplySetTable(table, node, props);
+        }
+
+        if (node.Element is TableCell cell)
+        {
+            return ApplySetCell(cell, node, props);
+        }
+
         foreach (var (name, value) in OrderedProps(props))
         {
             switch (node.Element)
@@ -175,19 +189,14 @@ public sealed partial class WordHandler
                     WordFormatting.SetRunProp(r, name, value);
                     break;
 
-                case TableCell cell when name == "text":
-                    cell.RemoveAllChildren<Paragraph>();
-                    cell.AppendChild(WordFactory.Paragraph(value));
-                    break;
-
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
                         $"set is not supported on '{node.Type}' (property '{name}').",
                         node.Type switch
                         {
-                            "tc" => "A table cell only supports text, or address a paragraph inside it: " + node.CanonicalPath + "/p[1].",
                             "header" or "footer" => "Address a paragraph inside it instead: " + node.CanonicalPath + "/p[1].",
+                            "tr" => "Set table-level props on the table (headerRow styles row 1), or cell props on a tc.",
                             _ => "Set properties on p or run elements; address one with query first.",
                         });
             }
@@ -231,10 +240,11 @@ public sealed partial class WordHandler
                 "Add p (props.style=Heading1 for headings, props.list=bullet|number for lists), tr (props.cells=[…]), " +
                 "table (props.rows/columns), image (props.src), link (props.url), bookmark (props.name), " +
                 "footnote/endnote (props.text), comment/reply, style, toc (props.levels), watermark (props.text), " +
-                "sectionBreak (props.kind), or header/footer targeting /header[1] | /footer[1]. " +
+                "sectionBreak (props.kind), field (props.kind=pageNumber|numPages|date|docTitle), " +
+                "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
-                    "style", "header", "footer", "toc", "watermark", "sectionBreak"]),
+                    "style", "header", "footer", "toc", "watermark", "sectionBreak", "field"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

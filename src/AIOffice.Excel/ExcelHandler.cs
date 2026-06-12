@@ -43,6 +43,15 @@ namespace AIOffice.Excel;
 /// insert/delete/size/hide (<c>/Sheet1/col[C]</c> letter addressing; ClosedXML
 /// shifts formula references and tests assert it), and cell notes (always
 /// addressed via their cell; no <c>note[i]</c> index form).</item>
+/// <item>M5 — the csv bridge and form/annotation surface:
+/// <see cref="CreateFrom"/> imports csv (RFC 4180, sniffed delimiter, typed
+/// values, leading-zero strings stay text) and <c>read --view csv</c> exports
+/// one sheet window (formulas as cached values); data validations
+/// (list/wholeNumber/decimal/date/textLength — <see cref="ExcelDataValidations"/>),
+/// THREADED comments with replies + persons dedup + legacy note shadows
+/// (<see cref="ExcelComments"/>, <c>read --view comments</c>), cell hyperlinks
+/// (external/internal, render emits <c>&lt;a&gt;</c>) and sparklines
+/// (line/column/winLoss in x14 extLst — <see cref="ExcelSparklines"/>).</item>
 /// <item><c>move</c> ops and png rendering are not implemented; they return
 /// typed <c>unsupported_feature</c> envelopes with workarounds.</item>
 /// </list>

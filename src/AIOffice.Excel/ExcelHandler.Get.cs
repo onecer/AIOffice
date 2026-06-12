@@ -48,7 +48,8 @@ public sealed partial class ExcelHandler
         return target.Kind switch
         {
             ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet), MetaFor(file, sw)),
-            ExcelTargetKind.Cell => Envelope.Ok(CellInfo(target.Sheet, target.Cell!), MetaFor(file, sw)),
+            ExcelTargetKind.Cell => Envelope.Ok(
+                CellInfo(target.Sheet, target.Cell!, CommentInfoFor(file, target)), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
             ExcelTargetKind.Column => Envelope.Ok(
                 ColumnInfo(target.Sheet, target.ColumnNumber!.Value), MetaFor(file, sw)),
@@ -61,9 +62,55 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Image => Envelope.Ok(
                 ExcelImages.Describe(target.Sheet, ExcelImages.Find(target), target.ImageIndex!.Value),
                 MetaFor(file, sw)),
+            ExcelTargetKind.DataValidation => Envelope.Ok(
+                ExcelDataValidations.Describe(
+                    target.Sheet, ExcelDataValidations.Find(target), target.DataValidationIndex!.Value),
+                MetaFor(file, sw)),
+            ExcelTargetKind.Sparkline => Envelope.Ok(
+                ExcelSparklines.Describe(target.Sheet, ExcelSparklines.Find(target), target.SparklineIndex!.Value),
+                MetaFor(file, sw)),
+            ExcelTargetKind.Comment => Envelope.Ok(CommentTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
+
+    /// <summary>One comment thread, read from the raw threadedComments part.</summary>
+    private static object CommentTargetInfo(string file, ExcelTarget target)
+    {
+        var model = ExcelComments.Load(file);
+        var thread = model.FindById(target.Sheet.Name, target.CommentId!);
+        if (thread is null)
+        {
+            var candidates = ExcelComments.CandidatesOn(target.Sheet, model);
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No comment thread with id '{target.CommentId}' on sheet '{target.Sheet.Name}'.",
+                candidates.Count > 0
+                    ? "Run 'aioffice read --view comments' to list thread paths; pick one of the candidates."
+                    : "This sheet has no comment threads; start one with {op:add, type:comment, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + "/B2, props:{text:\"…\"}}.",
+                candidates: candidates.Count > 0 ? candidates : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return ExcelComments.Describe(target.Sheet, thread, model);
+    }
+
+    /// <summary>
+    /// The comment block for cell get (M5): present only when the cell carries
+    /// a threaded comment. Detection rides on the cheap ClosedXML shadow check
+    /// so plain cells never pay for a raw part read.
+    /// </summary>
+    private static object? CommentInfoFor(string file, ExcelTarget target)
+    {
+        if (!ExcelComments.HasShadow(target.Cell!))
+        {
+            return null;
+        }
+
+        var model = ExcelComments.Load(file);
+        var thread = model.FindByCell(target.Sheet.Name, target.Cell!.Address.ToString()!);
+        return thread is null ? null : ExcelComments.Describe(target.Sheet, thread, model);
+    }
 
     /// <summary>One pivot table; the source range comes from the raw cache part.</summary>
     private static object PivotTargetInfo(string file, ExcelTarget target)
@@ -141,7 +188,7 @@ public sealed partial class ExcelHandler
     }
 
     /// <summary>One cell with its typed value and the properties an agent needs to edit it.</summary>
-    private static object CellInfo(IXLWorksheet sheet, IXLCell cell)
+    private static object CellInfo(IXLWorksheet sheet, IXLCell cell, object? comment = null)
     {
         XLCellValue value;
         try
@@ -154,6 +201,7 @@ public sealed partial class ExcelHandler
         }
 
         var numberFormat = cell.Style.NumberFormat.Format;
+        var hyperlink = cell.HasHyperlink ? cell.GetHyperlink() : null;
         return new
         {
             path = ExcelPaths.CellPath(sheet, cell.Address),
@@ -169,7 +217,14 @@ public sealed partial class ExcelHandler
             bold = cell.Style.Font.Bold ? true : (bool?)null,
             italic = cell.Style.Font.Italic ? true : (bool?)null,
             merged = MergedRangeOf(sheet, cell),
+            hyperlink = hyperlink is null
+                ? null
+                : hyperlink.IsExternal
+                    ? hyperlink.ExternalAddress.ToString()
+                    : "#" + hyperlink.InternalAddress,
+            hyperlinkTooltip = string.IsNullOrEmpty(hyperlink?.Tooltip) ? null : hyperlink.Tooltip,
             note = NoteInfo(cell),
+            comment,
         };
     }
 

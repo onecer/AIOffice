@@ -23,7 +23,11 @@ public static class HelpTopics
                 - edit-ops        op kinds, position forms, atomicity, expect_rev
                 - envelope        the {ok,data,error,meta} result shape
                 - errors          all error codes and how to recover
+                - bridges         markdown↔docx and csv↔xlsx import/export (M5)
                 - docx/paragraph  paragraph element: settable props
+                - docx/table      deep tables: merges, borders, shading, widths (M5)
+                - docx/field      PAGE/NUMPAGES/DATE/TITLE fields (M5)
+                - docx/header     default/firstPage/even header+footer variants (M5)
                 - docx/revisions  tracked changes: track:true, accept/reject ops
                 - docx/comment    comments + threaded replies: add/read/remove
                 - docx/style      style definitions: add/set/remove, apply
@@ -31,19 +35,149 @@ public static class HelpTopics
                 - docx/list       numbered/bulleted/nested list items (M3)
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins (M3)
-                - xlsx/cell       cell element: settable props
+                - xlsx/cell       cell element: settable props incl. hyperlink (M5)
+                - xlsx/dataValidation  list dropdowns + wholeNumber/decimal/date/textLength rules (M5)
+                - xlsx/sparkline  line/column/winLoss sparklines (M5)
+                - xlsx/comment    threaded comments + replies (M5)
                 - xlsx/pivot      pivot tables: add type "pivot"
                 - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
                 - xlsx/image      anchored pictures: add type "image"
                 - xlsx/sheet      freeze/autoFilter/print setup, defined names, streaming (M3)
                 - pptx/shape      shape element: settable props incl. preset geometry/z-order
+                - pptx/table      native tables: merges, looks, columnWidths (M5)
+                - pptx/animation  entrance/emphasis/exit effects (M4/M5)
+                - pptx/comment    slide comments + threaded replies (M5)
                 - pptx/slide      slide props incl. background + transition
                 - pptx/notes      speaker notes: /slide[i]/notes
                 - pptx/image      pictures: add type "image"
                 - pptx/chart      native charts + cross-doc dataFrom (M3)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
-                ["addressing", "selectors", "edit-ops"]),
+                ["addressing", "selectors", "edit-ops", "bridges"]),
+
+            ["bridges"] = (
+                """
+                ## markdown / csv bridges (M5)
+                Import: office_create {file:"report.docx", from:"notes.md"} — Markdig-parsed GFM: headings (styles),
+                        bold/italic/strike/code runs, nested bullet+number lists, pipe tables (header row bolded),
+                        links, images (sandbox-resolved), blockquotes, code blocks, horizontal rules. Raw HTML and
+                        missing images degrade to meta.warnings, never failures.
+                        office_create {file:"orders.xlsx", from:"orders.csv"} — RFC 4180 (quotes, embedded commas/newlines),
+                        delimiter sniffed (, ; tab |) or forced via delimiter:",". Cells are typed: numbers/dates/booleans
+                        convert, leading-zero codes like "007" STAY TEXT; >50k cells stream through the SAX writer.
+                Matrix: .md/.markdown → .docx, .csv/.tsv → .xlsx — any other pair is invalid_args naming this matrix.
+                Export: office_read {view:"markdown"} (docx) — GFM of the body; structure round-trips with the importer.
+                        office_read {view:"csv", sheet?:"Name", range?:"A1:C10"} (xlsx) — one sheet as RFC 4180 csv.
+                CLI:    aioffice create report.docx --from notes.md;  aioffice read report.docx --view markdown
+                        aioffice create orders.xlsx --from orders.csv; aioffice read orders.xlsx --view csv --sheet Sheet1
+                """,
+                ["edit-ops", "errors"]),
+
+            ["docx/table"] = (
+                """
+                ## docx deep tables (M5)
+                table set (path /body/table[1]): borders all|outer|none (+ borderColor hex, borderWidthPt),
+                  shading hex, headerRow "true" (bolds row 1 + repeats it on every page), width ("12cm"|"100%"),
+                  columnWidths ["3cm","auto","2.5cm"] (one entry per column), alignment left|center|right, cellPaddingCm.
+                cell set (path /body/table[1]/tr[1]/tc[1]): text, mergeRight N (gridSpan = the TOTAL span; 1 unmerges),
+                  mergeDown N (vMerge chain, total rows covered; 1 unmerges), shading hex, valign top|center|bottom.
+                Merged-away cells disappear from get/render; render {to:"html"} emits real colspan/rowspan.
+                Add rows: {"op":"add","path":"/body/table[1]","type":"tr"}; add a table: type "table" + {rows, columns}.
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["docx/field"] = (
+                """
+                ## docx fields (M5)
+                Add: {"op":"add","path":"/footer[1]/p[1]","type":"field","props":{"kind":"pageNumber"}}
+                kinds: pageNumber (PAGE), numPages (NUMPAGES), date (DATE, optional format:"yyyy"), docTitle (TITLE).
+                leadingText prefixes literal text: 'Page X of Y' = a pageNumber field, then a numPages field with
+                {"leadingText":" of "}. Fields live in body or header/footer paragraphs; get/render show kind + instruction.
+                """,
+                ["docx/header", "edit-ops"]),
+
+            ["docx/header"] = (
+                """
+                ## docx header/footer variants (M5)
+                Paths: /header[1] (= /header[default]), /header[firstPage], /header[even] — same for /footer[…].
+                Add: {"op":"add","path":"/header[firstPage]","type":"header","props":{"text":"Cover"}} — wires
+                w:titlePg (firstPage) / w:evenAndOddHeaders (even) automatically. All three variants coexist;
+                named paths address content inside: {"op":"set","path":"/header[firstPage]/p[1]","props":{…}}.
+                get reports the variant; combine with docx/field for 'Page X of Y' footers.
+                """,
+                ["docx/field", "addressing"]),
+
+            ["xlsx/dataValidation"] = (
+                """
+                ## xlsx data validation (M5) — add type "dataValidation" (path = the range)
+                list:  {"op":"add","path":"/Sheet1/B2:B20","type":"dataValidation","props":{"kind":"list",
+                       "values":["Open","Closed"]}}  — or "sourceRange":"/Lists/A1:A3" (not both); Excel shows a dropdown.
+                rules: kind wholeNumber|decimal|date|textLength + operator (between needs value+value2; > >= < <= == != need value),
+                       e.g. {"kind":"wholeNumber","operator":"between","value":1,"value2":10}; dates as "2026-01-01".
+                extras: errorTitle, errorMessage, errorStyle stop|warning|information, allowBlank.
+                Read back: get /Sheet1/dataValidation[1] (dvKind, operator, values…); structure lists per-sheet rules;
+                remove by the same path.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["xlsx/sparkline"] = (
+                """
+                ## xlsx sparklines (M5) — add type "sparkline" (path = the host CELL)
+                {"op":"add","path":"/Sheet1/E2","type":"sparkline","props":{"dataRange":"A2:D2","kind":"line",
+                 "color":"376092","markers":true}}
+                kinds: line | column | winLoss (markers: line only). One sparkline per op; rows of them = one op per cell.
+                Read back: get /Sheet1/sparkline[1] (sparklineKind, cell, dataRange); structure lists sparklineGroups;
+                remove by the same path.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["xlsx/comment"] = (
+                """
+                ## xlsx threaded comments (M5)
+                Add:   {"op":"add","path":"/Sheet1/B2","type":"comment","props":{"text":"looks wrong","author":"Reviewer"?}}
+                Reply: {"op":"add","path":"/Sheet1/comment[@id=GUID]","type":"reply","props":{"text":"fixed","author"?}}
+                       (the GUID id comes back from the add / from read {view:"comments"} / structure)
+                Real xl/threadedComments parts (modern Excel threads) plus a legacy note fallback for old clients.
+                Read:  office_read {view:"comments"} lists threads; get /Sheet1/B2 shows the anchored thread;
+                       get /Sheet1/comment[@id=GUID] returns the whole thread. Remove the root to drop the thread.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["pptx/table"] = (
+                """
+                ## pptx native tables (M5) — add type "table" on /slide[i]
+                {"op":"add","path":"/slide[1]","type":"table","props":{"rows":3,"cols":4,"headerRow":true,
+                 "style":"medium","x":"2cm","y":"5cm","w":"28cm","columnWidths":[…]?}}
+                styles: light | medium | dark — direct paint (banded rows + header fill), no theme dependency.
+                Cells: {"op":"set","path":"/slide[1]/table[1]/tr[1]/tc[1]","props":{"text":"Q3","mergeRight":2,"mergeDown"?}}
+                — pptx mergeRight/mergeDown = how many cells to ABSORB (mergeRight:1 -> span 2; docx counts total span instead).
+                get /slide[1]/table[1] reports rows/cols/headerRow/rowsDetail with per-cell paths + merge shape.
+                render {to:"svg"} draws the real grid. Remove by the table path.
+                """,
+                ["pptx/slide", "edit-ops"]),
+
+            ["pptx/animation"] = (
+                """
+                ## pptx animations (M4 entrance, M5 emphasis+exit) — add type "animation" (path = the shape)
+                {"op":"add","path":"/slide[1]/shape[@id=4]","type":"animation","props":{"effect":"pulse","trigger":"click"?,
+                 "duration":"0.5s"?,"delay"?,"direction"?,"color"?}}
+                entrance: appear, fade, flyIn, wipe   emphasis: pulse, grow, spin, colorPulse (takes color)
+                exit:     fadeOut, flyOut, wipeOut    direction: flyIn/wipe/flyOut/wipeOut only (left|right|top|bottom)
+                triggers: click | withPrevious | afterPrevious. read {view:"structure"} lists per-slide animation order;
+                get the shape to see its animations; remove /slide[i]/animation[k] to drop one.
+                """,
+                ["pptx/shape", "pptx/slide"]),
+
+            ["pptx/comment"] = (
+                """
+                ## pptx comments + replies (M2 comments, M5 threads)
+                Add:   {"op":"add","path":"/slide[2]","type":"comment","props":{"text":"tighten this","author"?}}
+                Reply: {"op":"add","path":"/slide[2]/comment[@id=1]","type":"reply","props":{"text":"done","author"?}}
+                Replies are p15 threadingInfo on classic comment parts — PowerPoint 2013+ shows real threads.
+                Read: office_read {view:"comments"} lists threads per slide; get /slide[2]/comment[@id=1] returns the
+                thread; remove the root comment to drop it (replies go with it).
+                """,
+                ["pptx/slide", "edit-ops"]),
 
             ["addressing"] = (
                 """

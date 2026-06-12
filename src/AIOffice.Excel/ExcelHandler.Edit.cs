@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AIOffice.Core;
 using ClosedXML.Excel;
@@ -13,11 +14,14 @@ public sealed partial class ExcelHandler
     [
         "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name",
         "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
-        "height", "width", "hidden",
+        "height", "width", "hidden", "hyperlink", "hyperlinkTooltip",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
-        ["sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note"];
+    [
+        "sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note",
+        "dataValidation", "sparkline", "comment", "reply",
+    ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
     {
@@ -110,9 +114,20 @@ public sealed partial class ExcelHandler
                 ExcelImages.RemoveAfterSave(file, post.RemovedImages);
             }
 
+            // Threaded comments (M5) live in parts ClosedXML cannot author;
+            // write the batch's model back raw.
+            if (post.Comments is { Dirty: true } comments)
+            {
+                ExcelComments.WriteAfterSave(file, comments);
+            }
+
             // Correct ClosedXML's data-bar GUID/orphan defects on the saved
             // bytes (no-op scan when there is nothing to fix).
             ExcelConditionalFormats.FixUpAfterSave(file);
+
+            // Strip the xr2:uid attribute ClosedXML stamps on sparkline groups
+            // (Office2019 validator flags it); no-op when there are none.
+            ExcelSparklines.FixUpAfterSave(file);
         }
         catch (Exception)
         {
@@ -156,7 +171,18 @@ public sealed partial class ExcelHandler
         /// pass rewrites the sheet's part directly.
         /// </summary>
         public List<ExcelBulkWrites.Pending> StreamedWrites { get; } = [];
+
+        /// <summary>
+        /// Threaded-comment state (M5), loaded from disk on the batch's first
+        /// comment op and written back raw after the ClosedXML save (ClosedXML
+        /// cannot see threadedComments parts).
+        /// </summary>
+        public ExcelComments.Model? Comments { get; set; }
     }
+
+    /// <summary>The batch's comment model, loaded lazily from the on-disk file.</summary>
+    private static ExcelComments.Model CommentModelFor(CommandContext ctx, PostSaveWork post) =>
+        post.Comments ??= ExcelComments.Load(ctx.File!);
 
     /// <summary>
     /// Materializes queued streamed writes whose sheet the next op addresses,
@@ -234,7 +260,7 @@ public sealed partial class ExcelHandler
                 ApplyAdd(ctx, workbook, op, index, details, charts, post);
                 break;
             case "remove":
-                ApplyRemove(workbook, op, index, details, charts, post);
+                ApplyRemove(ctx, workbook, op, index, details, charts, post);
                 break;
             case "replace":
                 ApplyReplace(workbook, op, index, details, warnings);
@@ -288,11 +314,15 @@ public sealed partial class ExcelHandler
 
         var target = ExcelPaths.Resolve(workbook, op.Path);
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
-            or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image)
+            or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image
+            or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment)
         {
-            var kindName = target.Kind == ExcelTargetKind.ConditionalFormat
-                ? "conditionalFormat"
-                : target.Kind.ToString().ToLowerInvariant();
+            var kindName = target.Kind switch
+            {
+                ExcelTargetKind.ConditionalFormat => "conditionalFormat",
+                ExcelTargetKind.DataValidation => "dataValidation",
+                _ => target.Kind.ToString().ToLowerInvariant(),
+            };
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"ops[{index}]: set on a {kindName} is not supported yet.",
@@ -420,6 +450,11 @@ public sealed partial class ExcelHandler
         if (props.TryGetPropertyValue("hidden", out var hiddenNode) && hiddenNode is not null)
         {
             ApplyHidden(target, op, hiddenNode, index, applied);
+        }
+
+        if (props.ContainsKey("hyperlink") || props.ContainsKey("hyperlinkTooltip"))
+        {
+            ApplyHyperlink(target, props, index, applied);
         }
 
         details.Add(new { op = "set", path = DocPath.Parse(op.Path).ToCanonicalString(), applied });
@@ -656,6 +691,98 @@ public sealed partial class ExcelHandler
         }
     }
 
+    /// <summary>
+    /// Cell hyperlinks (M5): <c>{"hyperlink":"https://…"}</c> sets an external
+    /// link, <c>{"hyperlink":"#Sheet2!A1"}</c> an internal one (a defined name
+    /// works too: <c>#Results</c>), <c>{"hyperlink":""}</c> clears.
+    /// <c>hyperlinkTooltip</c> rides along (or retargets an existing link's
+    /// tooltip when sent alone).
+    /// </summary>
+    private static void ApplyHyperlink(ExcelTarget target, JsonObject props, int index, List<string> applied)
+    {
+        if (target.Kind != ExcelTargetKind.Cell)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: 'hyperlink' targets a single cell like /Sheet1/A1.",
+                "Set the link cell-by-cell; ranges are not supported for hyperlinks.");
+        }
+
+        var cell = target.Cell!;
+        var hasAddress = props.TryGetPropertyValue("hyperlink", out var addressNode);
+        var address = addressNode is JsonValue addressValue &&
+                      addressValue.GetValueKind() == JsonValueKind.String
+            ? addressValue.GetValue<string>()
+            : null;
+        var tooltip = props.TryGetPropertyValue("hyperlinkTooltip", out var tooltipNode) &&
+                      tooltipNode is JsonValue tooltipValue &&
+                      tooltipValue.GetValueKind() == JsonValueKind.String
+            ? tooltipValue.GetValue<string>()
+            : null;
+
+        if (hasAddress && string.IsNullOrEmpty(address))
+        {
+            // {"hyperlink":""} (or null) clears; clearing a link-less cell is a no-op.
+            if (cell.HasHyperlink)
+            {
+                cell.GetHyperlink().Delete();
+            }
+
+            applied.Add("hyperlinkCleared");
+            return;
+        }
+
+        if (!hasAddress)
+        {
+            if (!cell.HasHyperlink)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: 'hyperlinkTooltip' needs a hyperlink on the cell.",
+                    "Pass both props together: {\"hyperlink\":\"https://…\",\"hyperlinkTooltip\":\"…\"}.");
+            }
+
+            cell.GetHyperlink().Tooltip = tooltip;
+            applied.Add("hyperlinkTooltip");
+            return;
+        }
+
+        cell.SetHyperlink(BuildHyperlink(address!, tooltip, index));
+        applied.Add("hyperlink");
+        if (tooltip is not null)
+        {
+            applied.Add("hyperlinkTooltip");
+        }
+    }
+
+    private static XLHyperlink BuildHyperlink(string address, string? tooltip, int index)
+    {
+        if (address.StartsWith('#'))
+        {
+            var internalAddress = address[1..];
+            if (internalAddress.Length == 0)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: an internal hyperlink needs a target after '#'.",
+                    "Use e.g. {\"hyperlink\":\"#Sheet2!A1\"} or a defined name like #Results.");
+            }
+
+            return new XLHyperlink(internalAddress, tooltip);
+        }
+
+        if (!Uri.TryCreate(address, UriKind.Absolute, out _))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: '{address}' is neither an absolute URL nor a #internal reference.",
+                "Use a full URL ({\"hyperlink\":\"https://example.com\"}, mailto: works too) or " +
+                "an internal target ({\"hyperlink\":\"#Sheet2!A1\"}).");
+        }
+
+        return new XLHyperlink(address, tooltip);
+    }
+
     private static IXLStyle StyleOf(ExcelTarget target) => target.Kind switch
     {
         ExcelTargetKind.Cell => target.Cell!.Style,
@@ -731,6 +858,18 @@ public sealed partial class ExcelHandler
                 break;
             case "conditionalFormat":
                 details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
+            case "dataValidation":
+                details.Add(ExcelDataValidations.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
+            case "sparkline":
+                details.Add(ExcelSparklines.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
+            case "comment":
+                details.Add(AddComment(ctx, ExcelPaths.Resolve(workbook, op.Path), op, index, post));
+                break;
+            case "reply":
+                details.Add(AddReply(ctx, ExcelPaths.Resolve(workbook, op.Path), op, index, post));
                 break;
             case "name":
                 details.Add(ExcelNames.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));
@@ -916,7 +1055,8 @@ public sealed partial class ExcelHandler
     // ----- remove -----------------------------------------------------------
 
     private static void ApplyRemove(
-        XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts, PostSaveWork post)
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
+        ChartOpBatch charts, PostSaveWork post)
     {
         // Defined-name paths use an id form the shared grammar cannot parse;
         // peel them off before path resolution (precedent: pivot[@name=…]).
@@ -981,6 +1121,23 @@ public sealed partial class ExcelHandler
                 });
                 return;
             }
+
+            case ExcelTargetKind.DataValidation:
+            {
+                var validation = ExcelDataValidations.Find(target);
+                var path = ExcelPaths.DataValidationPath(target.Sheet, target.DataValidationIndex!.Value);
+                target.Sheet.DataValidations.Delete(v => ReferenceEquals(v, validation));
+                details.Add(new { op = "remove", path, removed = "dataValidation" });
+                return;
+            }
+
+            case ExcelTargetKind.Sparkline:
+                details.Add(ExcelSparklines.Remove(target));
+                return;
+
+            case ExcelTargetKind.Comment:
+                details.Add(RemoveComment(ctx, target, index, post));
+                return;
         }
 
         var canonical = DocPath.Parse(op.Path).ToCanonicalString();

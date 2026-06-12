@@ -91,6 +91,46 @@ stroke). Z-order: `{op:"move", path:"/slide[1]/shape[@id=5]",
 position:"front|back|forward|backward"}` reorders the paint order (front =
 topmost).
 
+## table (M5, `/slide[1]/table[1]`)
+
+`{op:"add", path:"/slide[1]", type:"table", props:{rows:3, cols:4,
+headerRow?:true, style?:"light|medium|dark", x?, y?, w?, columnWidths?:[…]}}` —
+styles are direct paint (header fill + banded rows), no theme dependency.
+Cells: `{op:"set", path:"/slide[1]/table[1]/tr[1]/tc[1]", props:{text,
+mergeRight?:2, mergeDown?:2}}` — pptx merge counts are the cells to **absorb**
+(`mergeRight:1` → span 2; docx counts the total span instead). `get` the table
+for rows/cols/headerRow plus per-cell paths and merge shape; `render --to svg`
+draws the real grid; `remove` by the table path.
+
+## animation (M4 entrance, M5 emphasis + exit; `add` on the shape path)
+
+`{op:"add", path:"/slide[1]/shape[@id=4]", type:"animation",
+props:{effect, trigger?, duration?, delay?, direction?, color?}}`
+
+| class    | effects                          | extras                            |
+|----------|----------------------------------|-----------------------------------|
+| entrance | appear · fade · flyIn · wipe     | direction: flyIn/wipe             |
+| emphasis | pulse · grow · spin · colorPulse | color: colorPulse only            |
+| exit     | fadeOut · flyOut · wipeOut       | direction: flyOut/wipeOut         |
+
+Triggers: `click` (default) · `withPrevious` · `afterPrevious`; durations like
+`"0.5s"`. `read --view structure` lists per-slide animation order; remove
+`/slide[i]/animation[k]` to drop one.
+
+## comment + reply (M2 comments, M5 threads)
+
+`{op:"add", path:"/slide[2]", type:"comment", props:{text, author?}}` adds a
+comment; `{op:"add", path:"/slide[2]/comment[@id=1]", type:"reply",
+props:{text, author?}}` threads a reply under it (p15 threadingInfo —
+PowerPoint 2013+ shows real threads). `read --view comments` lists threads;
+removing the root removes its replies too.
+
+## SmartArt (M5, read-only)
+
+SmartArt diagrams surface in `read --view structure` (per-slide `smartArt`
+rows) and `get /slide[i]/smartart[k]` as nested node trees in connection
+order. Editing SmartArt is `unsupported_feature` with the workaround named.
+
 ## Rendering
 
 `aioffice render deck.pptx --to svg --scope /slide[2] -o slide2.svg` renders
@@ -99,4 +139,4 @@ one slide via a local Chrome/Edge (default `/slide[1]` — pass `--scope`);
 `--to pdf` (M3) prints the WHOLE deck to one PDF, one page per slide
 (`--scope /slide[N]` narrows it to a single page).
 
-Master/layout editing is still `unsupported_feature` (M4).
+Master/layout editing is still `unsupported_feature`.

@@ -246,14 +246,16 @@ public sealed class AnimationTests : IDisposable
     }
 
     [Fact]
-    public void UnknownEffect_IsTypedUnsupported_ListingTheFour()
+    public void UnknownEffect_IsTypedUnsupported_ListingAllEleven()
     {
         var shapePath = CreateWithShape();
         var envelope = _handler.Edit(_ws.Ctx("deck.pptx"),
             [TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(("effect", "bounce")))]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Equal(["appear", "fade", "flyIn", "wipe"], error.Candidates!);
+        Assert.Equal(
+            ["appear", "fade", "flyIn", "wipe", "pulse", "grow", "spin", "colorPulse", "fadeOut", "flyOut", "wipeOut"],
+            error.Candidates!);
     }
 
     [Fact]

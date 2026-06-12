@@ -18,7 +18,7 @@ internal sealed record PptxOpOutcome(string Target, int? Replacements = null, IR
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "animation", "comment"];
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
@@ -49,12 +49,18 @@ internal static class PptxEditor
     /// <summary>Applies the op and returns the canonical path of the affected node (plus replace counters).</summary>
     public static PptxOpOutcome Apply(PresentationPart presentation, EditOp op, Workspace workspace)
     {
-        if (PptxAddress.Parse(op.Path).IsMaster)
+        var parsed = PptxAddress.Parse(op.Path);
+        if (parsed.IsMaster)
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"Editing masters/layouts is not supported yet (planned M2): {op.Path}",
                 "Edit slides instead, or copy a layout-derived slide via 'add slide' with props {\"layout\": N}.");
+        }
+
+        if (parsed.IsSmartArt)
+        {
+            throw PptxSmartArt.EditUnsupported(op.Path);
         }
 
         switch (op.Op)
@@ -114,6 +120,27 @@ internal static class PptxEditor
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
+            case "table":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "table");
+                var index = PptxTables.Add(slidePart, op.Props);
+                return Units.Inv($"/slide[{address.SlideIndex}]/table[{index}]");
+            }
+
+            case "row":
+            {
+                if (!address.IsTable)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add row targets a table, not '{op.Path}'.",
+                        "Use {\"op\":\"add\",\"path\":\"/slide[2]/table[1]/tr[2]\",\"type\":\"row\"} — " +
+                        "the new row becomes tr[2]; omit /tr[r] to append.");
+                }
+
+                return PptxTables.AddRow(presentation, address, op.Position);
+            }
+
             case "animation":
                 return PptxAnimations.Add(presentation, address, op.Props);
 
@@ -121,10 +148,14 @@ internal static class PptxEditor
             {
                 if (address.IsComment)
                 {
-                    throw PptxComments.RepliesUnsupported();
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add comment targets a slide; '{op.Path}' is a comment.",
+                        "To reply to it, use type reply: {\"op\":\"add\",\"path\":\"" + op.Path +
+                        "\",\"type\":\"reply\",\"props\":{\"text\":\"...\"}}.");
                 }
 
-                if (address.HasShape || address.IsChart || address.IsAnimation)
+                if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation)
                 {
                     throw new AiofficeException(
                         ErrorCodes.InvalidArgs,
@@ -136,20 +167,34 @@ internal static class PptxEditor
                 return PptxComments.Add(presentation, address, op.Props);
             }
 
+            case "reply":
+            {
+                if (!address.IsComment)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add reply targets a comment, not '{op.Path}'.",
+                        "Use the parent comment's path: {\"op\":\"add\",\"path\":\"/slide[2]/comment[@id=1]\"," +
+                        "\"type\":\"reply\",\"props\":{\"text\":\"...\"}}.");
+                }
+
+                return PptxComments.AddReply(presentation, address, op.Props);
+            }
+
             default:
                 throw new AiofficeException(
                     op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
                     "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture), " +
-                    "chart (bar/line/pie), animation (on a shape path) and comment. " +
-                    "For tables, build the deck and add them in PowerPoint for now.",
+                    "chart (bar/line/pie), table (with rows/cols), row (on a table path), " +
+                    "animation (on a shape path), comment and reply (on a comment path).",
                     candidates: AddTypes);
         }
     }
 
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape || address.IsChart || address.IsAnimation || address.IsComment)
+        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -301,6 +346,11 @@ internal static class PptxEditor
                 "Remove the chart ({\"op\":\"remove\",\"path\":\"" + address.CanonicalChartPath + "\"}) " +
                 "and add it again with the new data; {\"embedData\":true} retrofits an editable workbook; " +
                 "position/size/name sets target its shape path.");
+        }
+
+        if (address.IsTable)
+        {
+            return PptxTables.Set(presentation, address, op.Props);
         }
 
         if (address.IsAnimation)
@@ -459,6 +509,11 @@ internal static class PptxEditor
             return PptxCharts.Remove(presentation, address);
         }
 
+        if (address.IsTable)
+        {
+            return PptxTables.Remove(presentation, address);
+        }
+
         if (address.IsAnimation)
         {
             return PptxAnimations.Remove(presentation, address);
@@ -538,7 +593,16 @@ internal static class PptxEditor
                 "Animations play in insertion order (remove and re-add to reorder); comments are anchored by x/y.");
         }
 
-        if (address.HasShape || address.IsChart)
+        if (address.IsTable && (address.TableRowIndex is not null || address.TableCellIndex is not null))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved; rows and cells stay in grid order.",
+                "Add/remove rows to restructure, or move the whole table: " +
+                "{\"op\":\"move\",\"path\":\"" + address.CanonicalTablePath + "\",\"position\":\"front\"}.");
+        }
+
+        if (address.HasShape || address.IsChart || address.IsTable)
         {
             return MoveShapeZOrder(presentation, address, op.Position);
         }
@@ -589,7 +653,9 @@ internal static class PptxEditor
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var view = address.IsChart
             ? PptxCharts.Resolve(slidePart, address).View
-            : PptxDoc.ResolveShape(slidePart, address);
+            : address.IsTable
+                ? PptxTables.Resolve(slidePart, address).View
+                : PptxDoc.ResolveShape(slidePart, address);
 
         var tree = PptxDoc.RequireShapeTree(slidePart);
         var siblings = PptxDoc.Shapes(tree).Select(s => s.Element).ToList();

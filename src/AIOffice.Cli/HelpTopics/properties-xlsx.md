@@ -11,6 +11,8 @@
 | italic      | bool                 |                                                |
 | color       | string               | font color, hex RGB                            |
 | fill        | string               | background color, hex RGB                      |
+| hyperlink   | string               | M5: `https://…` external, `#Sheet!A1` internal |
+| hyperlinkTooltip | string          | M5: hover text for the hyperlink               |
 
 Value auto-typing: a string with a leading `=` is a **formula**
 (`"value": "=SUM(A1:A2)"`), ISO dates (`2024-05-01`, `2024-05-01T08:30`)
@@ -110,3 +112,43 @@ after a remove).
 | widthPx, heightPx | number | omit either to keep the aspect ratio       |
 
 `{op:"add", path:"/Sheet1", type:"image", props:{src:"logo.png", anchor:"E2"}}`.
+
+## dataValidation (M5, `/Sheet1/dataValidation[1]`)
+
+`{op:"add", path:"/Sheet1/B2:B20", type:"dataValidation", props:{...}}` — the
+op path is the range the rule covers.
+
+| kind        | props                                                          |
+|-------------|----------------------------------------------------------------|
+| list        | `values:["Open","Closed"]` OR `sourceRange:"/Lists/A1:A3"` (not both) — Excel shows a dropdown |
+| wholeNumber | operator (`between` `> >= < <= == !=`), value, value2 (between) |
+| decimal     | same operator/value props                                       |
+| date        | same; dates as ISO strings, e.g. `2026-01-01`                   |
+| textLength  | same operator/value props                                       |
+
+Extras on any kind: `allowBlank`, `inputTitle`, `inputMessage`, `errorTitle`,
+`errorMessage`, `errorStyle: stop|warning|information`. `get`/`remove` by
+`/Sheet1/dataValidation[i]`; `read --view structure` lists per-sheet rules.
+
+## sparkline (M5, `/Sheet1/sparkline[1]`)
+
+`{op:"add", path:"/Sheet1/E2", type:"sparkline", props:{dataRange:"A2:D2",
+kind:"line|column|winLoss", color?:"376092", markers?:true}}` — the op path is
+the host CELL; `markers` applies to line sparklines only. One sparkline per op.
+`get /Sheet1/sparkline[i]`; structure lists `sparklineGroups`; remove by path.
+
+## threaded comments (M5, `/Sheet1/comment[@id=GUID]`)
+
+`{op:"add", path:"/Sheet1/B2", type:"comment", props:{text, author?}}` anchors
+a thread root; `{op:"add", path:"/Sheet1/comment[@id=GUID]", type:"reply",
+props:{text, author?}}` appends a reply (the GUID comes back from the add,
+`read --view comments` or structure). Real `xl/threadedComments` parts plus a
+legacy note fallback for old clients. Remove the root to drop the whole thread.
+
+## csv bridge (M5)
+
+`aioffice create orders.xlsx --from orders.csv` imports RFC 4180 csv (quoted
+commas/newlines, sniffed `, ; tab |` delimiter, `--title` names the sheet):
+numbers/dates/booleans are typed, leading-zero codes like `007` stay text,
+>50k cells stream through the SAX writer. `aioffice read orders.xlsx --view csv
+[--sheet NAME] [--range A1:C10]` exports one sheet back as csv.

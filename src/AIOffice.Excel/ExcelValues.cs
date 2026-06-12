@@ -20,6 +20,9 @@ internal static partial class ExcelValues
     [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$")]
     private static partial Regex IsoDate();
 
+    [GeneratedRegex(@"^[+-]?0[0-9]")]
+    private static partial Regex LeadingZeroNumber();
+
     public static readonly IReadOnlyList<string> ValueTypes = ["auto", "text", "number", "boolean", "dateTime"];
 
     /// <summary>A parsed wire value: either a literal cell value or a formula string.</summary>
@@ -141,6 +144,22 @@ internal static partial class ExcelValues
                 return new ParsedValue(text, null);
         }
     }
+
+    /// <summary>
+    /// Types one CSV field (M5 import). DOCUMENTED HEURISTIC — identical to the
+    /// bulk-write auto-typing (leading <c>=</c> is a formula, <c>true</c>/<c>false</c>
+    /// are booleans, parseable numbers are numbers, ISO dates are dates,
+    /// everything else stays text) with TWO csv-specific rules on top:
+    /// an empty field is a blank cell, and a digit string with a leading zero
+    /// (<c>0123</c>, ID/phone-number style) STAYS TEXT — Excel's classic
+    /// leading-zero data loss is the one thing agents complain about most.
+    /// </summary>
+    public static ParsedValue ParseCsvField(string field) =>
+        field.Length == 0
+            ? new ParsedValue(Blank.Value, null)
+            : LeadingZeroNumber().IsMatch(field)
+                ? new ParsedValue(field, null)
+                : ParseString(field, "auto");
 
     private static bool TryParseIsoDate(string text, out DateTime value)
     {

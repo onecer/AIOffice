@@ -10,7 +10,8 @@ namespace AIOffice.Pptx;
 /// <summary>Selector evaluation and node projections (the read side of query/get).</summary>
 internal static class PptxQueryEngine
 {
-    private static readonly IReadOnlyList<string> QueryElements = ["slide", "shape", "master", "layout", "*"];
+    private static readonly IReadOnlyList<string> QueryElements =
+        ["slide", "shape", "table", "tc", "smartart", "master", "layout", "*"];
     private static readonly IReadOnlyList<string> ShapeAttributes = ["id", "name", "fill", "text", "kind", "placeholder"];
     private static readonly IReadOnlyList<string> LayoutAttributes = ["name", "type"];
 
@@ -21,7 +22,8 @@ internal static class PptxQueryEngine
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"pptx documents have no queryable element '{selector.Element}'.",
-                "Query slide, shape, master or layout (* matches slides and shapes), e.g. shape:contains('Q3') or layout[type=blank].",
+                "Query slide, shape, table, tc (table cells), smartart, master or layout " +
+                "(* matches slides and shapes), e.g. shape:contains('Q3') or tc:contains('total').",
                 candidates: QueryElements);
         }
 
@@ -50,16 +52,17 @@ internal static class PptxQueryEngine
                 continue;
             }
 
-            var shapes = PptxDoc.Shapes(slides[i].Part);
+            var slidePart = slides[i].Part;
+            var shapes = PptxDoc.Shapes(slidePart);
 
-            if (selector.Element is "slide" or "*" && MatchesSlide(shapes, selector))
+            if (selector.Element is "slide" or "*" && MatchesSlide(slidePart, shapes, selector))
             {
                 results.Add(new
                 {
                     Path = Units.Inv($"/slide[{slideIndex}]"),
                     Kind = "slide",
                     Slide = slideIndex,
-                    Text = Snippet(string.Join('\n', shapes.Select(s => PptxDoc.ShapeText(s.Element)).Where(t => t.Length > 0))),
+                    Text = Snippet(SlideAggregateText(slidePart, shapes)),
                 });
             }
 
@@ -78,16 +81,153 @@ internal static class PptxQueryEngine
                     });
                 }
             }
+
+            if (selector.Element is "table" or "tc")
+            {
+                QueryTables(slidePart, slideIndex, selector, results);
+            }
+
+            if (selector.Element is "smartart")
+            {
+                QuerySmartArt(slidePart, slideIndex, selector, results);
+            }
         }
 
         return results;
+    }
+
+    /// <summary>All text a slide carries: shape bodies plus table cells plus SmartArt nodes.</summary>
+    private static string SlideAggregateText(SlidePart slidePart, List<ShapeView> shapes)
+    {
+        var parts = new List<string>();
+        foreach (var shape in shapes)
+        {
+            var text = PptxDoc.ShapeText(shape.Element);
+            if (text.Length == 0 && PptxTables.TableOf(shape.Element) is { } table)
+            {
+                text = PptxTables.TableText(table);
+            }
+
+            if (text.Length == 0 && PptxSmartArt.DataPartOf(slidePart, shape.Element) is { } dataPart)
+            {
+                text = PptxSmartArt.FlatText(dataPart);
+            }
+
+            if (text.Length > 0)
+            {
+                parts.Add(text);
+            }
+        }
+
+        return string.Join('\n', parts);
+    }
+
+    /// <summary>table / tc queries on one slide: :contains over cell text.</summary>
+    private static void QueryTables(SlidePart slidePart, int slideIndex, Selector selector, List<object> results)
+    {
+        foreach (var (index, _, table) in PptxTables.Tables(slidePart))
+        {
+            var tablePath = Units.Inv($"/slide[{slideIndex}]/table[{index}]");
+            if (selector.Element == "table")
+            {
+                if (MatchesTextOnly(PptxTables.TableText(table), selector, "table"))
+                {
+                    results.Add(new
+                    {
+                        Path = tablePath,
+                        Kind = "table",
+                        Slide = slideIndex,
+                        Rows = table.Elements<A.TableRow>().Count(),
+                        Cols = table.TableGrid?.Elements<A.GridColumn>().Count() ?? 0,
+                        Text = Snippet(PptxTables.TableText(table)),
+                    });
+                }
+
+                continue;
+            }
+
+            var rowIndex = 0;
+            foreach (var row in table.Elements<A.TableRow>())
+            {
+                rowIndex++;
+                var cellIndex = 0;
+                foreach (var cell in row.Elements<A.TableCell>())
+                {
+                    cellIndex++;
+                    var text = PptxTables.CellText(cell);
+                    if (!MatchesTextOnly(text, selector, "tc"))
+                    {
+                        continue;
+                    }
+
+                    results.Add(new
+                    {
+                        Path = Units.Inv($"{tablePath}/tr[{rowIndex}]/tc[{cellIndex}]"),
+                        Kind = "tc",
+                        Slide = slideIndex,
+                        Row = rowIndex,
+                        Col = cellIndex,
+                        Text = Snippet(text),
+                    });
+                }
+            }
+        }
+    }
+
+    /// <summary>smartart queries on one slide: :contains over the diagram's node texts.</summary>
+    private static void QuerySmartArt(SlidePart slidePart, int slideIndex, Selector selector, List<object> results)
+    {
+        foreach (var (index, view, part) in PptxSmartArt.List(slidePart))
+        {
+            var text = PptxSmartArt.FlatText(part);
+            if (!MatchesTextOnly(text, selector, "smartart"))
+            {
+                continue;
+            }
+
+            results.Add(new
+            {
+                Path = Units.Inv($"/slide[{slideIndex}]/smartart[{index}]"),
+                Kind = "smartart",
+                Slide = slideIndex,
+                Layout = PptxSmartArt.LayoutName(slidePart, view.Element),
+                Text = Snippet(text),
+            });
+        }
+    }
+
+    /// <summary>Predicate evaluation for text-only elements (table, tc, smartart): just :contains.</summary>
+    private static bool MatchesTextOnly(string text, Selector selector, string elementName)
+    {
+        foreach (var predicate in selector.Predicates)
+        {
+            switch (predicate)
+            {
+                case ContainsPredicate contains:
+                    if (!text.Contains(contains.Text, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+
+                    break;
+
+                case AttributePredicate attribute:
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"'{elementName}' has no queryable attribute '{attribute.Attribute}'.",
+                        $"'{elementName}' supports only :contains('text').",
+                        candidates: [":contains('text')"]);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Query restricted to one container: a slide, a master or one of its layouts.</summary>
     private static List<object> QueryScoped(PresentationPart presentation, Selector selector, PptxAddress scope)
     {
         if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes || scope.IsChart ||
-            scope.IsAnimation || scope.IsComment)
+            scope.IsTable || scope.IsSmartArt || scope.IsAnimation || scope.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -240,14 +380,14 @@ internal static class PptxQueryEngine
         return true;
     }
 
-    private static bool MatchesSlide(List<ShapeView> shapes, Selector selector)
+    private static bool MatchesSlide(SlidePart slidePart, List<ShapeView> shapes, Selector selector)
     {
         foreach (var predicate in selector.Predicates)
         {
             switch (predicate)
             {
                 case ContainsPredicate contains:
-                    if (!shapes.Any(s => PptxDoc.ShapeText(s.Element).Contains(contains.Text, StringComparison.OrdinalIgnoreCase)))
+                    if (!SlideAggregateText(slidePart, shapes).Contains(contains.Text, StringComparison.OrdinalIgnoreCase))
                     {
                         return false;
                     }
@@ -370,6 +510,8 @@ internal static class PptxQueryEngine
         var notes = PptxNotes.Text(slidePart);
         var transition = PptxTransitions.Read(slidePart);
         var charts = PptxCharts.Charts(slidePart);
+        var tables = PptxTables.Tables(slidePart);
+        var smartArts = PptxSmartArt.List(slidePart);
         return new
         {
             Path = address.CanonicalSlidePath,
@@ -389,6 +531,12 @@ internal static class PptxQueryEngine
             Charts = charts.Count == 0
                 ? null
                 : charts.Select(c => (object)Units.Inv($"{address.CanonicalSlidePath}/chart[{c.Index}]")).ToList(),
+            Tables = tables.Count == 0
+                ? null
+                : tables.Select(t => (object)Units.Inv($"{address.CanonicalSlidePath}/table[{t.Index}]")).ToList(),
+            SmartArt = smartArts.Count == 0
+                ? null
+                : smartArts.Select(d => (object)Units.Inv($"{address.CanonicalSlidePath}/smartart[{d.Index}]")).ToList(),
             Notes = notes.Length == 0 ? null : Snippet(notes),
         };
     }
@@ -413,11 +561,15 @@ internal static class PptxQueryEngine
         var geometry = PptxDoc.Geometry(view.Element);
         var firstParagraph = (view.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
         var chartIndex = PptxCharts.IndexOf(slidePart, view.Element);
+        var tableIndex = PptxTables.IndexOf(slidePart, view.Element);
+        var smartArtIndex = PptxSmartArt.IndexOf(slidePart, view.Element);
         return new
         {
             Path = view.CanonicalPath(address.SlideIndex),
             OrdinalPath = view.OrdinalPath(address.SlideIndex),
             ChartPath = chartIndex is { } ci ? Units.Inv($"{address.CanonicalSlidePath}/chart[{ci}]") : null,
+            TablePath = tableIndex is { } ti ? Units.Inv($"{address.CanonicalSlidePath}/table[{ti}]") : null,
+            SmartArtPath = smartArtIndex is { } si ? Units.Inv($"{address.CanonicalSlidePath}/smartart[{si}]") : null,
             Slide = address.SlideIndex,
             Id = view.Id,
             Ordinal = view.Ordinal,

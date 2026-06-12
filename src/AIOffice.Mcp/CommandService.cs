@@ -73,10 +73,19 @@ public sealed class CommandService
             Directory.CreateDirectory(parent);
         }
 
-        return handler.Create(Context(resolved, a));
+        // M5 markdown/csv bridge (same routing as the CLI's create --from).
+        return OptionalString(a, "from") is { } from
+            ? Bridge.CreateFrom(handler, Context(resolved, a), from)
+            : handler.Create(Context(resolved, a));
     });
 
-    public Envelope Read(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Read(ctx));
+    public Envelope Read(JsonObject args) => FormatVerb(args, static (h, ctx) =>
+    {
+        // M5: markdown/csv are single-format bridge views — asking the wrong
+        // format reports unsupported_feature with the views it does have.
+        Bridge.GuardBridgeView(h.Kind, OptionalString(ctx.Args, "view"));
+        return h.Read(ctx);
+    });
 
     public Envelope Query(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Query(ctx));
 

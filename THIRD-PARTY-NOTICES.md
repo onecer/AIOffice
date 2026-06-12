@@ -9,6 +9,7 @@ NuGet libraries listed below, consumed as ordinary package references.
 | DocumentFormat.OpenXml | MIT | <https://github.com/dotnet/Open-XML-SDK> |
 | ClosedXML | MIT | <https://github.com/ClosedXML/ClosedXML> |
 | ModelContextProtocol (official C# MCP SDK) | MIT | <https://github.com/modelcontextprotocol/csharp-sdk> |
+| Markdig (markdown parser for the M5 markdown bridge) | BSD-2-Clause | <https://github.com/xoofx/markdig> |
 | xunit (test-only) | Apache-2.0 | <https://github.com/xunit/xunit> |
 | xunit.runner.visualstudio (test-only) | Apache-2.0 | <https://github.com/xunit/visualstudio.xunit> |
 | Microsoft.NET.Test.Sdk (test-only) | MIT | <https://github.com/microsoft/vstest> |

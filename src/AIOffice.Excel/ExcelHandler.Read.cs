@@ -8,7 +8,8 @@ public sealed partial class ExcelHandler
 {
     private const int DefaultMaxTextBytes = 65536;
 
-    private static readonly IReadOnlyList<string> ReadViews = ["outline", "text", "stats", "structure"];
+    private static readonly IReadOnlyList<string> ReadViews =
+        ["outline", "text", "stats", "structure", "csv", "comments"];
 
     public Envelope Read(CommandContext ctx) => Run(ctx, sw =>
     {
@@ -19,7 +20,7 @@ public sealed partial class ExcelHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use one of: outline, text, stats, structure.",
+                "Use one of: outline, text, stats, structure, csv, comments.",
                 candidates: ReadViews);
         }
 
@@ -36,8 +37,8 @@ public sealed partial class ExcelHandler
             return ReadTextStreamed(ctx, file, sw);
         }
 
-        // outline/structure need the full model; on a big file that is the
-        // honest slow path, flagged so agents know why.
+        // outline/structure/csv/comments need the full model; on a big file
+        // that is the honest slow path, flagged so agents know why.
         List<Warning>? fallback = wantStream
             ? [new Warning(
                 "stream_fallback",
@@ -50,6 +51,8 @@ public sealed partial class ExcelHandler
             "stats" => Envelope.Ok(ReadStats(workbook), MetaFor(file, sw, fallback)),
             "outline" => Envelope.Ok(ReadOutline(workbook), MetaFor(file, sw, fallback)),
             "structure" => Envelope.Ok(ReadStructure(workbook, file), MetaFor(file, sw, fallback)),
+            "csv" => ReadCsv(ctx, workbook, file, sw),
+            "comments" => ReadComments(workbook, file, sw),
             _ => ReadText(ctx, workbook, file, sw),
         };
     });
@@ -168,6 +171,8 @@ public sealed partial class ExcelHandler
                     conditionalFormats = ws.ConditionalFormats
                         .Select((cf, i) => ExcelConditionalFormats.Describe(ws, cf, i + 1))
                         .ToList(),
+                    dataValidations = ExcelDataValidations.List(ws),
+                    sparklineGroups = ExcelSparklines.ListGroups(ws),
                     images = ws.Pictures
                         .Select((pic, i) => ExcelImages.Describe(ws, pic, i + 1))
                         .ToList(),

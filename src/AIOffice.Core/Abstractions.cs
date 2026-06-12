@@ -132,6 +132,22 @@ public interface IFormatHandler
     DocumentKind Kind { get; }
 
     Envelope Create(CommandContext ctx);
+
+    /// <summary>
+    /// M5 import hook: build a NEW document from a foreign source file
+    /// (markdown → docx, csv → xlsx). <paramref name="sourcePath"/> arrives
+    /// sandbox-resolved by the command layer; handlers re-resolve defensively.
+    /// Additive default: formats without an importer refuse with
+    /// <c>unsupported_feature</c> and name the workaround.
+    /// </summary>
+    Envelope CreateFrom(CommandContext ctx, string sourcePath) =>
+        throw new AiofficeException(
+            ErrorCodes.UnsupportedFeature,
+            $"{Kind.ToString().ToLowerInvariant()} cannot be created from a source file yet.",
+            "create --from supports .md/.markdown → .docx and .csv/.tsv → .xlsx. " +
+            "Create an empty document instead and add content with 'aioffice edit'.",
+            candidates: [".md", ".markdown", ".csv", ".tsv"]);
+
     Envelope Read(CommandContext ctx);
     Envelope Get(CommandContext ctx);
     Envelope Query(CommandContext ctx);

@@ -33,7 +33,13 @@ public sealed class FileVerbs
             ["kind"] = handler.Kind.ToString().ToLowerInvariant(),
             ["title"] = args.GetOption("title"),
         });
-        return handler.Create(ctx);
+
+        // M5 markdown/csv bridge (same routing as MCP office_create.from):
+        // the source extension picks the importer, the pair is validated
+        // against the import matrix, and the source is sandbox-resolved.
+        return args.GetOption("from") is { } from
+            ? AIOffice.Mcp.Bridge.CreateFrom(handler, ctx, from)
+            : handler.Create(ctx);
     }
 
     public Envelope Read(ParsedArgs args)
@@ -43,9 +49,15 @@ public sealed class FileVerbs
         {
             ["view"] = args.GetOption("view"),
             ["range"] = args.GetOption("range"),
+            ["sheet"] = args.GetOption("sheet"),
             ["maxBytes"] = ParseOptionalInt(args, "max-bytes"),
         });
-        return ResolveHandler(file, kindOverride: null).Read(ctx);
+        var handler = ResolveHandler(file, kindOverride: null);
+
+        // M5: markdown/csv are single-format bridge views — asking the wrong
+        // format reports unsupported_feature with the views it does have.
+        AIOffice.Mcp.Bridge.GuardBridgeView(handler.Kind, args.GetOption("view"));
+        return handler.Read(ctx);
     }
 
     public Envelope Query(ParsedArgs args)

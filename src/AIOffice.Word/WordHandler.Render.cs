@@ -328,6 +328,14 @@ public sealed partial class WordHandler
 
                     break;
 
+                case SimpleField field: // w:fldSimple renders its cached result
+                    foreach (var run in field.ChildElements.OfType<Run>())
+                    {
+                        AppendRun(sb, run, path, part);
+                    }
+
+                    break;
+
                 default: // DeletedRun, comment markers, pPr, …
                     break;
             }
@@ -460,8 +468,25 @@ public sealed partial class WordHandler
             foreach (var cell in row.ChildElements.OfType<TableCell>())
             {
                 cellIndex++;
+                var (colspan, rowspan) = CellSpans(cell);
+                if (rowspan == 0)
+                {
+                    continue; // vMerge continuation slot: the restart cell above renders it
+                }
+
                 var cellPath = $"{rowPath}/tc[{cellIndex}]";
-                sb.Append("<td data-aio-path=\"").Append(cellPath).Append("\">");
+                sb.Append("<td data-aio-path=\"").Append(cellPath).Append('"');
+                if (colspan > 1)
+                {
+                    sb.Append(" colspan=\"").Append(colspan).Append('"');
+                }
+
+                if (rowspan > 1)
+                {
+                    sb.Append(" rowspan=\"").Append(rowspan).Append('"');
+                }
+
+                sb.Append('>');
                 var pIndex = 0;
                 foreach (var p in cell.ChildElements.OfType<Paragraph>())
                 {
