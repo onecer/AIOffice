@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AIOffice.Cli</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>aioffice</AssemblyName>
+    <!-- Single-file publish readiness; activate with:
+         dotnet publish -r <rid> -c Release -p:PublishSingleFile=true -p:SelfContained=true -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Handler discovery is late-bound across sibling assemblies; trimming
+         would break it and stays off by design. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AIOffice.Core/AIOffice.Core.csproj" />
+    <ProjectReference Include="../AIOffice.Word/AIOffice.Word.csproj" />
+    <ProjectReference Include="../AIOffice.Excel/AIOffice.Excel.csproj" />
+    <ProjectReference Include="../AIOffice.Pptx/AIOffice.Pptx.csproj" />
+    <ProjectReference Include="../AIOffice.Mcp/AIOffice.Mcp.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="HelpTopics/*.md" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,34 @@
+{
+  "name": "pptx-create-slide-shape-render",
+  "description": "Golden path for decks: create, add a slide, add a textbox shape, render the slide to SVG, validate.",
+  "steps": [
+    {
+      "argv": ["create", "golden-out/deck.pptx", "--title", "Golden Deck"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/deck.pptx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/slide[1]\",\"type\":\"slide\",\"position\":\"after\",\"props\":{\"title\":\"Q3 Results\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/deck.pptx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"shape\",\"props\":{\"text\":\"Revenue grew 12%\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["render", "golden-out/deck.pptx", "--to", "svg", "--scope", "/slide[2]", "-o", "golden-out/slide2.svg"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["validate", "golden-out/deck.pptx"],
+      "expect": { "ok": true }
+    }
+  ]
+}

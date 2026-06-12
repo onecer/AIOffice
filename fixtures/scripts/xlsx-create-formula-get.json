@@ -1,0 +1,26 @@
+{
+  "name": "xlsx-create-formula-get",
+  "description": "Golden path for workbooks: create (title names the sheet), set values and a SUM formula via quoted-name addressing, get the formula cell, validate.",
+  "steps": [
+    {
+      "argv": ["create", "golden-out/report.xlsx", "--title", "Q3 Data"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/report.xlsx",
+        "--ops",
+        "[{\"op\":\"set\",\"path\":\"/'Q3 Data'/A1\",\"props\":{\"value\":2}},{\"op\":\"set\",\"path\":\"/'Q3 Data'/A2\",\"props\":{\"value\":40}},{\"op\":\"set\",\"path\":\"/'Q3 Data'/A3\",\"props\":{\"value\":\"=SUM(A1:A2)\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["get", "golden-out/report.xlsx", "/'Q3 Data'/A3"],
+      "expect": { "ok": true, "dataContains": "SUM" }
+    },
+    {
+      "argv": ["validate", "golden-out/report.xlsx"],
+      "expect": { "ok": true }
+    }
+  ]
+}

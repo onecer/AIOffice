@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AIOffice.Mcp</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AIOffice.Core/AIOffice.Core.csproj" />
+    <ProjectReference Include="../AIOffice.Word/AIOffice.Word.csproj" />
+    <ProjectReference Include="../AIOffice.Excel/AIOffice.Excel.csproj" />
+    <ProjectReference Include="../AIOffice.Pptx/AIOffice.Pptx.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Official C# MCP SDK (github.com/modelcontextprotocol/csharp-sdk).
+      We reference the Core package: it carries McpServer, the stdio/stream
+      transports and the client (used by tests) WITHOUT the hosting/DI layer,
+      so no Microsoft.Extensions.Hosting dependency is needed at all.
+    -->
+    <PackageReference Include="ModelContextProtocol.Core" Version="1.4.0" />
+  </ItemGroup>
+</Project>

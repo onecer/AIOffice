@@ -1,0 +1,258 @@
+using System.Globalization;
+using AIOffice.Core;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+
+namespace AIOffice.Word;
+
+/// <summary>An element resolved from a document path.</summary>
+internal sealed record ResolvedNode(OpenXmlElement Element, string CanonicalPath, string Type);
+
+/// <summary>
+/// Resolves the docx addressing grammar (/body/p[3], /body/table[1]/tr[2]/tc[1],
+/// /body/p[3]/run[2], /header[1]/p[1]) against a live document, and enumerates
+/// all addressable nodes with their canonical paths (the query backbone).
+/// Every resolution failure is <c>invalid_path</c> WITH nearest-match candidates.
+/// </summary>
+internal static class WordAddress
+{
+    /// <summary>Element type names addressable in a docx, child-of-parent rules included.</summary>
+    private static readonly Dictionary<string, string[]> ChildNames = new(StringComparer.Ordinal)
+    {
+        ["body"] = ["p", "table"],
+        ["header"] = ["p", "table"],
+        ["p"] = ["run"],
+        ["table"] = ["tr"],
+        ["tr"] = ["tc"],
+        ["tc"] = ["p", "table"],
+        ["run"] = [],
+    };
+
+    public static ResolvedNode Resolve(WordprocessingDocument doc, DocPath path)
+    {
+        var segments = path.Segments;
+        var (current, currentPath, currentType) = ResolveRoot(doc, segments[0]);
+
+        for (var i = 1; i < segments.Count; i++)
+        {
+            (current, currentPath, currentType) = ResolveChild(current, currentPath, currentType, segments[i]);
+        }
+
+        return new ResolvedNode(current, currentPath, currentType);
+    }
+
+    private static (OpenXmlElement El, string Path, string Type) ResolveRoot(WordprocessingDocument doc, PathSegment root)
+    {
+        if (root.Kind != PathSegmentKind.Element)
+        {
+            throw Invalid($"A docx path starts with /body or /header[n], not '{root.ToCanonicalString()}'.", RootCandidates(doc));
+        }
+
+        switch (root.Name)
+        {
+            case "body" when root.Index is null:
+                var body = doc.MainDocumentPart?.Document?.Body
+                    ?? throw new AiofficeException(
+                        ErrorCodes.FormatCorrupt,
+                        "The document has no body.",
+                        "The main document part is missing or empty. Re-export the file from Word.");
+                return (body, "/body", "body");
+
+            case "header":
+            {
+                var headers = doc.MainDocumentPart?.HeaderParts.ToList() ?? [];
+                var index = root.Index ?? 1;
+                if (headers.Count == 0)
+                {
+                    throw Invalid("This document has no headers.", ["/body"]);
+                }
+
+                if (index > headers.Count)
+                {
+                    throw Invalid(
+                        $"/header[{index}] does not exist; the document has {headers.Count} header(s).",
+                        [.. Enumerable.Range(1, headers.Count).Select(n => Canon("/header", "header", n))]);
+                }
+
+                var header = headers[index - 1].Header ?? throw new AiofficeException(
+                    ErrorCodes.FormatCorrupt,
+                    $"/header[{index}] exists but its part is empty.",
+                    "Re-export the file from Word, or address /body instead.");
+                return (header, $"/header[{index}]", "header");
+            }
+
+            default:
+                throw Invalid($"Unknown docx root '{root.ToCanonicalString()}'; paths start at /body or /header[n].", RootCandidates(doc));
+        }
+    }
+
+    private static (OpenXmlElement El, string Path, string Type) ResolveChild(
+        OpenXmlElement parent, string parentPath, string parentType, PathSegment segment)
+    {
+        if (segment.Kind != PathSegmentKind.Element || segment.Name is null)
+        {
+            throw Invalid(
+                $"'{segment.ToCanonicalString()}' is not a docx segment under {parentPath}.",
+                ChildCandidates(parent, parentPath, parentType));
+        }
+
+        var name = segment.Name;
+        var allowed = ChildNames[parentType];
+        if (!allowed.Contains(name, StringComparer.Ordinal))
+        {
+            throw Invalid(
+                allowed.Length == 0
+                    ? $"{parentPath} is a leaf ({parentType}); it has no addressable children."
+                    : $"'{name}' cannot appear under {parentPath} ({parentType} contains: {string.Join(", ", allowed)}).",
+                ChildCandidates(parent, parentPath, parentType));
+        }
+
+        if (segment.Index is not { } index)
+        {
+            throw Invalid(
+                $"'{name}' needs a 1-based index under {parentPath}, e.g. {name}[1].",
+                ChildCandidates(parent, parentPath, parentType));
+        }
+
+        var children = ChildrenOf(parent, name);
+        if (index > children.Count)
+        {
+            throw Invalid(
+                $"{parentPath}/{name}[{index}] does not exist; there are {children.Count} '{name}' element(s).",
+                children.Count == 0
+                    ? ChildCandidates(parent, parentPath, parentType)
+                    : NearestIndexCandidates(parentPath, name, index, children.Count));
+        }
+
+        return (children[index - 1], Canon(parentPath, name, index), name);
+    }
+
+    /// <summary>Direct children of one addressable type, in document order.</summary>
+    private static List<OpenXmlElement> ChildrenOf(OpenXmlElement parent, string name) => name switch
+    {
+        "p" => [.. parent.ChildElements.OfType<Paragraph>()],
+        "table" => [.. parent.ChildElements.OfType<Table>()],
+        "run" => [.. parent.ChildElements.OfType<Run>()],
+        "tr" => [.. parent.ChildElements.OfType<TableRow>()],
+        "tc" => [.. parent.ChildElements.OfType<TableCell>()],
+        _ => [],
+    };
+
+    private static string Canon(string parentPath, string name, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{parentPath}/{name}[{index}]");
+
+    private static IReadOnlyList<string> RootCandidates(WordprocessingDocument doc)
+    {
+        var candidates = new List<string> { "/body" };
+        var headerCount = doc.MainDocumentPart?.HeaderParts.Count() ?? 0;
+        if (headerCount > 0)
+        {
+            candidates.Add("/header[1]");
+        }
+
+        return candidates;
+    }
+
+    /// <summary>First existing path of every child type the parent can hold.</summary>
+    private static IReadOnlyList<string> ChildCandidates(OpenXmlElement parent, string parentPath, string parentType)
+    {
+        var candidates = new List<string>();
+        foreach (var name in ChildNames[parentType])
+        {
+            var count = ChildrenOf(parent, name).Count;
+            if (count > 0)
+            {
+                candidates.Add(Canon(parentPath, name, 1));
+            }
+        }
+
+        return candidates.Count > 0 ? candidates : [parentPath];
+    }
+
+    private static IReadOnlyList<string> NearestIndexCandidates(string parentPath, string name, int requested, int count)
+    {
+        return [.. Enumerable.Range(1, count)
+            .OrderBy(n => Math.Abs(n - requested))
+            .Take(5)
+            .OrderBy(n => n)
+            .Select(n => Canon(parentPath, name, n))];
+    }
+
+    private static AiofficeException Invalid(string message, IReadOnlyList<string> candidates) =>
+        new(
+            ErrorCodes.InvalidPath,
+            message,
+            "Use a candidate path, or run 'aioffice query <file> \"*\"' to list addressable nodes.",
+            candidates);
+
+    // -------------------------------------------------------------- enumerate
+
+    /// <summary>
+    /// Yields every addressable node under the body with its canonical path,
+    /// in document order: paragraphs, runs, tables, rows, cells, cell content.
+    /// </summary>
+    public static IEnumerable<ResolvedNode> EnumerateBody(Body body)
+    {
+        foreach (var node in EnumerateContainer(body, "/body"))
+        {
+            yield return node;
+        }
+    }
+
+    private static IEnumerable<ResolvedNode> EnumerateContainer(OpenXmlElement container, string path)
+    {
+        var pIndex = 0;
+        var tableIndex = 0;
+        foreach (var child in container.ChildElements)
+        {
+            switch (child)
+            {
+                case Paragraph paragraph:
+                {
+                    pIndex++;
+                    var pPath = Canon(path, "p", pIndex);
+                    yield return new ResolvedNode(paragraph, pPath, "p");
+                    var runIndex = 0;
+                    foreach (var run in paragraph.ChildElements.OfType<Run>())
+                    {
+                        runIndex++;
+                        yield return new ResolvedNode(run, Canon(pPath, "run", runIndex), "run");
+                    }
+
+                    break;
+                }
+
+                case Table table:
+                {
+                    tableIndex++;
+                    var tablePath = Canon(path, "table", tableIndex);
+                    yield return new ResolvedNode(table, tablePath, "table");
+                    var rowIndex = 0;
+                    foreach (var row in table.ChildElements.OfType<TableRow>())
+                    {
+                        rowIndex++;
+                        var rowPath = Canon(tablePath, "tr", rowIndex);
+                        yield return new ResolvedNode(row, rowPath, "tr");
+                        var cellIndex = 0;
+                        foreach (var cell in row.ChildElements.OfType<TableCell>())
+                        {
+                            cellIndex++;
+                            var cellPath = Canon(rowPath, "tc", cellIndex);
+                            yield return new ResolvedNode(cell, cellPath, "tc");
+                            foreach (var nested in EnumerateContainer(cell, cellPath))
+                            {
+                                yield return nested;
+                            }
+                        }
+                    }
+
+                    break;
+                }
+
+                default:
+                    break;
+            }
+        }
+    }
+}

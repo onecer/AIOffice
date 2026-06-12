@@ -1,0 +1,152 @@
+using AIOffice.Core;
+
+namespace AIOffice.Mcp;
+
+/// <summary>
+/// The machine-readable description of the whole aioffice command surface —
+/// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
+/// 13 verbs, mirroring the 12 v0 MCP tools plus the <c>mcp</c> verb itself.
+/// </summary>
+public static class SurfaceSchema
+{
+    /// <summary>One verb in the surface (serialized camelCase by the envelope writer).</summary>
+    public sealed record VerbInfo(
+        string Name,
+        string Summary,
+        IReadOnlyDictionary<string, string> Args,
+        IReadOnlyList<string> Errors,
+        IReadOnlyList<Example> Examples,
+        string? McpTool);
+
+    /// <summary>A copy-pasteable CLI invocation with a one-line note.</summary>
+    public sealed record Example(string Call, string Note);
+
+    private static VerbInfo Verb(
+        string name, string summary, string? mcpTool,
+        (string Arg, string Doc)[] args, string[] errors, (string Call, string Note)[] examples) =>
+        new(
+            name,
+            summary,
+            args.ToDictionary(a => a.Arg, a => a.Doc, StringComparer.Ordinal),
+            errors,
+            [.. examples.Select(e => new Example(e.Call, e.Note))],
+            mcpTool);
+
+    private static readonly IReadOnlyList<VerbInfo> Verbs =
+    [
+        Verb("create", "Create a blank document; kind inferred from the extension.", "office_create",
+            [("file", "target path ending in .docx/.xlsx/.pptx"),
+             ("--kind", "docx|xlsx|pptx, overrides extension inference"),
+             ("--title", "document title written to core properties"),
+             ("--overwrite", "replace an existing file")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.SandboxDenied, ErrorCodes.UnsupportedFeature, ErrorCodes.InternalError],
+            [("aioffice create out/q4.pptx --title 'Q4 Review'", "kind pptx inferred from extension")]),
+
+        Verb("read", "Read a document as outline, plain text, stats or full structure tree.", "office_read",
+            [("file", "document path"),
+             ("--view", "outline|text|stats|structure (default outline)"),
+             ("--range", "scope 'a..b' (1-based): paragraphs/slides/rows"),
+             ("--max-bytes", "cap payload; truncation flagged in warnings")],
+            [ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.InvalidArgs],
+            [("aioffice read report.docx --view outline", "headings/tables skeleton with canonical paths")]),
+
+        Verb("query", "Find elements with a CSS-like selector; returns canonical paths.", "office_query",
+            [("file", "document path"),
+             ("selector", "e.g. p[style=Heading1], cell[value>100], shape:contains('Q3')")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice query deck.pptx \"shape:contains('Q3')\"", "paths feed office_get/office_edit")]),
+
+        Verb("get", "Read one node and its properties by canonical path.", "office_get",
+            [("file", "document path"),
+             ("path", "canonical 1-based path, e.g. /body/p[3], /Sheet1/B2; '/' for document props")],
+            [ErrorCodes.InvalidPath, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice get data.xlsx /Sheet1/B2", "value, valueType, formula, numberFormat")]),
+
+        Verb("edit", "Apply an atomic batch of set/add/remove/move ops: all-or-nothing single save, auto-snapshot, optional rev guard.", "office_edit",
+            [("file", "document path"),
+             ("--ops", "JSON array of ops, or @ops.json"),
+             ("--set/--add/--remove", "single-op sugar: --set <path> k=v..., --add <path> --type T k=v..., --remove <path>"),
+             ("--expect-rev", "12-hex rev from a previous meta.rev; mismatch -> stale_address before any write"),
+             ("--dry-run", "validate the whole batch without writing")],
+            [ErrorCodes.StaleAddress, ErrorCodes.InvalidPath, ErrorCodes.InvalidArgs, ErrorCodes.UnsupportedFeature,
+             ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice edit r.docx --set /body/p[1] style=Heading1", "single-op sugar"),
+             ("aioffice edit r.docx --ops @ops.json --expect-rev a3f9c12be01d", "atomic batch with optimistic lock")]),
+
+        Verb("render", "Render the document (or a subtree) to html/svg/text for inspection; png is reserved for M1.", "office_render",
+            [("file", "document path"),
+             ("--to", "html|svg|text|png (default html; png -> unsupported_feature until M1)"),
+             ("--scope", "render only this subtree, e.g. /slide[3], /Sheet1/A1:F20"),
+             ("-o", "output file or directory inside the workspace")],
+            [ErrorCodes.UnsupportedFeature, ErrorCodes.InvalidPath, ErrorCodes.FileNotFound,
+             ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice render deck.pptx --to svg --scope /slide[3]", "one slide as svg, inlined when small")]),
+
+        Verb("validate", "OpenXmlValidator schema check plus lint; issues carry suggestions.", "office_validate",
+            [("file", "document path")],
+            [ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice validate data.xlsx", "ok:true even when the doc has issues — read data.valid")]),
+
+        Verb("template", "Fill {{key}} placeholders in text runs from a JSON merge map.", "office_template",
+            [("file", "template document containing {{key}} placeholders"),
+             ("--data", "JSON object of string values, or @data.json"),
+             ("-o", "result path (recommended); omit = merge in place with auto-snapshot"),
+             ("--overwrite", "replace an existing output file")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice template contract.docx --data @acme.json -o out/acme.docx", "check data.leftoverPlaceholders afterwards")]),
+
+        Verb("snapshot", "List or restore the automatic pre-edit snapshot ring (20 per file).", "file_snapshot",
+            [("action", "list | restore (default list)"),
+             ("file", "document path"),
+             ("n", "restore: snapshot number from list (omit = latest)")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied],
+            [("aioffice snapshot restore report.docx 7", "restore is itself snapshotted — undo is undoable")]),
+
+        Verb("doctor", "Health check: runtime, workspace sandbox, snapshot store.", "office_status",
+            [],
+            [ErrorCodes.InternalError],
+            [("aioffice doctor", "run when commands start failing oddly")]),
+
+        Verb("schema", "Machine-readable JSON of this whole command surface.", "office_schema",
+            [("verb", "optional filter: one of the 13 verb names")],
+            [ErrorCodes.InvalidArgs],
+            [("aioffice schema edit", "just the edit verb")]),
+
+        Verb("help", "Progressive docs: addressing, selectors, per-element property tables.", "office_help",
+            [("topic", "omit for the index; e.g. addressing, selectors, docx/paragraph")],
+            [ErrorCodes.InvalidArgs],
+            [("aioffice help selectors", "full selector grammar")]),
+
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (12 v0 tools).", null,
+            [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
+            [ErrorCodes.InternalError],
+            [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),
+    ];
+
+    /// <summary>The 13 verb names, in surface order.</summary>
+    public static IReadOnlyList<string> VerbNames { get; } = [.. Verbs.Select(v => v.Name)];
+
+    /// <summary>
+    /// Builds the <c>office_schema</c>/<c>aioffice schema</c> data payload, optionally
+    /// filtered to one verb. Unknown verbs throw <c>invalid_args</c> with candidates.
+    /// </summary>
+    public static object Build(string? verb)
+    {
+        if (string.IsNullOrWhiteSpace(verb))
+        {
+            return new { version = Meta.ToolVersion, verbs = Verbs };
+        }
+
+        var match = Verbs.FirstOrDefault(v => v.Name.Equals(verb.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown verb: '{verb}'.",
+                "Call office_schema with no verb to list the whole surface.",
+                candidates: VerbNames);
+        }
+
+        return new { version = Meta.ToolVersion, verbs = new[] { match } };
+    }
+}

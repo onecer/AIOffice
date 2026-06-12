@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build (warnings are errors)
+        run: dotnet build AIOffice.sln -c Release -warnaserror
+
+      - name: Test
+        run: dotnet test AIOffice.sln -c Release --no-build --verbosity normal
+
+      - name: Golden scripts (docx / xlsx / pptx end-to-end)
+        shell: bash
+        run: |
+          python fixtures/scripts/run_goldens.py \
+            --cli "dotnet run --project src/AIOffice.Cli -c Release --no-build --"
+
+      - name: Publish single-file binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release \
+            -p:PublishSingleFile=true --self-contained
+
+      - name: Smoke the published binary (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          BIN=$(find src/AIOffice.Cli/bin/Release -path '*osx-arm64/publish/aioffice' -type f | head -1)
+          echo "binary: $BIN"
+          mkdir -p smoke
+          assert_ok() {
+            echo "$1"
+            echo "$1" | python -c 'import json,sys; e=json.load(sys.stdin); assert e.get("ok") is True, "envelope not ok"'
+          }
+          assert_ok "$("$BIN" --workspace smoke --json doctor)"
+          assert_ok "$("$BIN" --workspace smoke --json create smoke.docx --title 'CI Smoke')"
+          assert_ok "$("$BIN" --workspace smoke --json validate smoke.docx)"
+
+      - name: Upload published binary (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aioffice-osx-arm64
+          path: src/AIOffice.Cli/bin/Release/*/osx-arm64/publish/
+          if-no-files-found: error

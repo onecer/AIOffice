@@ -1,0 +1,669 @@
+# AIOffice MCP Server 规格（`aioffice mcp`）
+
+> 状态：v0 规格（冻结 13 个能力名：12 个工具在 v0 注册，`preview_*` 整组保留至 M1）。
+> 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
+> MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
+> 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
+
+---
+
+## 0. 全局约定
+
+### 0.1 启动
+
+```bash
+aioffice mcp [--workspace <dir>]
+```
+
+- stdio MCP server；`--workspace`（或环境变量 `AIOFFICE_WORKSPACE`，默认 cwd）定义沙箱根。
+- 所有 `file` / `output` 参数在每次调用时做 realpath + symlink 逃逸检查，越界即 `sandbox_denied`。
+- 13 个能力：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_template` `file_snapshot` `office_status` `office_help` `office_schema`，外加 `preview_*`（保留 M1，v0 不注册，见 §1.13）。
+
+### 0.2 统一返回 envelope
+
+每个工具的 result 都是一段 JSON 文本（MCP `content[0].type="text"`），与 CLI stdout 完全同构：
+
+```jsonc
+{
+  "ok": true,
+  "data": { /* per-tool, see below */ },
+  "error": {                          // only when ok=false; otherwise null
+    "code": "invalid_path",
+    "message": "No element at /body/p[99]",
+    "suggestion": "Document has 12 paragraphs; call office_read view=outline or office_query \"p\" to list them.",
+    "candidates": ["/body/p[11]", "/body/p[12]"]   // optional, from automatic server-side nearest-match query
+  },
+  "meta": {
+    "file": "report.docx",            // when a file was involved
+    "rev": "a3f9c12be01d",            // first 12 hex of SHA256 of file bytes, AFTER the call
+    "elapsedMs": 42,
+    "version": "0.1.0",               // aioffice version
+    "warnings": [                     // optional, non-fatal
+      { "code": "formula_not_evaluated", "message": "B7 has no cached value; returned formula text" }
+    ]
+  }
+}
+```
+
+规则：
+
+- `error.suggestion` 永不为空（`AiofficeError` 构造函数强制非空）。
+- `rev` = 文件字节 SHA256 的前 12 个 hex 字符；**所有触文件的命令**都在 `meta.rev` 返回当前值。
+- 变更类调用（`office_edit`、`office_template` 原地合并、`file_snapshot restore`）可传 `expect_rev` 做乐观锁，失配 → `stale_address`，**在任何写入发生之前**拒绝。
+- 每次成功的变更前自动写快照（环形 20 份，见 §1.9），随时可回滚。
+- 非致命问题（如 xlsx 公式无缓存值）走 `meta.warnings`，不打断调用。
+
+### 0.3 寻址语法（自有设计，详情见 `office_help {topic:"addressing"}`）
+
+| 格式 | 示例 |
+|---|---|
+| docx | `/body/p[3]`、`/body/table[1]/tr[2]/tc[1]`、`/body/p[3]/run[2]`、`/header[1]/p[1]` |
+| xlsx | `/Sheet1/A1`、`/Sheet1/A1:C10`、`/Sheet1/row[3]`，含空格的表名加引号：`/'Q3 Data'/B2` |
+| pptx | `/slide[2]`、`/slide[2]/shape[3]`、`/slide[2]/shape[3]/p[1]`（master/layout 寻址保留 M1） |
+
+索引一律 **1-based**。`office_query` 返回规范路径（canonical paths），`office_get` / `office_edit` 原样接受。位置索引在增删后会漂移——多步编辑中，删改之后**重新 query**，不要复用旧索引。
+
+### 0.4 错误码总表（全集 9 个 + 1 个 warning）
+
+| code | 含义 | 自愈线索 | CLI exit |
+|---|---|---|---:|
+| `invalid_args` | 参数/输入错误（坏 selector 语法、未知 help 主题、不存在的快照编号、模板 data 非法、目标已存在且未 `overwrite`…） | `suggestion` 给出正确形态；未知主题/编号附 `candidates[]` | 2 |
+| `file_not_found` | 文件不存在 | `suggestion` 提示 workspace 根与相对路径写法 | 2 |
+| `sandbox_denied` | 路径越出 workspace（含 symlink 逃逸） | `suggestion` 提示 `--workspace` / `AIOFFICE_WORKSPACE` | 4 |
+| `invalid_path` | 元素路径不存在 | **必附 `candidates[]`**：服务端自动用路径末段元素名跑一次近似 query 回填 | 2 |
+| `stale_address` | `expect_rev` 与当前 rev 失配（文件被外部或并行修改） | 重新 `office_get` 拿新 rev 后重试；写入未发生 | 2 |
+| `unsupported_feature` | 能力在当前里程碑不可用（如 `render to=png`） | **`suggestion` 必须给出 workaround** | 5 |
+| `format_corrupt` | 文件不是合法 OOXML / zip 损坏 | `suggestion` 提示 `office_validate` 与 `file_snapshot restore` | 3 |
+| `internal_error` | 未预期异常（我们的 bug） | `suggestion` 提示带 `office_status` 输出报 issue | 3 |
+| `formula_not_evaluated` | **warning（`meta.warnings`），非 error**：xlsx 公式无缓存值且本次未计算 | 读到的是公式文本而非值；data 中相应字段标注 | 0 |
+
+> `office_validate` 发现文档有 schema 错误时仍是 `ok:true`（校验本身跑成功了）——错误码只描述「工具没跑成」，不描述「文档质量差」。
+
+---
+
+## 1. 工具规格
+
+> 每个工具：用途 → inputSchema → result（`data` 形状）→ 示例 → 映射 CLI → 可能错误码。
+> 示例 result 一律省略 `meta`（结构同 §0.2）。
+
+---
+
+### 1.1 `office_create`
+
+**用途**：新建空白 .docx / .xlsx / .pptx（类型由扩展名推断）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string", "description": "Target path ending in .docx/.xlsx/.pptx, inside workspace; kind inferred from extension" },
+    "kind": { "type": "string", "enum": ["docx", "xlsx", "pptx"], "description": "Override when extension is non-standard" },
+    "title": { "type": "string", "description": "Document title written to core properties" },
+    "overwrite": { "type": "boolean", "default": false }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { created: string /* absolute path */, kind: "docx"|"xlsx"|"pptx" }`
+
+**示例**
+
+```json
+// call
+{ "file": "out/q4.pptx", "title": "Q4 Review" }
+// result
+{ "ok": true, "data": { "created": "/ws/out/q4.pptx", "kind": "pptx" } }
+```
+
+**映射 CLI**：`aioffice create <file> [--kind docx|xlsx|pptx] [--title T]`
+
+**错误码**：`invalid_args`（扩展名无法推断且未传 `kind`；目标已存在且未 `overwrite`）、`sandbox_denied`、`internal_error`。
+
+---
+
+### 1.2 `office_read`
+
+**用途**：读文档——大纲 / 纯文本 / 统计 / 完整结构树。理解一个文件的第一步。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "view": { "type": "string", "enum": ["outline", "text", "stats", "structure"], "default": "outline",
+      "description": "outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types" },
+    "range": { "type": "string", "description": "Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx" },
+    "max_bytes": { "type": "integer", "description": "Cap payload size; truncation reported in meta.warnings and data.truncated" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：随 view 变化——`outline`: `{ outline: [{ path, kind, text?, children? }] }`；`text`: `{ text: string, truncated: boolean }`；`stats`: `{ paragraphs?, words?, tables?, sheets?, usedRange?, slides?, shapes? }`；`structure`: `{ tree: Node, truncated: boolean }`。
+
+**示例**
+
+```json
+// call
+{ "file": "report.docx", "view": "outline" }
+// result
+{ "ok": true, "data": { "outline": [
+  { "path": "/body/p[1]", "kind": "Heading1", "text": "2026 年度计划" },
+  { "path": "/body/p[8]", "kind": "Heading2", "text": "预算" },
+  { "path": "/body/table[1]", "kind": "table", "text": "3x4" }
+] } }
+```
+
+**映射 CLI**：`aioffice read <file> [--view outline|text|stats|structure] [--range a..b] [--max-bytes N]`
+
+**错误码**：`file_not_found`、`sandbox_denied`、`format_corrupt`、`invalid_args`（坏 range）。
+
+---
+
+### 1.3 `office_query`
+
+**用途**：CSS-like 选择器全文档检索，返回匹配元素的规范路径——后续 `get` / `edit` 的「寻址」入口。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "selector": {
+      "type": "string",
+      "description": "CSS-like selector. Examples: \"p[style=Heading1]\", \"cell[value>100]\", \"shape:contains('Q3')\", \"run[bold=true]\", \"table tr[1]\". Full grammar: office_help {topic:\"selectors\"}. Returns canonical paths usable in office_get/office_edit."
+    }
+  },
+  "required": ["file", "selector"]
+}
+```
+
+**result**：`data: { results: [{ path, type, text?, props? }], total: number, truncated: boolean }`（最多返回 50 条；`total` 是全量命中数，超出时 `truncated:true` 并在 suggestion 提示收窄 selector）。
+
+**示例**
+
+```json
+// call
+{ "file": "deck.pptx", "selector": "shape:contains('Q3')" }
+// result
+{ "ok": true, "data": { "results": [
+  { "path": "/slide[3]/shape[2]", "type": "shape", "text": "Q3 risk summary" }
+], "total": 1, "truncated": false } }
+```
+
+**映射 CLI**：`aioffice query <file> <selector>`
+
+**错误码**：`invalid_args`（selector 语法错误，suggestion 给出语法提示并指向 `office_help {topic:"selectors"}`）、`file_not_found`、`sandbox_denied`、`format_corrupt`。Warning：`formula_not_evaluated`（xlsx 值谓词遇到无缓存值的公式单元格）。
+
+---
+
+### 1.4 `office_get`
+
+**用途**：按路径精读单个节点及其属性（编辑前「看清楚再下手」）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "path": {
+      "type": "string",
+      "description": "Canonical 1-based path, e.g. \"/body/p[3]\", \"/Sheet1/B2\", \"/'Q3 Data'/A1:C10\", \"/slide[2]/shape[3]\"; \"/\" for document-level properties. Grammar: office_help {topic:\"addressing\"}"
+    }
+  },
+  "required": ["file", "path"]
+}
+```
+
+**result**：`data: { node: { path, type, text?, props: object, children: string[] /* child canonical paths, one level */ } }`
+
+**示例**
+
+```json
+// call
+{ "file": "data.xlsx", "path": "/Sheet1/B2" }
+// result
+{ "ok": true, "data": { "node": { "path": "/Sheet1/B2", "type": "cell",
+  "props": { "value": "42", "valueType": "number", "formula": "=SUM(A1:A10)", "numberFormat": "0.00" },
+  "children": [] } } }
+```
+
+**映射 CLI**：`aioffice get <file> <path>`
+
+**错误码**：`invalid_path`（**自动 candidates**：服务端用路径末段元素名跑一次近似 query，把最接近的规范路径塞进 `candidates[]`）、`file_not_found`、`sandbox_denied`、`format_corrupt`。Warning：`formula_not_evaluated`。
+
+---
+
+### 1.5 `office_edit`（fat tool — 所有变更走这里）
+
+**用途**：增 / 改 / 删 / 移，一次调用 = 一个**原子**保存周期：全部 ops 依序成功才落盘，任何一条失败则整批不写。自动快照 + rev 守卫。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "ops": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Atomic batch, applied in order; all-or-nothing single save. Use office_help {topic:\"<fmt>/<element>\"} for exact prop names and element types — do NOT guess.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "op": { "type": "string", "enum": ["set", "add", "remove", "move"] },
+          "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)" },
+          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image. Per-format list: office_help" },
+          "props": { "type": "object", "additionalProperties": { "type": "string" },
+            "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named" },
+          "position": { "type": ["integer", "string"],
+            "description": "add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append" }
+        },
+        "required": ["op", "path"]
+      }
+    },
+    "expect_rev": { "type": "string", "description": "Optimistic lock: 12-hex rev from a previous meta.rev; mismatch fails with stale_address BEFORE any write" },
+    "dry_run": { "type": "boolean", "default": false, "description": "Validate the whole batch without writing" }
+  },
+  "required": ["file", "ops"]
+}
+```
+
+**result**：`data: { applied: number, results: [{ op, path, ok, createdPath? }], snapshot: number|null, dryRun: boolean }`
+（`snapshot` = 本次自动写入的预改动快照编号，可直接喂给 `file_snapshot restore`；`dry_run` 时为 `null`；`add` 成功返回新元素的 `createdPath`。）
+
+**示例**
+
+```json
+// call — 改标题样式 + 插入新段落 + 删空段，一次原子保存
+{ "file": "report.docx", "expect_rev": "a3f9c12be01d", "ops": [
+  { "op": "set", "path": "/body/p[1]", "props": { "style": "Heading1", "text": "2026 年度计划" } },
+  { "op": "add", "path": "/body", "type": "paragraph", "position": "after:/body/p[1]",
+    "props": { "text": "本文档为最终版。", "italic": "true" } },
+  { "op": "remove", "path": "/body/p[7]" }
+] }
+// result
+{ "ok": true, "data": { "applied": 3, "results": [
+  { "op": "set", "path": "/body/p[1]", "ok": true },
+  { "op": "add", "path": "/body", "ok": true, "createdPath": "/body/p[2]" },
+  { "op": "remove", "path": "/body/p[8]", "ok": true }
+], "snapshot": 7, "dryRun": false } }
+```
+
+> 注意示例最后一条：前面插入了一段，后续 ops 中的位置索引按**执行时点**解析（`/body/p[7]` 在插入后实际命中原第 7 段、现第 8 段）。同批内 ops 之间有索引依赖时，把目标排在插入/删除**之前**，或拆成两次 edit 用 query 重新寻址。
+
+**映射 CLI**：`aioffice edit <file> --ops <json|@file> [--dry-run] [--expect-rev R]`；单 op 糖：`--set <path> k=v...`、`--add <path> --type T k=v...`、`--remove <path>`。
+
+**错误码**：`stale_address`、`invalid_path`（带 candidates）、`invalid_args`（坏 op / 未知 type / 坏 position）、`unsupported_feature`（该元素类型或属性尚未实现，suggestion 给替代做法）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+
+---
+
+### 1.6 `office_render`
+
+**用途**：把文档（或子树）渲染为可检视产物——「render → look → fix」循环的 look 步骤。v0：docx/xlsx → html，pptx → 每页 svg（或 html）；`text` 全格式可用。**png 保留 M1**（调用返回 `unsupported_feature`，含 workaround）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "to": { "type": "string", "enum": ["html", "svg", "text", "png"], "default": "html",
+      "description": "html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: reserved M1 → unsupported_feature" },
+    "scope": { "type": "string", "description": "Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\"" },
+    "output": { "type": "string", "description": "Output file or directory inside workspace (default: alongside source)" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { outputs: string[] /* absolute paths */, content?: string /* inlined when single text-format output ≤ 256 KB */ }`
+（单一 html/svg/text 产物且不超过 256 KB 时直接内联在 `content`，agent 无需再开文件；超限时只给路径并在 `meta.warnings` 标注。）
+
+**示例**
+
+```json
+// call — 只看第 3 页
+{ "file": "deck.pptx", "to": "svg", "scope": "/slide[3]" }
+// result
+{ "ok": true, "data": { "outputs": ["/ws/deck.slide3.svg"], "content": "<svg width=\"1280\" height=\"720\">…</svg>" } }
+```
+
+**映射 CLI**：`aioffice render <file> [--to html|svg|text] [--scope <path>] [-o out]`
+
+**错误码**：`unsupported_feature`（`to=png` → suggestion：先 `to=svg`/`to=html` 检视几何与文本，或把产物交给外部浏览器截图；M1 提供原生 png）、`invalid_path`（坏 scope，带 candidates）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+
+---
+
+### 1.7 `office_validate`
+
+**用途**：OpenXmlValidator schema 校验 + 自有 lint（空段落、悬空引用、混杂字体等），每条 issue 带 suggestion。每轮编辑后的廉价体检。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { valid: boolean, schemaErrors: [{ part, path?, message }], issues: [{ code, path?, message, severity: "info"|"warn"|"error", suggestion }] }`
+
+**示例**
+
+```json
+// call
+{ "file": "data.xlsx" }
+// result
+{ "ok": true, "data": { "valid": true, "schemaErrors": [], "issues": [
+  { "code": "empty_sheet", "path": "/Sheet3", "message": "Sheet3 has no used cells",
+    "severity": "info", "suggestion": "Remove it via office_edit {op:\"remove\", path:\"/Sheet3\"} if unintended" }
+] } }
+```
+
+**映射 CLI**：`aioffice validate <file>`
+
+**错误码**：`file_not_found`、`sandbox_denied`、`format_corrupt`（zip 都打不开时；能打开但 schema 有错 → `ok:true, valid:false`）。
+
+---
+
+### 1.8 `office_template`
+
+**用途**：模板合并——把 `data` 里的键值对填入文档文本 run 中的 `{{key}}` 占位符（docx/xlsx/pptx 通用，跨 run 拆分的占位符也能命中）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string", "description": "Template document containing {{key}} placeholders in text runs" },
+    "data": { "type": "object", "additionalProperties": { "type": "string" },
+      "description": "Merge map, e.g. {\"client\":\"ACME Corp\",\"date\":\"2026-06-12\"} fills {{client}} and {{date}}" },
+    "output": { "type": "string", "description": "Result path (recommended). Omit = merge in place; pre-image auto-snapshotted" },
+    "overwrite": { "type": "boolean", "default": false }
+  },
+  "required": ["file", "data"]
+}
+```
+
+**result**：`data: { created: string, replaced: { "<key>": count }, unmatchedKeys: string[] /* keys with 0 hits */, leftoverPlaceholders: string[] /* {{x}} still in doc */ }`
+
+**示例**
+
+```json
+// call
+{ "file": "templates/contract.docx", "output": "out/acme-contract.docx",
+  "data": { "client": "ACME Corp", "amount": "$150,000" } }
+// result
+{ "ok": true, "data": { "created": "/ws/out/acme-contract.docx",
+  "replaced": { "client": 6, "amount": 2 }, "unmatchedKeys": [], "leftoverPlaceholders": ["{{signDate}}"] } }
+```
+
+**映射 CLI**：`aioffice template <file> --data <json|@file> [-o out]`
+
+**错误码**：`invalid_args`（data 非法 / 目标已存在未 `overwrite`）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+（`leftoverPlaceholders` 非空不是错误——填一半是合法用法；agent 应检查该字段。）
+
+---
+
+### 1.9 `file_snapshot`
+
+**用途**：快照与撤销。每次成功的 `office_edit` / 原地 `office_template` 前自动建快照（环形保留 20 份，存于 `~/.aioffice/snapshots/<path-hash>/`，与 workspace 解耦）；本工具列出与回滚。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "action": { "type": "string", "enum": ["list", "restore"], "default": "list" },
+    "n": { "type": "integer", "description": "restore: snapshot number from list (omit = latest)" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`list` → `data: { snapshots: [{ n, at, rev, bytes, trigger }] }`；`restore` → `data: { restored: n, rev /* new current rev */ }`（restore 自身也先快照当前态——undo 可再 undo）。
+
+**示例**
+
+```json
+// call
+{ "file": "report.docx", "action": "restore", "n": 7 }
+// result
+{ "ok": true, "data": { "restored": 7, "rev": "9be01dd4c2a7" } }
+```
+
+**映射 CLI**：`aioffice snapshot <list|restore> <file> [n]`
+
+**错误码**：`invalid_args`（编号不存在——suggestion 提示先 `list`，`candidates[]` 回填现有编号）、`file_not_found`、`sandbox_denied`。
+
+---
+
+### 1.10 `office_status`
+
+**用途**：健康检查（doctor）。.NET 运行时、平台、沙箱根、快照存储一次性体检。会话开始或连续报错时调用。
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+**result**：`data: { healthy: boolean, version: string, runtime: { dotnet, os, arch }, workspace: string, snapshotStore: { path, count, bytes }, checks: [{ name, ok, detail }] }`
+
+**示例**
+
+```json
+// call
+{}
+// result
+{ "ok": true, "data": { "healthy": true, "version": "0.1.0",
+  "runtime": { "dotnet": "10.0.300", "os": "macos", "arch": "arm64" },
+  "workspace": "/ws",
+  "snapshotStore": { "path": "~/.aioffice/snapshots", "count": 14, "bytes": 41943040 },
+  "checks": [
+    { "name": "workspace_writable", "ok": true, "detail": "/ws" },
+    { "name": "snapshot_store_writable", "ok": true, "detail": "~/.aioffice/snapshots" }
+  ] } }
+```
+
+**映射 CLI**：`aioffice doctor`
+
+**错误码**：`internal_error`（仅自身崩溃；环境有问题时尽量返回 `ok:true, data.healthy:false` + checks，让 agent 能自诊断）。
+
+---
+
+### 1.11 `office_help`
+
+**用途**：渐进式文档。属性名 / 值格式 / 元素类型 / selector 语法**不进 tool schema**，全部藏在这里——不确定就查，别猜。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string",
+      "description": "Omit → topic index. Examples: \"addressing\", \"selectors\", \"errors\", \"envelope\", \"docx/paragraph\", \"xlsx/cell\", \"pptx/shape\", \"docx/paragraph#set\" (props usable with one verb)" }
+  }
+}
+```
+
+**result**：`data: { topic: string, doc: string /* markdown */, related: string[] /* neighbouring topics */ }`
+
+**示例**
+
+```json
+// call — set 能改 paragraph 的哪些属性？
+{ "topic": "docx/paragraph#set" }
+// result
+{ "ok": true, "data": { "topic": "docx/paragraph#set",
+  "doc": "## paragraph — settable props\n- text\n- style (Heading1, Normal, ...)\n- bold/italic/underline: \"true\"|\"false\"\n- size: unit-qualified, e.g. \"12pt\"\n- color: hex \"FF0000\" or named\n- align: left|center|right|justify",
+  "related": ["docx/paragraph#add", "docx/run", "addressing"] } }
+```
+
+**映射 CLI**：`aioffice help [topic]`
+
+**错误码**：`invalid_args`（未知主题，**附近似主题 `candidates[]`**）。
+
+---
+
+### 1.12 `office_schema`
+
+**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。13 工具 / 13 动词的单一事实来源（与 `aioffice schema` 字节一致）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "verb": { "type": "string",
+      "description": "Omit → full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|mcp" }
+  }
+}
+```
+
+**result**：`data: { version: string, verbs: [{ name, summary, args: object, errors: string[], examples: [{ call, note }] }] }`（传 `verb` 时 `verbs` 仅含该项）。
+
+**示例**
+
+```json
+// call
+{ "verb": "edit" }
+// result
+{ "ok": true, "data": { "version": "0.1.0", "verbs": [
+  { "name": "edit", "summary": "Atomic batch mutation",
+    "args": { "ops": "...", "expect_rev": "...", "dry_run": "..." },
+    "errors": ["stale_address", "invalid_path", "invalid_args", "unsupported_feature", "file_not_found", "sandbox_denied", "format_corrupt"],
+    "examples": [{ "call": "aioffice edit r.docx --set /body/p[1] style=Heading1", "note": "single-op sugar" }] }
+] } }
+```
+
+**映射 CLI**：`aioffice schema [verb]`
+
+**错误码**：`invalid_args`（未知 verb，附 `candidates[]`）。
+
+---
+
+### 1.13 `preview_*`（保留 M1，v0 不注册）
+
+浏览器实时预览 + 选区读取（人指哪、AI 打哪）规划在 M1：`preview_open`（启动/关闭/滚动到元素）、`preview_selection`（读取用户在浏览器中点选的元素路径）。
+
+- v0 的 MCP server **不注册**这些工具（`tools/list` 中不出现），因此不占 token、不可误调。
+- 名称已冻结保留，第三方不要占用 `preview_` 前缀。
+- v0 的替代：让用户用 `office_render` 产物（html/svg）人工检视；改动定位用 `office_query`。
+- §2.1 的 token 预算已为它们预留空间，M1 落地不需要重谈预算。
+
+---
+
+## 2. 设计原则
+
+### 2.1 Schema token 预算（总额 ≤ 3500 tokens）
+
+工具列表进入每个 agent 的上下文，schema 即税。预算按「name + description + inputSchema 序列化后」估算，CI 中用 tokenizer 实测并 fail 超额（`tests/AIOffice.Mcp.Tests` 的 schema-budget 测试）：
+
+| 工具 | 预算 (tokens) | 理由 |
+|---|---:|---|
+| `office_edit` | 620 | 唯一 fat tool，承载全部变更动词与 ops 语法 |
+| `office_render` | 260 | 4 种目标格式 + scope + png 保留说明 |
+| `office_read` | 240 | 4 种 view + range |
+| `office_query` | 230 | selector 示例占大头 |
+| `office_template` | 230 | merge 语义 + 占位符示例 |
+| `office_get` | 180 | 路径寻址示例 |
+| `office_help` | 170 | topic 示例清单 |
+| `file_snapshot` | 150 | |
+| `office_create` | 150 | |
+| `office_schema` | 120 | |
+| `office_validate` | 100 | |
+| `office_status` | 90 | |
+| **v0 小计（12 工具）** | **2540** | |
+| M1 预留：`preview_open` + `preview_selection` | 480 | 落地时不重谈预算 |
+| 措辞浮动预留 | 480 | description 迭代余量 |
+| **总额** | **≤ 3500** | |
+
+预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。
+
+### 2.2 Few-fat vs many-thin：为什么是 13 个中粒度能力
+
+- **Many-thin 的失败模式**：按「动词 × 格式」切会得到 50+ 个工具（docx_add_paragraph、xlsx_set_cell…），schema 总量超预算一个数量级，且把路由难题推给模型——工具选择错误率随工具数超线性上涨。
+- **One-mega 的失败模式**：单个 `run_aioffice(argv: string)` 看似零预算，实际把 CLI 语法学习成本转嫁给模型：丢失参数级校验、丢失结构化错误与 `candidates[]`、丢失 `expect_rev` / 自动快照等横切机制的注入点。
+- **我们的切法：按意图分层**——读三档粒度（`read` 全文档 → `query` 检索 → `get` 单点）、写**一档**（唯一的 fat `office_edit`：所有变更共享快照 / rev 守卫 / 原子保存这套横切机制，合并后机制只实现一次）、看（`render`）、体检（`validate`）、模板（`template`）、安全网（`snapshot` / `status`）、自描述（`help` / `schema`）、人机协作（`preview_*`，M1）。
+- CLI 动词与 MCP 工具 **1:1 镜像**（见附表）：agent 在两个入口间切换零学习成本，文档、测试、schema 只维护一份。
+
+### 2.3 render → look → fix 循环
+
+视觉类产物（尤其 pptx）的核心工作模式——`office_validate` 通过 ≠ 长得对：
+
+```
+office_edit(改)
+  → office_render(to=svg, scope=/slide[3])      // pptx 单页 svg；docx/xlsx 用 to=html
+  → [检视 data.content 里的标记与几何]            // 文本溢出 = text 宽度 > shape 宽度；
+                                                 // 撞色 = 相邻元素 fill 相同；位置 = x/y/w/h 坐标
+  → office_query 定位 → office_get 确认 → office_edit(修)
+  → office_render 只重渲染受影响的 scope
+  → 收敛后 office_validate 收尾
+```
+
+规则：**每完成一个视觉里程碑必须 render 看一次**，不要盲编 10 步再看；只渲染受影响的 `scope`，省 token 也省时间；非视觉问题（schema 违规、空段落、悬空引用）用 `office_validate` 的 issues，比渲染便宜。v0 的「看」是读 html/svg 标记（几何与文本可精确判断，像素级观感不行）；M1 的 `to=png` 会附带 MCP image content block，模型直接看图。
+
+### 2.4 渐进式文档漏斗（`office_help` / `office_schema`）
+
+OOXML 属性面有几千个属性名，全塞 schema 是预算自杀。三层漏斗：
+
+1. **第 0 层（常驻）**：12 个 tool schema 里只有动词、路径语法和一行示例（2540 tokens）；
+2. **第 1 层（按需）**：动手前 `office_help {topic:"<fmt>/<element>#<verb>"}` 拿该元素该动词的准确属性表——**一次 help 查询胜过 guess-fail-retry 三轮**；`office_schema` 给整个命令面的机器可读自省；
+3. **第 2 层（自愈）**：错误路径也接进漏斗——`invalid_path` 自动回填 `candidates[]`；`invalid_args`（坏 selector / 未知主题）的 suggestion 直接指向对应的 help 主题；`unsupported_feature` 的 suggestion 必须给出当前可用的 workaround。
+
+---
+
+## 3. Agent 系统提示词片段（建议直接内嵌到调用方 agent 的 system prompt）
+
+```text
+You have aioffice MCP tools for real .docx/.xlsx/.pptx files. Rules:
+
+1. Every result is one JSON envelope {ok, data, error, meta}. On ok=false, READ
+   error.suggestion and error.candidates before retrying — never repeat the same
+   call unchanged. Also check meta.warnings (e.g. formula_not_evaluated on xlsx).
+2. Never guess property names, element types, or selector syntax. Call
+   office_help first ({topic:"docx/paragraph#set"}, {topic:"selectors"},
+   {topic:"addressing"}). office_schema returns the whole machine-readable surface.
+3. Addressing: discover canonical paths with office_query (CSS-like selectors),
+   inspect with office_get. Paths are 1-based and positional — after inserts or
+   deletes, re-query instead of reusing old indices.
+4. ALL mutations go through office_edit. Group related changes into one atomic
+   ops[] batch (single save, all-or-nothing). Pass expect_rev (the last meta.rev)
+   when editing the same file across turns; on stale_address, re-read, then
+   re-apply. Use dry_run:true to pre-flight risky batches.
+5. Work loop: edit → office_render (to=html for docx/xlsx, to=svg per slide for
+   pptx, scope=affected subtree) → inspect the returned markup/geometry → fix →
+   re-render only that scope. PNG rendering is M1; render to=png today returns
+   unsupported_feature with a workaround. Finish with office_validate and treat
+   schemaErrors as blockers.
+6. Every successful edit auto-snapshots the pre-image — no extra safety step
+   needed. To undo: file_snapshot{action:"list"} then {action:"restore", n}.
+7. If tools start failing oddly, call office_status once and report data.checks
+   instead of retrying blindly.
+```
+
+> 该片段约 300 tokens，英文以保证跨模型稳健；可按宿主 agent 语言习惯翻译，但工具名、字段名、错误码保持英文原样。
+
+---
+
+## 附：MCP 工具 ↔ CLI 动词映射总表（1:1，同一内部命令层）
+
+| MCP 工具 | aioffice CLI | 备注 |
+|---|---|---|
+| `office_create` | `create <file> [--kind] [--title]` | |
+| `office_read` | `read <file> [--view] [--range] [--max-bytes]` | view: outline/text/stats/structure |
+| `office_query` | `query <file> <selector>` | 返回规范路径 |
+| `office_get` | `get <file> <path>` | 单节点 + 属性 |
+| `office_edit` | `edit <file> --ops <json|@file> [--dry-run] [--expect-rev]` | 糖：`--set/--add/--remove` |
+| `office_render` | `render <file> [--to] [--scope] [-o]` | png 保留 M1 |
+| `office_validate` | `validate <file>` | OpenXmlValidator + lint |
+| `office_template` | `template <file> --data <json|@file> [-o]` | `{{key}}` 合并 |
+| `file_snapshot` | `snapshot <list|restore> <file> [n]` | 环形 20 份 |
+| `office_status` | `doctor` | |
+| `office_help` | `help [topic]` | 渐进式文档 |
+| `office_schema` | `schema [verb]` | 命令面自省 |
+| `preview_*`（M1） | —（M1 一并落地） | v0 不注册 |
+
+> CLI 全局旗标：`--json`（非 TTY 默认）| `--pretty` | `--workspace <dir>`（或 `AIOFFICE_WORKSPACE`）| `--quiet`。
+> CLI exit codes：`0` ok | `2` user/input error | `3` internal/format error | `4` sandbox_denied | `5` unsupported_feature（与 §0.4 错误码表对应）。

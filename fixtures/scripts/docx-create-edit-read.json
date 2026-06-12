@@ -1,0 +1,26 @@
+{
+  "name": "docx-create-edit-read",
+  "description": "Golden path for Word documents: create, batch-edit (heading + body paragraph), read back as text, validate.",
+  "steps": [
+    {
+      "argv": ["create", "golden-out/hello.docx", "--title", "Golden DOCX"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/hello.docx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Quarterly Report\",\"style\":\"Heading1\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Revenue grew 12% in Q3.\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["read", "golden-out/hello.docx", "--view", "text"],
+      "expect": { "ok": true, "dataContains": "Quarterly Report" }
+    },
+    {
+      "argv": ["validate", "golden-out/hello.docx"],
+      "expect": { "ok": true }
+    }
+  ]
+}

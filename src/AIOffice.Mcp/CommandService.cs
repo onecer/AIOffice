@@ -1,0 +1,460 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
+using AIOffice.Core;
+
+namespace AIOffice.Mcp;
+
+/// <summary>
+/// The shared command layer behind both the MCP tools and the CLI verbs: one
+/// method per capability, every method returning a fully-stamped
+/// <see cref="Envelope"/> and never throwing. Cross-cutting mechanics live
+/// here exactly once — sandbox resolution, <c>expect_rev</c> optimistic
+/// locking (checked BEFORE any write), automatic pre-image snapshots,
+/// rev/elapsedMs stamping — while format-specific work is delegated to the
+/// <see cref="IFormatHandler"/> registered for the file's extension.
+/// <para>
+/// Handler contract for mutating verbs: before <see cref="IFormatHandler.Edit"/>
+/// or an in-place <see cref="IFormatHandler.Template"/> runs, the service
+/// injects <c>args["snapshot"]</c> (the pre-image snapshot number, absent on
+/// dry-run) and <c>args["dryRun"]</c> (normalized bool) into
+/// <see cref="CommandContext.Args"/>; handlers echo them in their data payload.
+/// </para>
+/// </summary>
+public sealed class CommandService
+{
+    private static readonly IReadOnlyList<string> KindNames = ["docx", "xlsx", "pptx"];
+
+    private readonly SnapshotStore _snapshots;
+    private readonly string _snapshotDir;
+    private readonly IReadOnlySet<DocumentKind> _handlerManagedSnapshots;
+
+    /// <param name="workspace">Sandbox every file argument is resolved against.</param>
+    /// <param name="handlers">Format handler registry (see <see cref="HandlerDiscovery"/>).</param>
+    /// <param name="snapshotBaseDir">Snapshot ring location; defaults to <c>~/.aioffice/snapshots</c>.</param>
+    /// <param name="handlerManagedSnapshots">Kinds whose handler received a <see cref="SnapshotStore"/> and snapshots pre-images itself; the service then skips its own pre-image snapshot to keep the ring duplicate-free.</param>
+    public CommandService(
+        Workspace workspace,
+        HandlerRegistry handlers,
+        string? snapshotBaseDir = null,
+        IReadOnlySet<DocumentKind>? handlerManagedSnapshots = null)
+    {
+        Workspace = workspace;
+        Handlers = handlers;
+        _snapshotDir = snapshotBaseDir ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".aioffice", "snapshots");
+        _snapshots = new SnapshotStore(_snapshotDir);
+        _handlerManagedSnapshots = handlerManagedSnapshots ?? new HashSet<DocumentKind>();
+    }
+
+    public Workspace Workspace { get; }
+
+    public HandlerRegistry Handlers { get; }
+
+    // ── format verbs ────────────────────────────────────────────────────────
+
+    public Envelope Create(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass a target path ending in .docx, .xlsx or .pptx.");
+        var resolved = Workspace.Resolve(file);
+        if (File.Exists(resolved) && !OptionalBool(a, "overwrite", false))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Target already exists: {file}",
+                "Pass overwrite:true to replace it, or choose a different path.");
+        }
+
+        var kind = OptionalString(a, "kind");
+        var handler = kind is null ? Handlers.Resolve(resolved) : ResolveByKind(kind);
+        if (Path.GetDirectoryName(resolved) is { Length: > 0 } parent)
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        return handler.Create(Context(resolved, a));
+    });
+
+    public Envelope Read(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Read(ctx));
+
+    public Envelope Query(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Query(ctx));
+
+    public Envelope Get(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Get(ctx));
+
+    public Envelope Render(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Render(ctx));
+
+    public Envelope Validate(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Validate(ctx));
+
+    public Envelope Edit(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the document to edit.");
+        var resolved = Workspace.Resolve(file, mustExist: true);
+        var handler = Handlers.Resolve(resolved);
+
+        var opsNode = a["ops"] ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            "'ops' is required.",
+            "Pass a JSON array like [{\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"text\":\"Hi\"}}].");
+        var ops = EditOp.ParseBatch(opsNode.ToJsonString(JsonDefaults.Options));
+
+        GuardRev(resolved, OptionalString(a, "expect_rev"));
+
+        var dryRun = OptionalBool(a, "dry_run", false);
+        a["dryRun"] = dryRun;
+        return WithPreImageSnapshot(resolved,
+            takeSnapshot: !dryRun && !_handlerManagedSnapshots.Contains(handler.Kind), a,
+            () => handler.Edit(Context(resolved, a), ops));
+    });
+
+    public Envelope Template(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the template document containing {{key}} placeholders.");
+        var resolved = Workspace.Resolve(file, mustExist: true);
+        var handler = Handlers.Resolve(resolved);
+
+        if (a["data"] is not JsonObject)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "'data' must be a JSON object of string values.",
+                "Pass a merge map like {\"client\":\"ACME Corp\",\"date\":\"2026-06-12\"}.");
+        }
+
+        var output = OptionalString(a, "output");
+        var inPlace = output is null;
+        if (output is not null)
+        {
+            var outResolved = Workspace.Resolve(output);
+            if (File.Exists(outResolved) && !OptionalBool(a, "overwrite", false))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Output already exists: {output}",
+                    "Pass overwrite:true to replace it, or choose a different output path.");
+            }
+        }
+
+        GuardRev(resolved, OptionalString(a, "expect_rev"));
+        return WithPreImageSnapshot(resolved,
+            takeSnapshot: inPlace && !_handlerManagedSnapshots.Contains(handler.Kind), a,
+            () => handler.Template(Context(resolved, a)));
+    });
+
+    // ── format-agnostic verbs ───────────────────────────────────────────────
+
+    public Envelope Snapshot(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the document whose snapshot ring you want.");
+        var resolved = Workspace.Resolve(file);
+        var action = OptionalString(a, "action") ?? "list";
+
+        switch (action)
+        {
+            case "list":
+                var ring = _snapshots.List(resolved);
+                return Envelope.Ok(new
+                {
+                    snapshots = ring.Select(e => new
+                    {
+                        n = e.Number,
+                        at = e.CreatedUtc,
+                        rev = e.Rev,
+                        bytes = e.SizeBytes,
+                        trigger = "auto",
+                    }).ToArray(),
+                });
+
+            case "restore":
+                GuardRev(resolved, OptionalString(a, "expect_rev"));
+                var restored = _snapshots.Restore(resolved, OptionalInt(a, "n"));
+                return Envelope.Ok(new { restored = restored.Number, rev = Rev.OfFile(resolved) });
+
+            default:
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown snapshot action: '{action}'.",
+                    "Use action:\"list\" to see the ring or action:\"restore\" (with optional n) to roll back.",
+                    candidates: ["list", "restore"]);
+        }
+    });
+
+    public Envelope Status() => Run([], _ =>
+    {
+        var checks = new List<object>();
+        var healthy = true;
+
+        bool Check(string name, Func<string> probe)
+        {
+            try
+            {
+                checks.Add(new { name, ok = true, detail = probe() });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                checks.Add(new { name, ok = false, detail = ex.Message });
+                return false;
+            }
+        }
+
+        healthy &= Check("workspace_writable", () =>
+        {
+            var probe = Path.Combine(Workspace.Root, ".aioffice-doctor-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return Workspace.Root;
+        });
+
+        healthy &= Check("snapshot_store_writable", () =>
+        {
+            Directory.CreateDirectory(_snapshotDir);
+            var probe = Path.Combine(_snapshotDir, ".aioffice-doctor-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return _snapshotDir;
+        });
+
+        healthy &= Check("format_handlers", () =>
+        {
+            var extensions = Handlers.KnownExtensions.Order(StringComparer.Ordinal).ToArray();
+            return extensions.Length > 0
+                ? string.Join(", ", extensions)
+                : throw new InvalidOperationException("no format handlers registered yet (M0 in progress)");
+        });
+
+        long count = 0, bytes = 0;
+        if (Directory.Exists(_snapshotDir))
+        {
+            foreach (var f in Directory.EnumerateFiles(_snapshotDir, "*.snap", SearchOption.AllDirectories))
+            {
+                count++;
+                bytes += new FileInfo(f).Length;
+            }
+        }
+
+        return Envelope.Ok(new
+        {
+            healthy,
+            version = Meta.ToolVersion,
+            runtime = new
+            {
+                dotnet = Environment.Version.ToString(),
+                os = OperatingSystem.IsMacOS() ? "macos" : OperatingSystem.IsWindows() ? "windows" : "linux",
+                arch = RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant(),
+            },
+            workspace = Workspace.Root,
+            snapshotStore = new { path = _snapshotDir, count, bytes },
+            checks,
+        });
+    });
+
+    public Envelope Help(JsonObject args) => Run(args, a => Envelope.Ok(HelpTopics.Get(OptionalString(a, "topic"))));
+
+    public Envelope Schema(JsonObject args) => Run(args, a => Envelope.Ok(SurfaceSchema.Build(OptionalString(a, "verb"))));
+
+    // ── cross-cutting plumbing ──────────────────────────────────────────────
+
+    private Envelope FormatVerb(JsonObject args, Func<IFormatHandler, CommandContext, Envelope> invoke) =>
+        Run(args, a =>
+        {
+            var file = RequireString(a, "file", "Pass the document path (inside the workspace).");
+            var resolved = Workspace.Resolve(file, mustExist: true);
+            return invoke(Handlers.Resolve(resolved), Context(resolved, a));
+        });
+
+    private CommandContext Context(string resolvedFile, JsonObject args) =>
+        new() { Workspace = Workspace, File = resolvedFile, Args = args };
+
+    /// <summary>
+    /// Times the body, converts any exception into a failure envelope, and
+    /// stamps meta (file, rev-after-call, elapsedMs). Handler-provided meta
+    /// values win; only missing ones are filled in.
+    /// </summary>
+    private Envelope Run(JsonObject args, Func<JsonObject, Envelope> body)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        string? userFile = null;
+        if (args["file"] is JsonValue v && v.TryGetValue<string>(out var s))
+        {
+            userFile = s;
+        }
+
+        Envelope envelope;
+        try
+        {
+            envelope = body(args);
+        }
+        catch (Exception ex)
+        {
+            envelope = Envelope.FromException(ex);
+        }
+
+        var meta = envelope.Meta;
+        var file = meta.File ?? userFile;
+        var rev = meta.Rev;
+        if (rev is null && file is not null)
+        {
+            try
+            {
+                var resolved = Workspace.Resolve(file);
+                if (File.Exists(resolved))
+                {
+                    rev = Rev.OfFile(resolved);
+                }
+            }
+            catch (AiofficeException)
+            {
+                // Sandbox-denied or unresolvable: the envelope already reports it.
+            }
+        }
+
+        return envelope with { Meta = meta with { File = file, Rev = rev, ElapsedMs = stopwatch.ElapsedMilliseconds } };
+    }
+
+    /// <summary>Throws <c>stale_address</c> when the file's current rev differs from <paramref name="expectRev"/>.</summary>
+    private static void GuardRev(string resolvedFile, string? expectRev)
+    {
+        if (expectRev is null)
+        {
+            return;
+        }
+
+        var current = Rev.OfFile(resolvedFile);
+        if (!current.Equals(expectRev, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AiofficeException(
+                ErrorCodes.StaleAddress,
+                $"expect_rev mismatch: the file is at rev {current}, you expected {expectRev}.",
+                "The file changed since you last read it. Re-run office_read/office_get to refresh paths and rev, then retry; nothing was written.");
+        }
+    }
+
+    /// <summary>
+    /// Snapshots the pre-image (when <paramref name="takeSnapshot"/>), injects the
+    /// snapshot number into <paramref name="args"/>, runs the mutation, and discards
+    /// the snapshot again when the mutation did not succeed — failed batches must
+    /// not pollute the undo ring.
+    /// </summary>
+    private Envelope WithPreImageSnapshot(string resolvedFile, bool takeSnapshot, JsonObject args, Func<Envelope> mutate)
+    {
+        SnapshotEntry? pre = null;
+        if (takeSnapshot)
+        {
+            pre = _snapshots.Save(resolvedFile);
+            args["snapshot"] = pre.Number;
+        }
+
+        Envelope envelope;
+        try
+        {
+            envelope = mutate();
+        }
+        catch
+        {
+            Discard(pre);
+            throw;
+        }
+
+        if (!envelope.IsOk)
+        {
+            Discard(pre);
+        }
+
+        return envelope;
+
+        static void Discard(SnapshotEntry? entry)
+        {
+            if (entry is null)
+            {
+                return;
+            }
+
+            try
+            {
+                File.Delete(entry.Path);
+            }
+            catch (IOException)
+            {
+                // Best effort: a stray pre-image snapshot is harmless.
+            }
+        }
+    }
+
+    private IFormatHandler ResolveByKind(string kind)
+    {
+        if (!KindNames.Contains(kind, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown kind: '{kind}'.",
+                "Use one of: docx, xlsx, pptx.",
+                candidates: KindNames);
+        }
+
+        return Handlers.Resolve("kind-override." + kind.ToLowerInvariant());
+    }
+
+    // ── argument extraction (typed invalid_args instead of crashes) ─────────
+
+    private static string RequireString(JsonObject args, string name, string suggestion) =>
+        OptionalString(args, name) ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs, $"'{name}' is required.", suggestion);
+
+    private static string? OptionalString(JsonObject args, string name)
+    {
+        var node = args[name];
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var s))
+        {
+            return s;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"'{name}' must be a string.",
+            $"Pass {name} as a JSON string.");
+    }
+
+    private static bool OptionalBool(JsonObject args, string name, bool fallback)
+    {
+        var node = args[name];
+        if (node is null)
+        {
+            return fallback;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<bool>(out var b))
+        {
+            return b;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"'{name}' must be a boolean.",
+            $"Pass {name} as true or false.");
+    }
+
+    private static int? OptionalInt(JsonObject args, string name)
+    {
+        var node = args[name];
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<int>(out var i))
+        {
+            return i;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"'{name}' must be an integer.",
+            $"Pass {name} as a JSON number.");
+    }
+}
