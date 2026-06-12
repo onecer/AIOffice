@@ -92,6 +92,11 @@ public sealed partial class PptxHandler : IFormatHandler
         using var doc = PptxDoc.Open(stream, editable: false, file);
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
 
+        if (address.IsNotes)
+        {
+            return PptxNotes.NotesDetail(presentation, address);
+        }
+
         if (address.IsMaster)
         {
             return address.HasShape
@@ -143,7 +148,7 @@ public sealed partial class PptxHandler : IFormatHandler
             var presentation = PptxDoc.RequirePresentationPart(doc, file);
             foreach (var op in ops)
             {
-                var target = PptxEditor.Apply(presentation, op);
+                var target = PptxEditor.Apply(presentation, op, ctx.Workspace);
                 results.Add(new { Op = op.Op, Path = op.Path, Target = target });
             }
 
@@ -382,12 +387,12 @@ public sealed partial class PptxHandler : IFormatHandler
                 "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
         }
 
-        if (address.HasShape)
+        if (address.HasShape || address.IsNotes)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Render scope must be a slide, not '{scope}'.",
-                "Use --scope /slide[2]; shape-level rendering is not supported yet.");
+                "Use --scope /slide[2]; shape/notes-level rendering is not supported yet.");
         }
 
         var part = PptxDoc.ResolveSlide(presentation, address.SlideIndex, scope);
@@ -400,6 +405,7 @@ public sealed partial class PptxHandler : IFormatHandler
         Slides = slides.Select(s =>
         {
             var shapes = PptxDoc.Shapes(s.Part);
+            var notes = PptxNotes.Text(s.Part);
             return new
             {
                 Path = Units.Inv($"/slide[{s.Index}]"),
@@ -412,6 +418,7 @@ public sealed partial class PptxHandler : IFormatHandler
                     Kind = shape.Kind,
                     Text = PptxQueryEngine.Snippet(PptxDoc.ShapeText(shape.Element)),
                 }).ToList<object>(),
+                Notes = notes.Length == 0 ? null : PptxQueryEngine.Snippet(notes),
             };
         }).ToList<object>(),
     };
@@ -419,16 +426,33 @@ public sealed partial class PptxHandler : IFormatHandler
     private static object BuildTextView(List<SlideRef> slides) => new
     {
         View = "text",
-        Text = BuildPlainText(slides),
+        Text = BuildPlainText(slides, includeNotes: true),
     };
 
-    private static string BuildPlainText(List<SlideRef> slides)
+    /// <summary>Slide text blocks; --view text includes a [notes] section per slide, render --to text stays slide-only.</summary>
+    private static string BuildPlainText(List<SlideRef> slides, bool includeNotes = false)
     {
-        var perSlide = slides.Select(s => string.Join(
-            '\n',
-            PptxDoc.Shapes(s.Part)
-                .Select(shape => PptxDoc.ShapeText(shape.Element))
-                .Where(text => text.Length > 0)));
+        var perSlide = slides.Select(s =>
+        {
+            var body = string.Join(
+                '\n',
+                PptxDoc.Shapes(s.Part)
+                    .Select(shape => PptxDoc.ShapeText(shape.Element))
+                    .Where(text => text.Length > 0));
+            if (!includeNotes)
+            {
+                return body;
+            }
+
+            var notes = PptxNotes.Text(s.Part);
+            if (notes.Length == 0)
+            {
+                return body;
+            }
+
+            var section = "[notes]\n" + notes;
+            return body.Length == 0 ? section : body + "\n" + section;
+        });
         return string.Join("\n\n", perSlide);
     }
 

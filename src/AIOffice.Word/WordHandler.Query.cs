@@ -20,10 +20,44 @@ public sealed partial class WordHandler
         using (doc)
         using (ms)
         {
-            var node = WordAddress.Resolve(doc, DocPath.Parse(pathArg));
+            var docPath = DocPath.Parse(pathArg);
+            var meta = MetaFor(file, Rev.OfBytes(bytes));
+
+            // The id-addressed roots that live outside body content.
+            switch (docPath.Segments[0].Name)
+            {
+                case "revision":
+                {
+                    var revision = ResolveRevision(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = RevisionPath(revision.Id), type = "revision", properties = RevisionShape(revision) },
+                        meta);
+                }
+
+                case "comment":
+                {
+                    var (comment, id) = ResolveComment(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = CommentPath(id), type = "comment", properties = CommentShape(doc, comment, id) },
+                        meta);
+                }
+
+                case "style":
+                {
+                    var properties = GetStyleProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = StylePath((string)properties["id"]!), type = "style", properties },
+                        meta);
+                }
+
+                default:
+                    break;
+            }
+
+            var node = WordAddress.Resolve(doc, docPath);
             return Envelope.Ok(
                 new { path = node.CanonicalPath, type = node.Type, properties = NodeProperties(node) },
-                MetaFor(file, Rev.OfBytes(bytes)));
+                meta);
         }
     }
 
@@ -157,6 +191,9 @@ public sealed partial class WordHandler
 
     private static object NodeProperties(ResolvedNode node) => node.Element switch
     {
+        // Inline-image carriers answer as images (dimensions from the extent).
+        Paragraph ip when ip.Descendants<Drawing>().Any() => ImageProperties(ip),
+        Run ir when ir.Descendants<Drawing>().Any() => ImageProperties(ir),
         Paragraph p => WordFormatting.ReadParagraphProps(p),
         Run r => WordFormatting.ReadRunProps(r),
         Table t => new Dictionary<string, object?>

@@ -118,6 +118,12 @@ public sealed class NativeVerbs
                 root = _workspace.Root,
                 writable = ProbeWritable(_workspace.Root),
             },
+            limits = new
+            {
+                maxFileMb = FileSizeGuard.MaxFileMb,
+                maxFileMbDefault = FileSizeGuard.DefaultMaxFileMb,
+                maxFileMbEnv = FileSizeGuard.EnvVar,
+            },
             handlers = _handlerStatuses.Select(h => new
             {
                 kind = h.Kind,

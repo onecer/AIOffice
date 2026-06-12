@@ -10,9 +10,10 @@
 |------|------|
 | ✅ M0 已实现 | M0 脚手架交付：13 动词命令面 + MCP，基础元素读写 |
 | ✅ M1 已实现 | M1（v0.2.0）交付：页眉页脚、xlsx 图表（bar/line/pie）、pptx 母版/版式只读、PNG 渲染、实时预览 + 选区回读 |
-| 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至 M2 窗口） |
-| 📋 M2 | 对象层扩展：图表、批注、条件格式、域/TOC、透视表前置等 |
-| 🗺 M3 | 深水区：修订、动画、透视表、OLE/3D/SmartArt、RTL、dump 回放 |
+| ✅ M2 已实现 | M2（v0.3.0）交付：docx 修订（文本级）/批注/样式管理/图片、xlsx 透视表/条件格式/图片、pptx 背景/备注/图片、大文件守卫 |
+| 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至 M3 窗口） |
+| 📋 M2 | M2 计划但尚未落地的剩余项（顺延至 M3 窗口） |
+| 🗺 M3 | 深水区：动画、OLE/3D/SmartArt、RTL、dump 回放、大文件流式 |
 | ❌ 不计划 | 与 AIOffice 设计冲突，或属上游生态/语法专有 |
 
 **M0 元素覆盖范围**（诚实声明）：docx = paragraph / run / table / tr / tc（文本 + 基础字符格式 + 内置样式套用）；xlsx = sheet / cell / range（值、公式、基础字符格式）；pptx = slide / shape / textbox（文本、位置、尺寸）+ 标题占位符。其余元素类型在 M0 一律返回 `unsupported_feature`。
@@ -58,6 +59,7 @@
 | 快照环 + 恢复 | 每次 mutating 前自动快照（保留 20），可 list/restore | ✅ M0 已实现 | 文件级复制环；上游完全没有撤销机制 |
 | rev 并发守卫 | `meta.rev`（SHA256 前 12 hex）；`--expect-rev` 不匹配在写前拒绝 | ✅ M0 已实现 | 防外部并发改写；上游没有 |
 | workspace sandbox | 文件参数 realpath + symlink 逃逸检查，越界 `sandbox_denied` | ✅ M0 已实现 | `--workspace` / `AIOFFICE_WORKSPACE`，默认 cwd |
+| 大文件守卫 | 超限文件（默认 50MB，`AIOFFICE_MAX_FILE_MB` 可调）拒绝打开，`file_too_large` + 建议；doctor 报告 `limits.maxFileMb` | ✅ M2 已实现 | Core `FileSizeGuard`，三 handler 打开链路统一接入；真正的流式处理 → 🗺 M3 |
 | 文档保护 / 密码 | docx protection=forms、xlsx workbook password | 📋 M2 | OpenXml `DocumentProtection` / ClosedXML `Protect` |
 | 插件协议 | 外部格式扩展（.doc / .hwpx / pdf-exporter） | ❌ 不计划 | 上游生态专有；AIOffice 聚焦 OOXML 三格式 |
 | skills 分发 / load_skill | 向 agent 安装 SKILL.md、按场景加载技能 | ❌ 不计划 | 属 agent 侧生态；AIOffice 用 help/schema 自描述替代 |
@@ -71,13 +73,13 @@
 | 段落 | 增删改移、文本、对齐/缩进/间距基础属性 | ✅ M0 已实现 | `Wordprocessing.Paragraph` / `ParagraphProperties` |
 | 字符格式基础 | 粗体/斜体/下划线/字号/颜色/字体 | ✅ M0 已实现 | `Run` / `RunProperties` |
 | 套用内置样式 | style=Heading1/Title/Quote 等引用 | ✅ M0 已实现 | `ParagraphStyleId`；create 时注入最小默认样式库 |
-| 样式定义与修改 | 新建/改写 style，行距、缩进、段边框、styles 库管理 | 🔜 M1 | `StyleDefinitionsPart` |
+| 样式定义与修改 | 新建/改写/删除自定义 style（bold/color/fontSize/alignment/spacing/basedOn），`read --view styles` 清单 | ✅ M2 已实现 | `StyleDefinitionsPart`（WordHandler.Styles.cs）；`/styles` add + `/style[@id=X]` set/get/remove；行距/段边框深化 → 📋 M2 余项 |
 | 多文种字体槽位 | font.latin/ea/cs、lang 槽位、bold.cs/size.cs 等 CS 变体 | 📋 M2 | `RunFonts`、`Languages` |
 | 表格基础 | 建表（rows×cols）、加行、单元格文本读写 | ✅ M0 已实现 | `Table` / `TableRow` / `TableCell` |
 | 表格格式 | 边框/底纹/列宽/对齐/表样式引用 | 🔜 M1 | `TableProperties` / `TableCellProperties` |
 | 单元格合并 | 水平 gridSpan、垂直 vMerge、hMerge | 🔜 M1 | `GridSpan` / `VerticalMerge` |
 | 虚拟列操作 | 把 `/tbl/col[N]` 当实体：整列增/删/移/拷 | 📋 M2 | 自研：跨行遍历同列 `TableCell`（上游 table-column schema 为参考） |
-| 图片 | 插入、尺寸、alt 文本、二进制导出 | 🔜 M1 | `ImagePart` + `Drawing`（DrawingML inline/anchor） |
+| 图片 | 插入（PNG/JPEG）、尺寸（width/height，缺省守纵横比）、before/after 定位 | ✅ M2 已实现 | `ImagePart` + inline `Drawing`（WordHandler.Images.cs）；src 必经 workspace 沙箱；alt 文本/二进制导出 → 📋 M2 余项 |
 | 文本框 / 形状 | 几何、填充、线条、环绕、锚定 | 📋 M2 | DrawingML `wps:wsp` |
 | 页眉 / 页脚 | 增删改，首页/奇偶页变体；寻址 `/header[1]/p[1]` | ✅ M1 已实现 | `HeaderPart` / `FooterPart` + `SectionProperties` 引用；read structure / render 同步暴露 |
 | 节属性 | 纸张/边距/方向/分栏/页码格式枚举/页面边框 | 🔜 M1 | `SectionProperties`（`PageSize`/`PageMargin`/`Columns`/`PageNumberType`） |
@@ -85,7 +87,7 @@
 | 列表与多级编号 | 项目符号、编号、多级列表（num/abstractNum/lvl） | 🔜 M1 | `NumberingDefinitionsPart` |
 | 超链接 | 外链 + 锚点链接 | 🔜 M1 | `Hyperlink` + `HyperlinkRelationship` |
 | 书签 | bookmarkStart/End，配合交叉引用 | 📋 M2 | `BookmarkStart` / `BookmarkEnd` |
-| 批注 | 永久批注（区别于 mark 临时提案），读写删 | 📋 M2 | `WordprocessingCommentsPart` |
+| 批注 | 永久批注（区别于 mark 临时提案），读写删 + 锚点回报 | ✅ M2 已实现 | `WordprocessingCommentsPart`（WordHandler.Comments.cs）；`add type:comment`、`read --view comments`、`/comment[@id=N]` get/remove |
 | 脚注 / 尾注 | 增删改 + `get /` 暴露清单 | 📋 M2 | `FootnotesPart` / `EndnotesPart` |
 | 域（field） | PAGE/NUMPAGES/REF/SEQ/DATE 等（上游覆盖 28 种）；fieldchar/instrtext 低层 | 📋 M2 | `SimpleField` / `FieldChar` + `FieldCode`；常用域优先 |
 | 目录 TOC | 插入 TOC 域 + 样式骨架 | 📋 M2 | TOC field + `SdtBlock` 容器 |
@@ -95,7 +97,7 @@
 | 水印 | 文本/图片水印 | 📋 M2 | 页眉内 VML shape |
 | 表单域 | formfield 读写 + 表单字段清单导出 | 🗺 M3 | `FormFieldData` 系列 |
 | 内容控件（sdt） | 结构化文档标签读写 | 🗺 M3 | `SdtBlock` / `SdtRun` |
-| 修订（track changes） | ins/del/format/moveFrom/moveTo 写入；accept/reject；按作者过滤；tracked find&replace | 🗺 M3 | `InsertedRun` / `DeletedRun` / rPrChange 系列；上游此处行为最全，逐项对照 |
+| 修订（track changes） | 文本级 ins/del 写入（`--track --author`）、accept/reject（按 `/revision[@id=N]` 或范围）、`read --view revisions` | ✅ M2 已实现（文本级） | `InsertedRun` / `DeletedRun` + 段落标记 ins/del（WordHandler.Track.cs）；format/moveFrom/moveTo、tracked find&replace → 🗺 M3 |
 | 编辑权限范围 | permStart/permEnd 区域授权 | 🗺 M3 | `PermStart` / `PermEnd` |
 | OLE 对象 | 嵌入对象读写、二进制导出 | 🗺 M3 | `EmbeddedObjectPart` |
 | 制表位 | tabs 简写、ptab | 📋 M2 | `Tabs` / `PositionalTab` |
@@ -128,15 +130,15 @@
 | 冻结窗格 | 冻结行/列 | 🔜 M1 | `SheetView.Freeze(rows, cols)` |
 | 命名区域 | 定义/引用/删除；`[@name=X]` 寻址 | 🔜 M1 | `IXLWorkbook.NamedRanges` |
 | 表（listobject） | 区域转表、内建表样式目录、totals row | 📋 M2 | `IXLTable` + `XLTableTheme` |
-| 条件格式 | databar / colorscale / iconset / cellIs / formulacf / topN / aboveAverage / containstext / dateoccurring / duplicate / unique（上游 11 类全） | 📋 M2 | `IXLConditionalFormat`（ClosedXML 覆盖大部分类型） |
+| 条件格式 | cellIs（7 算子含 between）/ colorScale（2-3 色）/ dataBar / containsText 四类，`/Sheet1/conditionalFormat[i]` 寻址 | ✅ M2 已实现 | `IXLConditionalFormat`（ExcelConditionalFormats.cs）；iconset / formulacf / topN / aboveAverage / dateoccurring / duplicate / unique 七类 → 🗺 M3 |
 | 数据验证 | 列表/范围/自定义公式验证 + 提示语 | 📋 M2 | `IXLDataValidation` |
 | 迷你图 | line / column / winloss sparkline 组 | 📋 M2 | `IXLSparklineGroups` |
 | 图表 | bar/line/pie 增删读（`/Sheet1/chart[1]` 寻址、anchor 简写）；轴/系列子实体逐属性、pareto 后置 | ✅ M1 已实现 | **ClosedXML 不支持图表**：自研 OpenXml `ChartPart` + `DrawingsPart`（`ExcelCharts.cs`）；轴/系列深编辑 → 📋 M2 |
-| 图片 | 插入/定位/缩放（PNG/JPEG）；SVG | 🔜 M1 | `IXLPicture`；SVG 需 OpenXml 双 part（svgBlip + png fallback）→ 📋 M2 |
+| 图片 | 插入/锚定（anchor 单元格）/缩放（widthPx/heightPx，缺省守纵横比）；PNG/JPEG（头部嗅探） | ✅ M2 已实现 | 自研 OpenXml `DrawingsPart` oneCellAnchor（ExcelImages.cs，ClosedXML 图片 API 绕过）；SVG 双 part → 🗺 M3 |
 | 批注 | 单元格批注读写删 | 📋 M2 | `IXLCell.CreateComment` |
 | 形状 / 文本框 | 浮动 shape/textbox；选择器需枚举 grpSp 内叶子 | 🗺 M3 | ClosedXML 不支持：OpenXml `DrawingsPart`（xdr:sp） |
 | 切片器 | 表/透视表切片器 | 🗺 M3 | OpenXml `SlicerPart`（ClosedXML 无） |
-| 数据透视表 | rows/cols/values（Field:func[:showDataAs]）、filters、layout、grandTotals/subtotals、topN、calculatedField、日期自动分组、缓存共享 | 🗺 M3 | `IXLPivotTable` 起步（覆盖布局与聚合 11 种）；calculatedField/缓存 CoW 需 OpenXml 补 |
+| 数据透视表 | rows/columns/filters + values（sum/average/count/min/max）、targetSheet 自动建、`pivot[@name=X]` 寻址、refreshOnLoad | ✅ M2 已实现 | `IXLPivotTable`（ExcelPivots.cs）+ OpenXml 原始断言测试；layout/topN/calculatedField/showDataAs/日期分组/缓存共享 → 🗺 M3 |
 | 超链接 | 单元格超链接读写 | 🔜 M1 | `IXLCell.SetHyperlink` |
 | 工作簿级属性 | password、calc.mode=manual、calc.refMode=r1c1 | 📋 M2 | `Protect` / `CalculateMode` / OpenXml `WorkbookProperties` |
 | CSV/TSV 导入 | 文件/stdin、表头→AutoFilter+冻结、起始单元格 | 📋 M2 | 自研解析 + ClosedXML 写入（见跨格式"CSV 导入"行） |
@@ -163,13 +165,14 @@
 | effective 继承值溯源 | 读出属性的最终生效值及来源（shape→layout→master 链） | 🗺 M3 | 自研继承解析器（上游 effective.X.src 为行为参考） |
 | 母版 / 版式寻址 | `/master[1]`、`/master[1]/layout[2]` 路径，get/query 只读 | ✅ M1 已实现 | `SlideMasterPart` / `SlideLayoutPart` 枚举；编辑仍 `unsupported_feature`（→ M2） |
 | 母版 / 版式编辑 | 对 master/layout 上元素 add/set/remove | 📋 M2 | 同 slide 编辑管线复用 |
-| 图片 | 插入/位置/尺寸/alt；SVG、裁剪、滤镜属性后置 | 🔜 M1 | `ImagePart` + `P.Picture`；SVG/滤镜 → 📋 M2 |
+| 图片 | 插入（PNG/JPEG）/位置/尺寸（单位换算，缺省守纵横比）/name；返回稳定 `shape[@id=N]` 路径 | ✅ M2 已实现 | `ImagePart` + `P.Picture`（PptxImages.cs）；src 必经沙箱；SVG/裁剪/滤镜 → 🗺 M3 |
 | 表格 | graphicFrame 建表、行列增删、单元格文本/合并、内建样式目录、列实体操作 | 📋 M2 | `a:tbl`（DrawingML table） |
 | 图表基础 | 柱/线/饼 + 轴/系列子实体 | 📋 M2 | `ChartPart`（与 docx/xlsx 共享 DrawingML chart 层） |
 | 图表高级 | pieOfPie/barOfPie、轴线/网格线逐属性、dropLines/hiLowLines/upDownBars、图表动画（chartBuild） | 🗺 M3 | ChartPart 深水区 |
 | 连接线 | from/to 锚接形状（接受 @name）、起止端点改绑 | 📋 M2 | `P.ConnectionShape` + `a:stCxn`/`a:endCxn` |
 | 组合（group） | 建组/解组、get/query 深度遍历、link/tooltip | 📋 M2 | `P.GroupShape` 递归 |
-| 备注（notes） | 读写每页演讲者备注 | 🔜 M1 | `NotesSlidePart` |
+| 备注（notes） | 读写删每页演讲者备注（`/slide[i]/notes` set/add/remove/get，多段落） | ✅ M2 已实现 | `NotesSlidePart` + notes master 自动接线（PptxNotes.cs） |
+| 幻灯片背景 | slide 级纯色背景（真 `p:bg`，非全幅矩形） | ✅ M2 已实现 | `P.Background` + `a:solidFill`（set/add `background` prop）；渐变/图片背景 → 🗺 M3 |
 | 批注（legacy） | 经典批注读写删 | 📋 M2 | `SlideCommentsPart` |
 | 现代线程批注 | p188 modern comments（线程/回复）round-trip | 🗺 M3 | `powerPointComments` part（OpenXml 3.x 已建模） |
 | 动画 | 进入/强调/退出预设（上游 15 emphasis + 16 exit）、多效果链、motion path、repeat/restart/autoReverse | 🗺 M3 | `p:timing` 树手写（OpenXml 无高层 API） |
@@ -191,14 +194,16 @@
 
 ## 4. 统计
 
-| 范围 | ✅ 已实现（M0+M1） | 🔜 M1 | 📋 M2 | 🗺 M3 | ❌ 不计划 | 合计 |
+| 范围 | ✅ 已实现（M0+M1+M2） | 🔜 M1 余项 | 📋 M2 余项 | 🗺 M3 | ❌ 不计划 | 合计 |
 |---|---|---|---|---|---|---|
-| 跨格式通用 | 20 | 4 | 6 | 5 | 3 | 38 |
-| docx | 5 | 9 | 12 | 8 | 0 | 34 |
-| xlsx | 6 | 10 | 12 | 7 | 0 | 35 |
-| pptx | 6 | 7 | 10 | 12 | 0 | 35 |
-| **合计** | **37** | **30** | **40** | **32** | **3** | **142** |
+| 跨格式通用 | 21 | 4 | 6 | 5 | 3 | 39 |
+| docx | 9 | 7 | 11 | 7 | 0 | 34 |
+| xlsx | 9 | 9 | 11 | 6 | 0 | 35 |
+| pptx | 9 | 5 | 10 | 12 | 0 | 36 |
+| **合计** | **48** | **25** | **38** | **30** | **3** | **144** |
 
 > 解读：M0 的 31 项里有相当一部分是 AI 原生层（envelope、快照、rev、sandbox、schema、MCP）—— 这是 AIOffice 的差异化地基，上游完全没有。格式能力本身（docx 4 / xlsx 5 / pptx 5）在 M0 刻意收窄到"段落、单元格、形状"三个最小核心，换取每一项都带测试、过 `OpenXmlValidator`、守住 round-trip 字节一致律。
 >
-> M1（v0.2.0）新增 6 项：docx 页眉/页脚、xlsx 图表（bar/line/pie，自研 ChartPart）、pptx 母版/版式只读寻址、跨格式 PNG 渲染（headless 浏览器）、实时预览 server、浏览器选区回读（`data-aio-path` 契约，原排 M2 提前落地）。其余 102 项按 M1→M3 排队，每一项落地时同步更新本表状态与"实现备注"中的真实 API。
+> M1（v0.2.0）新增 6 项：docx 页眉/页脚、xlsx 图表（bar/line/pie，自研 ChartPart）、pptx 母版/版式只读寻址、跨格式 PNG 渲染（headless 浏览器）、实时预览 server、浏览器选区回读（`data-aio-path` 契约，原排 M2 提前落地）。
+>
+> M2（v0.3.0）新增 11 项（含 2 个新行）：docx 修订（文本级 ins/del + accept/reject）、批注、样式管理、图片；xlsx 数据透视表、条件格式（4 类）、图片；pptx 真背景、演讲者备注、图片；跨格式大文件守卫（`file_too_large` + `AIOFFICE_MAX_FILE_MB`）。计划中的"大文件流式"没有按 M2 交付——它需要一轮专门的基准驱动打磨，移入 M3；M2 以尺寸守卫诚实兜底。其余项按余项标记排队，每一项落地时同步更新本表状态与"实现备注"中的真实 API。

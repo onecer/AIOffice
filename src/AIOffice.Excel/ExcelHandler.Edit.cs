@@ -12,7 +12,8 @@ public sealed partial class ExcelHandler
     private static readonly IReadOnlyList<string> SetProps =
         ["value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name"];
 
-    private static readonly IReadOnlyList<string> AddTypes = ["sheet", "table", "row", "chart"];
+    private static readonly IReadOnlyList<string> AddTypes =
+        ["sheet", "table", "row", "chart", "pivot", "conditionalFormat", "image"];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
     {
@@ -38,10 +39,11 @@ public sealed partial class ExcelHandler
         // write is deferred to a post-save pass (ClosedXML cannot author chart
         // parts; measured: it preserves them byte-identical once present).
         var charts = new ChartOpBatch(file);
+        var post = new PostSaveWork();
         var details = new List<object>(ops.Count);
         for (var i = 0; i < ops.Count; i++)
         {
-            ApplyOp(workbook, ops[i], i, details, charts);
+            ApplyOp(ctx, workbook, ops[i], i, details, charts, post);
         }
 
         if (ArgBool(ctx, "dryRun"))
@@ -53,19 +55,35 @@ public sealed partial class ExcelHandler
 
         var snapshot = _snapshots.Save(file); // pre-image: every successful edit is undoable
         var warnings = SaveWithCachedValues(workbook, file);
-        if (!charts.IsEmpty)
+        try
         {
-            try
+            if (!charts.IsEmpty)
             {
                 ExcelCharts.Apply(file, charts.Ops);
             }
-            catch (Exception)
+
+            if (post.SyncPivotParts)
             {
-                // Keep the batch atomic: the ClosedXML half already hit disk,
-                // so roll the file back to its pre-edit bytes before failing.
-                File.Copy(snapshot.Path, file, overwrite: true);
-                throw;
+                // ClosedXML's save leaves removed pivots' parts behind; sync
+                // the package to the in-memory model (the source of truth).
+                ExcelPivots.SyncPartsAfterSave(file, ExcelPivots.AliveNames(workbook));
             }
+
+            if (post.RemovedImages.Count > 0)
+            {
+                ExcelImages.RemoveAfterSave(file, post.RemovedImages);
+            }
+
+            // Correct ClosedXML's data-bar GUID/orphan defects on the saved
+            // bytes (no-op scan when there is nothing to fix).
+            ExcelConditionalFormats.FixUpAfterSave(file);
+        }
+        catch (Exception)
+        {
+            // Keep the batch atomic: the ClosedXML half already hit disk,
+            // so roll the file back to its pre-edit bytes before failing.
+            File.Copy(snapshot.Path, file, overwrite: true);
+            throw;
         }
 
         return Envelope.Ok(
@@ -73,7 +91,30 @@ public sealed partial class ExcelHandler
             MetaFor(file, sw, warnings));
     });
 
-    private static void ApplyOp(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
+    /// <summary>Raw clean-up passes an edit batch queues for after the ClosedXML save.</summary>
+    private sealed class PostSaveWork
+    {
+        /// <summary>Set when a pivot was removed (its parts outlive ClosedXML's save).</summary>
+        public bool SyncPivotParts { get; set; }
+
+        /// <summary>
+        /// Pictures queued for raw removal, in batch order. The ClosedXML model
+        /// is left untouched (its own picture deletion mangles the drawing
+        /// relationships on save), so these are deleted from the raw package.
+        /// </summary>
+        public List<(string Sheet, string Name)> RemovedImages { get; } = [];
+
+        /// <summary>Names already queued for removal on one sheet (batch projection).</summary>
+        public IReadOnlySet<string> RemovedImageNames(string sheetName) =>
+            RemovedImages
+                .Where(r => string.Equals(r.Sheet, sheetName, StringComparison.OrdinalIgnoreCase))
+                .Select(r => r.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void ApplyOp(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
+        ChartOpBatch charts, PostSaveWork post)
     {
         switch (op.Op)
         {
@@ -81,10 +122,10 @@ public sealed partial class ExcelHandler
                 ApplySet(workbook, op, index, details);
                 break;
             case "add":
-                ApplyAdd(workbook, op, index, details, charts);
+                ApplyAdd(ctx, workbook, op, index, details, charts, post);
                 break;
             case "remove":
-                ApplyRemove(workbook, op, index, details, charts);
+                ApplyRemove(workbook, op, index, details, charts, post);
                 break;
             default: // "move" — ParseBatch already rejected anything else
                 throw new AiofficeException(
@@ -120,13 +161,17 @@ public sealed partial class ExcelHandler
         }
 
         var target = ExcelPaths.Resolve(workbook, op.Path);
-        if (target.Kind == ExcelTargetKind.Chart)
+        if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
+            or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image)
         {
+            var kindName = target.Kind == ExcelTargetKind.ConditionalFormat
+                ? "conditionalFormat"
+                : target.Kind.ToString().ToLowerInvariant();
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"ops[{index}]: set on a chart is not supported yet.",
-                "Remove the chart and add it again with the new props: " +
-                "{op:remove, path:" + op.Path + "} then {op:add, type:chart, ...}.");
+                $"ops[{index}]: set on a {kindName} is not supported yet.",
+                $"Remove the {kindName} and add it again with the new props: " +
+                "{op:remove, path:" + op.Path + "} then {op:add, type:" + kindName + ", ...}.");
         }
 
         var applied = new List<string>();
@@ -370,7 +415,9 @@ public sealed partial class ExcelHandler
 
     // ----- add --------------------------------------------------------------
 
-    private static void ApplyAdd(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
+    private static void ApplyAdd(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
+        ChartOpBatch charts, PostSaveWork post)
     {
         switch (op.Type)
         {
@@ -386,19 +433,55 @@ public sealed partial class ExcelHandler
             case "chart":
                 AddChart(workbook, op, index, details, charts);
                 break;
+            case "pivot":
+                AddPivot(workbook, op, index, details);
+                break;
+            case "conditionalFormat":
+                details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
+            case "image":
+            {
+                var target = ExcelPaths.Resolve(workbook, op.Path);
+                var pending = target.Kind == ExcelTargetKind.Sheet
+                    ? post.RemovedImageNames(target.Sheet.Name)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                details.Add(ExcelImages.Add(ctx.Workspace, target, op, index, pending));
+                break;
+            }
             case null:
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"ops[{index}]: add needs a type.",
-                    "Supported xlsx adds: sheet, table, row, chart.",
+                    "Supported xlsx adds: " + string.Join(", ", AddTypes) + ".",
                     candidates: AddTypes);
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
                     $"ops[{index}]: add type '{op.Type}' is not supported for xlsx yet.",
-                    "Supported adds: sheet, table, row, chart. Images land later.",
+                    "Supported adds: " + string.Join(", ", AddTypes) + ".",
                     candidates: AddTypes);
         }
+    }
+
+    /// <summary>
+    /// Validates and applies an <c>add pivot</c> op. The op's path names the
+    /// SOURCE sheet (where sourceRange lives); props.targetSheet says where the
+    /// pivot lands (created when absent).
+    /// </summary>
+    private static void AddPivot(XLWorkbook workbook, EditOp op, int index, List<object> details)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        if (target.Kind != ExcelTargetKind.Sheet)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: add pivot targets the source sheet path like /Sheet1; " +
+                "the data location goes in props.sourceRange.",
+                "Use {op:add, type:pivot, path:/Sheet1, props:{sourceRange:\"A1:D20\", targetSheet:\"Pivot\", " +
+                "rows:[\"Region\"], values:[{field:\"Sales\", agg:\"sum\"}]}}.");
+        }
+
+        details.Add(ExcelPivots.Add(workbook, target.Sheet, op, index));
     }
 
     private static void AddSheet(XLWorkbook workbook, EditOp op, int index, List<object> details)
@@ -533,9 +616,54 @@ public sealed partial class ExcelHandler
 
     // ----- remove -----------------------------------------------------------
 
-    private static void ApplyRemove(XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts)
+    private static void ApplyRemove(
+        XLWorkbook workbook, EditOp op, int index, List<object> details, ChartOpBatch charts, PostSaveWork post)
     {
         var target = ExcelPaths.Resolve(workbook, op.Path);
+        switch (target.Kind)
+        {
+            case ExcelTargetKind.Pivot:
+            {
+                var (pivot, _) = ExcelPivots.Find(target);
+                var path = ExcelPaths.PivotPath(target.Sheet, pivot.Name);
+                target.Sheet.PivotTables.Delete(pivot.Name);
+                post.SyncPivotParts = true; // ClosedXML leaves the parts behind; sync after save
+                details.Add(new { op = "remove", path, removed = "pivot", name = pivot.Name });
+                return;
+            }
+
+            case ExcelTargetKind.ConditionalFormat:
+            {
+                var format = ExcelConditionalFormats.Find(target);
+                target.Sheet.ConditionalFormats.Remove(f => ReferenceEquals(f, format));
+                details.Add(new
+                {
+                    op = "remove",
+                    path = ExcelPaths.ConditionalFormatPath(target.Sheet, target.ConditionalFormatIndex!.Value),
+                    removed = "conditionalFormat",
+                    cfKind = ExcelConditionalFormats.KindName(format.ConditionalFormatType),
+                });
+                return;
+            }
+
+            case ExcelTargetKind.Image:
+            {
+                // Resolve against the batch-projected state, but leave the
+                // ClosedXML model alone — the raw post-save pass deletes the
+                // anchor (ClosedXML's own deletion corrupts the drawing rels).
+                var picture = ExcelImages.FindForEdit(target, post.RemovedImageNames(target.Sheet.Name));
+                post.RemovedImages.Add((target.Sheet.Name, picture.Name));
+                details.Add(new
+                {
+                    op = "remove",
+                    path = ExcelPaths.ImagePath(target.Sheet, target.ImageIndex!.Value),
+                    removed = "image",
+                    name = picture.Name,
+                });
+                return;
+            }
+        }
+
         var canonical = DocPath.Parse(op.Path).ToCanonicalString();
         switch (target.Kind)
         {
@@ -546,6 +674,11 @@ public sealed partial class ExcelHandler
                         ErrorCodes.InvalidArgs,
                         "A workbook must keep at least one sheet.",
                         "Add a replacement sheet first ({op:add, type:sheet, path:/New}), then remove this one.");
+                }
+
+                if (target.Sheet.PivotTables.Any())
+                {
+                    post.SyncPivotParts = true; // the sheet's pivot caches need pruning after save
                 }
 
                 target.Sheet.Delete();

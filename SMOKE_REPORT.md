@@ -268,3 +268,139 @@ $ aioffice preview close bin.docx  → {closed:true}, lockfile removed
 | 7. snapshot ring location | unchanged (by design) |
 
 New honest limits introduced in M1: png needs an installed Chrome/Edge (typed `unsupported_feature` + install suggestion otherwise — `doctor` shows what the probe found); pptx png renders exactly one slide per call (no grid yet); xlsx charts are bar/line/pie only (scatter/area → typed error naming the workaround); headers/footers are default-type only (first-page/even-odd variants → typed M2 error); preview serves one file per server process (one lockfile per file).
+
+---
+
+# AIOffice 0.3.0 — M2 Integration Smoke Report
+
+Date: 2026-06-12 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+All commands below were actually executed; outputs are trimmed but real.
+
+## M2.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+已成功生成。 0 个警告 0 个错误
+```
+
+## M2.2 Tests — PASS (540/540)
+
+```
+$ dotnet test AIOffice.sln
+AIOffice.Core.Tests     111 passed   (was 104: +ArgParser --track flag, +FileSizeGuard logic/env tests)
+AIOffice.Word.Tests     124 passed   (was 122: +file_too_large wiring on read/edit, sparse 51 MB fixture)
+AIOffice.Excel.Tests    117 passed   (was 115: +file_too_large wiring)
+AIOffice.Pptx.Tests     111 passed   (was 109: +file_too_large wiring)
+AIOffice.Mcp.Tests       32 passed   (was 30: +office_edit track/author reach the handler ctx; token budget still green)
+AIOffice.Preview.Tests   24 passed
+AIOffice.Render.Tests    21 passed
+```
+
+Token budget after the office_edit schema grew `track`/`author` + accept/reject: ~1785 of 3500 tokens (chars/4) — no description trimming needed.
+
+## M2.3 CLI smoke (temp workspace /tmp/aio-m2-smoke, `dotnet run --project src/AIOffice.Cli --`) — PASS
+
+docx tracked changes + comments + styles + image:
+
+```
+$ aioffice create demo.docx --title "M2 Demo"        → ok, rev 7507474119de
+$ aioffice edit demo.docx --track --author Reviewer --set /body/p[2] text='Tracked replacement text'
+  → {applied:1, ops:[{op:set, path:/body/p[2], tracked:true, author:"Reviewer"}]}
+$ aioffice read demo.docx --view revisions
+  → {count:1, revisions:[{path:"/revision[@id=1]", kind:"insert", author:"Reviewer", date:"2026-06-12T09:32:05Z"}]}
+$ aioffice edit demo.docx --ops '[{"op":"accept","path":"/revision[@id=1]"}]'   → {applied:1}
+$ aioffice read demo.docx --view revisions            → {count:0}            ✓ empty after accept
+$ aioffice validate demo.docx                         → {valid:true, count:0}
+
+$ aioffice edit demo.docx --ops '[{"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"…","author":"Reviewer"}}]'
+  → {path:"/comment[@id=1]", anchor:"/body/p[1]"}
+$ aioffice read demo.docx --view comments             → {count:1, anchorText:"M2 Demo"}
+$ aioffice edit demo.docx --ops '[{"op":"remove","path":"/comment[@id=1]"}]'   → ok; comments count:0
+
+$ aioffice edit demo.docx --ops '[{"op":"add","path":"/styles","type":"style","props":{"id":"Callout","bold":true,"color":"1F4E79","fontSize":12,"alignment":"center"}}]'
+$ aioffice edit demo.docx --set /body/p[2] style=Callout
+$ aioffice get demo.docx /body/p[2]                   → properties.style:"Callout" ✓
+$ aioffice get demo.docx '/style[@id=Callout]'        → {builtin:false, inUse:true, bold:true, color:"1F4E79"} ✓
+
+$ aioffice render demo.docx --to png -o logo.png      → 10,197-byte real 1280x720 PNG (the image source, per the brief)
+$ aioffice edit demo.docx --ops '[…add type:image src:logo.png width:6cm…]'    → {widthCm:6, heightCm:3.38}
+$ aioffice validate demo.docx                         → {valid:true, count:0}
+```
+
+xlsx pivot + conditional formats + image:
+
+```
+$ aioffice create data.xlsx; edit … 4-col sales table A1:D7 (Region/Product/Quarter/Sales)
+$ aioffice edit data.xlsx --ops '[…add type:pivot name:SalesPivot sourceRange:A1:D7 targetSheet:Pivot rows:[Region] values:[{field:Sales,agg:sum}]…]'
+  → {path:"/Pivot/pivot[@name=SalesPivot]", targetSheet:"Pivot"}
+$ aioffice get data.xlsx '/Pivot/pivot[1]'            → {name:"SalesPivot", rows:["Region"], values:[{field:"Sales",agg:"sum"}]} ✓ (addressed on its TARGET sheet)
+$ aioffice edit data.xlsx --ops '[cellIs >150 fill C6EFCE on D2:D7, colorScale FFFFFF→63BE7B on D2:D7]'
+  → conditionalFormat[1] + conditionalFormat[2]
+$ aioffice get data.xlsx '/Sheet1/conditionalFormat[1]'  → {cfKind:"cellIs", operator:">", value:"150", fill:"C6EFCE"}
+$ aioffice edit data.xlsx --ops '[…add type:image src:logo.png anchor:F2 widthPx:120…]'  → {anchor:"F2", widthPx:120, heightPx:68}
+$ aioffice validate data.xlsx                         → {valid:true, errors:0, warnings:0}
+```
+
+pptx background + image + notes:
+
+```
+$ aioffice create deck.pptx --title "M2 Deck"
+$ aioffice edit deck.pptx --ops '[set /slide[1] background:0F172A, add type:image src:logo.png w:8cm, set /slide[1]/notes text:"Opening line.\nMention the Q3 numbers."]'
+  → {applied:3, image target:"/slide[1]/shape[@id=3]"}
+$ aioffice read deck.pptx --view outline              → slide 1 carries notes:"Opening line. Mention the Q3 numbers." ✓
+$ aioffice render deck.pptx --to png -o deck-slide1.png  → real 1280x720 PNG, 10,724 bytes (file(1) verified) ✓ still works
+$ aioffice validate deck.pptx                         → {valid:true, count:0}
+```
+
+File-size guard + flags surface:
+
+```
+$ AIOFFICE_MAX_FILE_MB=0 aioffice read demo.docx
+  → {ok:false, error:{code:"file_too_large", message:"File is 0.0 MB, over the 0 MB limit: demo.docx",
+       suggestion:"Split the document into smaller files, or raise the limit with AIOFFICE_MAX_FILE_MB=<mb> …"}}  exit=2
+$ aioffice doctor → data.limits {maxFileMb:50, maxFileMbDefault:50, maxFileMbEnv:"AIOFFICE_MAX_FILE_MB"}; =200 with the env set
+$ aioffice schema edit → usage shows [--track] [--author NAME]; options list ['ops','set','add','type','remove','position','track','author','dry-run','expect-rev']
+$ AIOFFICE_AUTHOR="Env Author" aioffice edit demo.docx --track --set /body/p[2] text='…'
+  → ops[0].author:"Env Author" ✓ (resolution: props.author > --author > AIOFFICE_AUTHOR > "AIOffice")
+```
+
+## M2.4 MCP stdio server — PASS
+
+Spawned `dotnet run --project src/AIOffice.Cli -- mcp --workspace /tmp/aio-m2-smoke`, driven by a python JSON-RPC script:
+
+```
+initialize       → serverInfo {name:"aioffice", version:"0.3.0"}
+tools/list       → 14 tools (count unchanged from M1; office_edit schema gained track/author + accept/reject)
+office_edit {track:true, author:"MCP Reviewer", ops:[set /body/p[2] text…]}
+                 → {ops:[{tracked:true, author:"MCP Reviewer"}]}
+office_read {view:"revisions"}
+                 → count:2 — /revision[@id=1] delete + /revision[@id=2] insert, both author="MCP Reviewer" ✓
+office_edit {ops:[{op:"reject", path:"/body"}]}  → ok (cleanup)
+```
+
+## M2.5 Manual-check fixtures regenerated (for a human to open in real Office)
+
+- `demo.docx` — ONE PENDING tracked change (insert+delete pair by "Reviewer"), 1 comment, custom `Callout` style applied, embedded 6 cm PNG (generated via `aioffice render --to png`). validate: 0 errors.
+- `data.xlsx` — SalesPivot pivot (rows Region × columns Quarter, sum of Sales, on sheet "Pivot", refreshOnLoad), bar chart, cellIs + colorScale conditional formats on D2:D7, anchored image. validate: 0 errors.
+- `deck.pptx` — real `p:bg` dark background (0F172A), white title, embedded image, speaker notes. validate: 0 errors.
+- `word-sample.docx` / `excel-sample.xlsx` / `pptx-showcase.pptx` — regenerated by the test suite, now also carrying the M2 surface (pending revision + comment + style + image / pivot + dataBar + colorScale + image / background + notes + image).
+
+## M2.6 Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice    → 37,667,545 bytes (35.9 MiB), self-contained single file (was 37.6 MB / 35.9 MiB in 0.2.0; M2 adds ≈60 KB)
+$ aioffice doctor                  → version 0.3.0; limits.maxFileMb:50; handlers docx/xlsx/pptx all "ready"
+$ aioffice create/edit --track --author Reviewer/read --view revisions/accept/validate (bin.docx)
+                                   → tracked edit ok (author Reviewer) → 1 revision → accept → 0 revisions → valid:true
+$ AIOFFICE_MAX_FILE_MB=0 aioffice read bin.docx   → file_too_large ✓
+```
+
+## M2.7 Honest limits introduced/kept in M2
+
+- Tracked changes are **text-level only** (w:ins/w:del + paragraph-mark ins/del): tracked formatting, tracked moves and tracked find&replace are typed `invalid_args`/`unsupported_feature` with the workaround named → M3.
+- Conditional formats cover 4 kinds (cellIs/colorScale/dataBar/containsText); the other 7 upstream kinds answer `unsupported_feature` listing the supported set.
+- Pivot tables: rows/columns/filters + sum/average/count/min/max. layout/topN/calculatedField/showDataAs → M3.
+- Images are PNG/JPEG only (header-sniffed); SVG answers a typed error.
+- **Large-file streaming did NOT ship** — it needs a dedicated benchmark-driven pass; M2 ships the `file_too_large` size guard (default 50 MB, `AIOFFICE_MAX_FILE_MB`) instead. Moved to M3.
+- M0 gap 6 (validate envelope shape drift) — **still open**, punted again; carry to M3.

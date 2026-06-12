@@ -552,17 +552,23 @@ public sealed class AiofficeError : Exception
 - ✅ 计划外提前落地：docx 页眉/页脚（`/header[1]/p[1]` 寻址 + 编辑）、xlsx 图表 bar/line/pie（自研 OpenXml ChartPart，`/Sheet1/chart[1]`）。
 - 顺延：annotated 注记视图、query 高级选择器、稳定 ID 寻址、全文 find/replace、pptx 截图网格 —— 移入 M2 窗口（见 PARITY.md 🔜 M1 列）。
 
-### M2 — 深水区能力
+### M2 — 深水区能力（已交付，v0.3.0）
 
-- xlsx：图表、数据透视、条件格式。
-- docx：track changes、comments、页眉页脚深化（编辑而不仅是寻址）。
-- pptx：图表、speaker notes 编辑。
-- 每项能力照旧带测试 + 金样 + PARITY.md 状态更新。
+- ✅ docx 修订（track changes）：`edit --track --author`（MCP `office_edit {track, author}`）写文本级 `w:ins`/`w:del`；`read --view revisions`；`accept`/`reject` op 按 `/revision[@id=N]` 或范围裁决。作者解析：op props.author > `--author` > `AIOFFICE_AUTHOR` > "AIOffice"。格式/移动修订 → M3。
+- ✅ docx 批注：`add type:comment`（锚到段落或 run）、`read --view comments`、`/comment[@id=N]` get/remove。
+- ✅ docx 样式管理：`/styles` add、`/style[@id=X]` set/get/remove、`read --view styles`；套用即 `set p {style}`。
+- ✅ docx / xlsx / pptx 图片：PNG/JPEG，src 必经 workspace 沙箱（逃逸 → `sandbox_denied`），缺省尺寸守纵横比。
+- ✅ xlsx 数据透视表：rows/columns/filters + values（sum/average/count/min/max），targetSheet 自动建，`pivot[@name=X]` 寻址，refreshOnLoad（Excel 打开即重算）。
+- ✅ xlsx 条件格式：cellIs / colorScale / dataBar / containsText 四类，`/Sheet1/conditionalFormat[i]` 寻址。
+- ✅ pptx：真 `p:bg` 纯色背景、`/slide[i]/notes` 演讲者备注（set/add/remove/get）。
+- ✅ 大文件守卫：超过 50MB（`AIOFFICE_MAX_FILE_MB` 可调）拒绝打开 → `file_too_large` + 建议；`doctor` 报告 `limits.maxFileMb`。
+- ⏭ 大文件流式处理**没有**按 M2 交付：它需要一轮专门的基准驱动打磨（10 万行 xlsx / 千页 docx 实测），移入 M3；M2 以尺寸守卫诚实兜底。
 
 ### M3 — 对齐台账清零
 
 - 以 `docs/PARITY.md` 为账本，逐项核对能力覆盖（注意：对齐的是**能力**，不是命令语法），清零或显式标记"不做 + 理由"。
-- 性能与大文件（10 万行 xlsx、千页 docx）基准与优化。
+- 大文件流式与性能：10 万行 xlsx、千页 docx 基准与优化（接替 M2 的尺寸守卫）。
+- docx 格式/移动修订、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景。
 
 ---
 

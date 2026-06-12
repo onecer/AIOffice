@@ -55,6 +55,9 @@ public sealed record PathSegment
     /// <summary>1-based index for indexed elements; null when the element is unindexed.</summary>
     public int? Index { get; init; }
 
+    /// <summary>Stable-id selector value for <c>element[@id=…]</c> segments (e.g. shape[@id=7], revision[@id=3], style[@id=Callout]); null otherwise.</summary>
+    public string? Id { get; init; }
+
     /// <summary>Cell (Cell kind) or top-left of a range.</summary>
     public CellRef? Start { get; init; }
 
@@ -63,9 +66,11 @@ public sealed record PathSegment
 
     public string ToCanonicalString() => Kind switch
     {
-        PathSegmentKind.Element => Index is { } i
-            ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
-            : Name!,
+        PathSegmentKind.Element => Id is { } id
+            ? string.Create(CultureInfo.InvariantCulture, $"{Name}[@id={id}]")
+            : Index is { } i
+                ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
+                : Name!,
         PathSegmentKind.Name => Quote(Name!),
         PathSegmentKind.Cell => Start!.Value.ToString(),
         PathSegmentKind.Range => $"{Start!.Value}:{End!.Value}",
@@ -93,6 +98,9 @@ public sealed partial record DocPath
 
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([0-9]+)\]$")]
     private static partial Regex IndexedElement();
+
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@id=([A-Za-z0-9_.-]+)\]$")]
+    private static partial Regex IdElement();
 
     [GeneratedRegex(@"^([A-Z]{1,3})([0-9]{1,7})$")]
     private static partial Regex CellPattern();
@@ -216,6 +224,12 @@ public sealed partial record DocPath
             }
 
             return new PathSegment { Kind = PathSegmentKind.Cell, Start = cellRef };
+        }
+
+        var byId = IdElement().Match(raw);
+        if (byId.Success)
+        {
+            return new PathSegment { Kind = PathSegmentKind.Element, Name = byId.Groups[1].Value, Id = byId.Groups[2].Value };
         }
 
         var indexed = IndexedElement().Match(raw);

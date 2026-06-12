@@ -12,6 +12,7 @@ parentheses.
 | invalid_path          | 2    | Address didn't resolve; `candidates` lists nearest existing paths. |
 | stale_address         | 2    | The file changed since you read it (`--expect-rev` mismatch); re-run read/query and retry. |
 | unsupported_feature   | 5    | Capability not built yet; the suggestion names the workaround. |
+| file_too_large        | 2    | File exceeds the size guard (default 50 MB); split it, or raise `AIOFFICE_MAX_FILE_MB`. |
 | format_corrupt        | 3    | The file is not valid OOXML; try `aioffice validate` for details. |
 | internal_error        | 3    | A bug in aioffice; re-run and report it.                   |
 

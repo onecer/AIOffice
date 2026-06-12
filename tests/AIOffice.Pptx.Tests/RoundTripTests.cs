@@ -37,6 +37,33 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>The round-trip law over the M2 surface: notes, background and picture parts included.</summary>
+    [Fact]
+    public void M2Features_ReadSideVerbs_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Immutable"))));
+        File.WriteAllBytes(_ws.PathOf("logo.png"), TestImages.Png(40, 20));
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[2]", type: "slide", props: TestEnv.Props(
+                ("title", "Second"), ("background", "0F172A"))),
+            TestEnv.Op("set", "/slide[1]/notes", props: TestEnv.Props(("text", "presenter cue"))),
+            TestEnv.Op("add", "/slide[2]", type: "image", props: TestEnv.Props(
+                ("src", "logo.png"), ("w", "8cm"))),
+        ]));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "outline"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "text"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "structure"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/notes"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[2]"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape[kind=picture]"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {
@@ -94,6 +121,20 @@ public sealed class RoundTripTests : IDisposable
                 ("text", JsonValue.Create("Red text on plain box")),
                 ("color", JsonValue.Create("CC0000")))),
         ]));
+
+        // M2 surface: a real p:bg background, speaker notes and an embedded picture.
+        var logo = Path.Combine(dir, "showcase-logo.png");
+        File.WriteAllBytes(logo, TestImages.Png(200, 100));
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[3]", type: "slide", props: TestEnv.Props(
+                ("title", "M2: background, notes & image"),
+                ("background", "E2E8F0"))),
+            TestEnv.Op("set", "/slide[3]/notes", props: TestEnv.Props(
+                ("text", "Speaker notes written by aioffice — check presenter view."))),
+            TestEnv.Op("add", "/slide[3]", type: "image", props: TestEnv.Props(
+                ("src", "showcase-logo.png"), ("x", "2cm"), ("y", "6cm"), ("w", "6cm"))),
+        ]));
+        File.Delete(logo);
 
         var validation = TestEnv.AssertOk(handler.Validate(
             new CommandContext { Workspace = ws, File = ctx.File, Args = [] }));

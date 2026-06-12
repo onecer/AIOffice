@@ -38,8 +38,8 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "view":{"type":"string","enum":["outline","text","stats","structure"],"default":"outline",
-                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types"},
+              "view":{"type":"string","enum":["outline","text","stats","structure","revisions","comments","styles"],"default":"outline",
+                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only"},
               "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx"},
               "max_bytes":{"type":"integer","description":"Cap payload size; truncation reported in meta.warnings and data.truncated"}},
              "required":["file"]}
@@ -64,21 +64,24 @@ public static class ToolCatalog
             """),
         Make(
             "office_edit",
-            "ALL mutations: apply an atomic batch of set/add/remove/move ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
+            "ALL mutations: apply an atomic batch of set/add/remove/move/accept/reject ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
               "ops":{"type":"array","minItems":1,
                 "description":"Atomic batch, applied in order. Use office_help {topic:\"<fmt>/<element>\"} for exact prop names and element types — do NOT guess.",
                 "items":{"type":"object","properties":{
-                  "op":{"type":"string","enum":["set","add","remove","move"]},
+                  "op":{"type":"string","enum":["set","add","remove","move","accept","reject"],
+                    "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body)"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)"},
-                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image"},
+                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image, comment, style, header, footer, chart, pivot, conditionalFormat"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
                     "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named"},
                   "position":{"type":["integer","string"],
                     "description":"add/move: 1-based index within parent, or \"before:<path>\" / \"after:<path>\"; omit = append"}},
                  "required":["op","path"]}},
+              "track":{"type":"boolean","default":false,"description":"docx: record text set/add/remove ops as tracked revisions (w:ins/w:del); resolve later with accept/reject"},
+              "author":{"type":"string","description":"Author stamped on revisions/comments (op props.author wins; default: AIOFFICE_AUTHOR env, then \"AIOffice\")"},
               "expect_rev":{"type":"string","description":"Optimistic lock: 12-hex rev from a previous meta.rev; mismatch fails with stale_address BEFORE any write"},
               "dry_run":{"type":"boolean","default":false,"description":"Validate the whole batch without writing"}},
              "required":["file","ops"]}

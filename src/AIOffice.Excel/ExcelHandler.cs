@@ -26,6 +26,10 @@ namespace AIOffice.Excel;
 /// preserves existing chart/drawing parts byte-identical across its own
 /// saves, so charts survive later edits. Other chart kinds return
 /// <c>unsupported_feature</c> naming bar|line|pie.</item>
+/// <item>Pivot tables, conditional formats (cellIs | colorScale | dataBar |
+/// containsText) and images (png | jpeg, header-sniffed, sandbox-resolved)
+/// are ClosedXML-native; a post-save pass corrects ClosedXML's data-bar GUID
+/// casing so files stay validator-clean (see ExcelConditionalFormats).</item>
 /// <item><c>move</c> ops and png rendering are not implemented; they return
 /// typed <c>unsupported_feature</c> envelopes with workarounds.</item>
 /// </list>
@@ -108,6 +112,7 @@ public sealed partial class ExcelHandler : IFormatHandler
                 "Check the path spelling, or run 'aioffice create' to make a new workbook.");
         }
 
+        FileSizeGuard.Ensure(ctx.File); // file_too_large before any expensive open
         return ctx.File;
     }
 

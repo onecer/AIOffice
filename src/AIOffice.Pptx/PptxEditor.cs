@@ -14,13 +14,13 @@ namespace AIOffice.Pptx;
 /// </summary>
 internal static class PptxEditor
 {
-    private static readonly IReadOnlyList<string> AddTypes = ["slide", "shape", "textbox"];
+    private static readonly IReadOnlyList<string> AddTypes = ["slide", "shape", "textbox", "image"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
 
     /// <summary>Applies the op and returns the canonical path of the affected node.</summary>
-    public static string Apply(PresentationPart presentation, EditOp op)
+    public static string Apply(PresentationPart presentation, EditOp op, Workspace workspace)
     {
         if (PptxAddress.Parse(op.Path).IsMaster)
         {
@@ -32,7 +32,7 @@ internal static class PptxEditor
 
         return op.Op switch
         {
-            "add" => ApplyAdd(presentation, op),
+            "add" => ApplyAdd(presentation, op, workspace),
             "set" => ApplySet(presentation, op),
             "remove" => ApplyRemove(presentation, op),
             "move" => ApplyMove(presentation, op),
@@ -44,9 +44,14 @@ internal static class PptxEditor
         };
     }
 
-    private static string ApplyAdd(PresentationPart presentation, EditOp op)
+    private static string ApplyAdd(PresentationPart presentation, EditOp op, Workspace workspace)
     {
         var address = PptxAddress.Parse(op.Path);
+        if (address.IsNotes)
+        {
+            return PptxNotes.Append(presentation, address, op);
+        }
+
         var type = op.Type?.Trim().ToLowerInvariant();
         switch (type)
         {
@@ -55,16 +60,15 @@ internal static class PptxEditor
 
             case "shape" or "textbox":
             {
-                if (address.HasShape)
-                {
-                    throw new AiofficeException(
-                        ErrorCodes.InvalidArgs,
-                        $"add shape targets a slide, not '{op.Path}'.",
-                        "Use the slide path as the target, e.g. {\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"shape\"}.");
-                }
-
-                var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, op.Path);
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "shape");
                 var id = AddTextBox(slidePart, op.Props);
+                return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
+            }
+
+            case "image" or "picture":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "image");
+                var id = PptxImages.AddImage(slidePart, op.Props, workspace);
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
@@ -72,9 +76,23 @@ internal static class PptxEditor
                 throw new AiofficeException(
                     op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
-                    "Addable types today: slide, shape (textbox). For pictures/tables/charts, build the deck and add them in PowerPoint for now.",
+                    "Addable types today: slide, shape (textbox) and image (PNG/JPEG picture). " +
+                    "For tables/charts, build the deck and add them in PowerPoint for now.",
                     candidates: AddTypes);
         }
+    }
+
+    private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
+    {
+        if (address.HasShape)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"add {what} targets a slide, not '{path}'.",
+                Units.Inv($"Use the slide path as the target, e.g. {{\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"{what}\"}}."));
+        }
+
+        return PptxDoc.ResolveSlide(presentation, address.SlideIndex, path);
     }
 
     private static string AddSlide(PresentationPart presentation, PptxAddress address, string? position, JsonObject? props)
@@ -127,6 +145,11 @@ internal static class PptxEditor
         if (props is not null && props.TryGetPropertyValue("title", out var titleNode) && titleNode is not null)
         {
             AddTitleShape(slidePart, J.ScalarText(titleNode));
+        }
+
+        if (props is not null && props.TryGetPropertyValue("background", out var backgroundNode))
+        {
+            SetBackground(slidePart, backgroundNode);
         }
 
         return Units.Inv($"/slide[{target}]");
@@ -195,12 +218,14 @@ internal static class PptxEditor
                 "Pass props, e.g. {\"op\":\"set\",\"path\":\"/slide[1]/shape[2]\",\"props\":{\"text\":\"Hello\"}}.");
         }
 
+        if (address.IsNotes)
+        {
+            return PptxNotes.Set(presentation, address, op.Props);
+        }
+
         if (!address.HasShape)
         {
-            throw new AiofficeException(
-                ErrorCodes.InvalidArgs,
-                $"set targets a shape or a paragraph, not the slide '{op.Path}'.",
-                "Address a shape, e.g. /slide[1]/shape[2] or /slide[1]/shape[@id=4]/p[1].");
+            return SetSlideProps(presentation, address, op.Props);
         }
 
         if (address.RunIndex is not null)
@@ -224,9 +249,71 @@ internal static class PptxEditor
         return view.CanonicalPath(address.SlideIndex);
     }
 
+    /// <summary>Slide-level set: today that is the solid background only.</summary>
+    private static string SetSlideProps(PresentationPart presentation, PptxAddress address, JsonObject props)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        foreach (var (key, value) in props)
+        {
+            if (!string.Equals(key, "background", StringComparison.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Prop '{key}' does not apply to a slide.",
+                    "Slide props: background. Shape props (text, fill, geometry, …) target /slide[i]/shape[j].",
+                    candidates: ["background"]);
+            }
+
+            SetBackground(slidePart, value);
+        }
+
+        return address.CanonicalSlidePath;
+    }
+
+    /// <summary>Sets a proper p:bg solid fill (replacing any previous background).</summary>
+    internal static void SetBackground(SlidePart slidePart, JsonNode? value)
+    {
+        if (value is JsonObject or JsonArray ||
+            (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw)))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Gradient and image backgrounds are not supported yet (planned M3).",
+                "Use a solid color, e.g. {\"background\":\"0F172A\"} — or add a full-bleed picture: " +
+                "{\"op\":\"add\",\"type\":\"image\",\"props\":{\"src\":\"bg.png\",\"x\":0,\"y\":0,\"w\":\"33.87cm\",\"h\":\"19.05cm\"}}.");
+        }
+
+        var hex = Units.ParseColorHex("background", value);
+        var slideData = slidePart.Slide?.CommonSlideData ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The slide has no common slide data (p:cSld).",
+            "The slide part is malformed; re-export the file or restore a snapshot.");
+
+        slideData.Background = new P.Background(
+            new P.BackgroundProperties(
+                new A.SolidFill(new A.RgbColorModelHex { Val = hex }),
+                new A.EffectList()));
+    }
+
+    private static bool LooksLikeGradientOrImage(string raw)
+    {
+        var text = raw.Trim().ToLowerInvariant();
+        return text.Contains("gradient", StringComparison.Ordinal)
+            || text.StartsWith("image", StringComparison.Ordinal)
+            || text.StartsWith("url(", StringComparison.Ordinal)
+            || text.EndsWith(".png", StringComparison.Ordinal)
+            || text.EndsWith(".jpg", StringComparison.Ordinal)
+            || text.EndsWith(".jpeg", StringComparison.Ordinal);
+    }
+
     private static string ApplyRemove(PresentationPart presentation, EditOp op)
     {
         var address = PptxAddress.Parse(op.Path);
+        if (address.IsNotes)
+        {
+            return PptxNotes.Clear(presentation, address);
+        }
+
         if (address.RunIndex is not null)
         {
             throw new AiofficeException(
@@ -279,6 +366,14 @@ internal static class PptxEditor
     private static string ApplyMove(PresentationPart presentation, EditOp op)
     {
         var address = PptxAddress.Parse(op.Path);
+        if (address.IsNotes)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "Speaker notes cannot be moved; they belong to their slide.",
+                "Move the slide itself ({\"op\":\"move\",\"path\":\"/slide[3]\",\"position\":\"1\"}), or set/remove the notes text.");
+        }
+
         if (address.HasShape)
         {
             throw new AiofficeException(

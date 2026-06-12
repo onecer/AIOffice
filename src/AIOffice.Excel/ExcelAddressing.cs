@@ -13,6 +13,9 @@ internal enum ExcelTargetKind
     Range,
     Row,
     Chart,
+    Pivot,
+    ConditionalFormat,
+    Image,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -33,13 +36,26 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based per-sheet chart index when <see cref="Kind"/> is Chart.</summary>
     public int? ChartIndex { get; init; }
+
+    /// <summary>1-based per-sheet pivot index when <see cref="Kind"/> is Pivot (null when addressed by name).</summary>
+    public int? PivotIndex { get; init; }
+
+    /// <summary>Pivot table name when <see cref="Kind"/> is Pivot and the path used <c>[@name=…]</c>.</summary>
+    public string? PivotName { get; init; }
+
+    /// <summary>1-based per-sheet conditional-format index when <see cref="Kind"/> is ConditionalFormat.</summary>
+    public int? ConditionalFormatIndex { get; init; }
+
+    /// <summary>1-based per-sheet image index when <see cref="Kind"/> is Image.</summary>
+    public int? ImageIndex { get; init; }
 }
 
 /// <summary>
 /// xlsx addressing: <c>/Sheet1/A1</c>, <c>/Sheet1/A1:C10</c>, <c>/Sheet1/row[3]</c>,
-/// <c>/Sheet1/chart[1]</c>, <c>/'Q3 Data'/B2</c>. Resolution failures throw
-/// <c>invalid_path</c> with nearest-match candidates, as the envelope contract
-/// requires.
+/// <c>/Sheet1/chart[1]</c>, <c>/Sheet1/pivot[1]</c>, <c>/Pivot/pivot[@name=Sales]</c>,
+/// <c>/Sheet1/conditionalFormat[1]</c>, <c>/Sheet1/image[1]</c>, <c>/'Q3 Data'/B2</c>.
+/// Resolution failures throw <c>invalid_path</c> with nearest-match candidates,
+/// as the envelope contract requires.
 /// </summary>
 internal static partial class ExcelPaths
 {
@@ -48,6 +64,14 @@ internal static partial class ExcelPaths
 
     [GeneratedRegex("^[A-Z]{1,3}[0-9]{1,7}(:[A-Z]{1,3}[0-9]{1,7})?$")]
     private static partial Regex CellOrRange();
+
+    /// <summary>
+    /// The stable-name pivot form <c>/Sheet/pivot[@name=X]</c> (bare or
+    /// <c>'quoted'</c> name). Pre-parsed here because the shared DocPath
+    /// grammar has no attribute predicates.
+    /// </summary>
+    [GeneratedRegex(@"^(?<sheet>/.+)/(?i:pivot)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
+    private static partial Regex PivotByName();
 
     /// <summary>Quotes a sheet name when it would not survive the path grammar bare.</summary>
     public static string QuoteSheet(string name) =>
@@ -79,6 +103,26 @@ internal static partial class ExcelPaths
     /// <exception cref="AiofficeException"><c>invalid_path</c> with candidates when the address does not resolve.</exception>
     public static ExcelTarget Resolve(XLWorkbook workbook, string pathText)
     {
+        // /Sheet/pivot[@name=X] never survives the shared DocPath grammar, so
+        // it is peeled off first (precedent: pptx parses shape[@id=N] itself).
+        var byName = PivotByName().Match(pathText);
+        if (byName.Success)
+        {
+            var sheetTarget = Resolve(workbook, byName.Groups["sheet"].Value);
+            if (sheetTarget.Kind != ExcelTargetKind.Sheet)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"pivot[@name=…] must follow a sheet name: {pathText}",
+                    "Use /SheetName/pivot[@name=X]; quote names with specials: pivot[@name='Q3 Sales'].");
+            }
+
+            var name = byName.Groups["quoted"].Success
+                ? byName.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
+                : byName.Groups["bare"].Value;
+            return new ExcelTarget { Kind = ExcelTargetKind.Pivot, Sheet = sheetTarget.Sheet, PivotName = name };
+        }
+
         var path = DocPath.Parse(pathText);
         var sheet = ResolveSheet(workbook, path, pathText);
 
@@ -91,8 +135,9 @@ internal static partial class ExcelPaths
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidPath,
-                $"xlsx paths have at most two segments (sheet, then cell/range/row): {pathText}",
-                "Use /Sheet1/A1, /Sheet1/A1:C10 or /Sheet1/row[3].",
+                $"xlsx paths have at most two segments (sheet, then cell/range/element): {pathText}",
+                "Use /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /Sheet1/chart[1], /Sheet1/pivot[1], " +
+                "/Sheet1/conditionalFormat[1] or /Sheet1/image[1].",
                 candidates: ExampleTargets(sheet));
         }
 
@@ -125,14 +170,46 @@ internal static partial class ExcelPaths
                 segment.Index is { } chartIndex:
                 return new ExcelTarget { Kind = ExcelTargetKind.Chart, Sheet = sheet, ChartIndex = chartIndex };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "pivot", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } pivotIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Pivot, Sheet = sheet, PivotIndex = pivotIndex };
+
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "conditionalFormat", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } formatIndex:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.ConditionalFormat,
+                    Sheet = sheet,
+                    ConditionalFormatIndex = formatIndex,
+                };
+
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "image", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } imageIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Image, Sheet = sheet, ImageIndex = imageIndex };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
-                    $"'{segment.ToCanonicalString()}' is not a cell, range, row[n] or chart[n] in: {pathText}",
-                    "After the sheet name use A1, A1:C10, row[3] or chart[1]; column letters are uppercase.",
+                    $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], chart[n], pivot[n], " +
+                    $"conditionalFormat[n] or image[n] in: {pathText}",
+                    "After the sheet name use A1, A1:C10, row[3], chart[1], pivot[1] (or pivot[@name=X]), " +
+                    "conditionalFormat[1] or image[1]; column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
     }
+
+    /// <summary>The canonical stable-name pivot path aioffice emits: <c>/Sheet/pivot[@name=X]</c>.</summary>
+    public static string PivotPath(IXLWorksheet sheet, string pivotName) =>
+        $"{SheetPath(sheet)}/pivot[@name={QuoteSheet(pivotName)}]";
+
+    public static string ConditionalFormatPath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/conditionalFormat[{index}]");
+
+    public static string ImagePath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/image[{index}]");
 
     private static IXLWorksheet ResolveSheet(XLWorkbook workbook, DocPath path, string pathText)
     {
@@ -180,7 +257,11 @@ internal static partial class ExcelPaths
     private static List<string> ExampleTargets(IXLWorksheet sheet)
     {
         var basePath = SheetPath(sheet);
-        return [basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/chart[1]"];
+        return
+        [
+            basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/chart[1]",
+            basePath + "/pivot[1]", basePath + "/conditionalFormat[1]", basePath + "/image[1]",
+        ];
     }
 
     /// <summary>Classic Levenshtein edit distance, case-insensitive.</summary>

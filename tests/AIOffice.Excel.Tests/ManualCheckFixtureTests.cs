@@ -55,8 +55,35 @@ public sealed class ManualCheckFixtureTests : ExcelTestBase
                 SetOp("/'Q3 Data'/A8", ("fill", "#FFF2CC")),
                 AddOp("/'Q3 Data'", "chart",
                     ("kind", "bar"), ("dataRange", "A3:C6"), ("anchor", "E3"), ("title", "Sales by item")),
+                AddOp("/'Q3 Data'", "pivot",
+                    ("name", "SalesPivot"), ("sourceRange", "A3:C6"), ("targetSheet", "Pivot"),
+                    ("rows", new JsonArray("Item")),
+                    ("values", new JsonArray(
+                        new JsonObject { ["field"] = "Qty", ["agg"] = "sum" },
+                        new JsonObject { ["field"] = "Price", ["agg"] = "average" }))),
+                AddOp("/'Q3 Data'/B4:B6", "conditionalFormat",
+                    ("kind", "dataBar"), ("color", "638EC6")),
+                AddOp("/'Q3 Data'/C4:C6", "conditionalFormat",
+                    ("kind", "colorScale"), ("minColor", "FFFFFF"), ("maxColor", "63BE7B")),
             ]);
         Assert.True(edit.IsOk, edit.ToJson());
+
+        // Image: a small PNG written into the sandbox, embedded, then cleaned up.
+        var logo = Path.Combine(dir, "manual-check-logo.png");
+        File.WriteAllBytes(logo, Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGP4z8AARwzIHABvqgf5gNwAKAAAAABJRU5ErkJggg=="));
+        try
+        {
+            var image = Handler.Edit(
+                new CommandContext { Workspace = workspace, File = file, Args = [] },
+                [AddOp("/'Q3 Data'", "image",
+                    ("src", "manual-check-logo.png"), ("anchor", "E20"), ("widthPx", 80))]);
+            Assert.True(image.IsOk, image.ToJson());
+        }
+        finally
+        {
+            File.Delete(logo);
+        }
 
         // Proxy oracle until a human opens it in real Excel.
         AssertValidatorClean(file);

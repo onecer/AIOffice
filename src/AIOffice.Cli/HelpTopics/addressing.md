@@ -9,6 +9,11 @@ paths that `get` and `edit` accept unchanged.
     /body/p[3]/run[2]           2nd run inside that paragraph
     /body/table[1]/tr[2]/tc[1]  table 1, row 2, cell 1
     /header[1]/p[1]             1st paragraph of the 1st header
+    /revision[@id=3]            tracked revision by id (read --view revisions lists ids;
+                                /revision[1] positional form also works)
+    /comment[@id=2]             comment by id (read --view comments lists ids)
+    /styles                     the style library (add type:style targets it)
+    /style[@id=Callout]         one style definition by id (set/get/remove)
 
 ## xlsx
 
@@ -16,6 +21,10 @@ paths that `get` and `edit` accept unchanged.
     /Sheet1/A1:C10              rectangular range
     /Sheet1/row[3]              whole row 3
     /Sheet1/chart[1]            1st chart anchored on the sheet
+    /Pivot/pivot[1]             1st pivot table ON ITS TARGET SHEET
+    /Pivot/pivot[@name=SalesPivot]  same pivot by name (canonical form in results)
+    /Sheet1/conditionalFormat[1]    1st conditional-format rule on the sheet
+    /Sheet1/image[1]            1st anchored picture on the sheet
     /'Q3 Data'/B2               sheet names with spaces use single quotes
                                 (escape a quote by doubling it: 'O''Brien')
 
@@ -25,12 +34,13 @@ paths that `get` and `edit` accept unchanged.
     /slide[2]/shape[3]          3rd shape on it
     /slide[2]/shape[@id=7]      same shape by stable id (canonical form in results)
     /slide[2]/shape[3]/p[1]     1st paragraph inside that shape
+    /slide[2]/notes             the slide's speaker notes (whole body; no /p[j] beneath)
     /master[1]                  1st slide master (read-only: get/query)
     /master[1]/layout[2]        2nd layout under that master (read-only)
     /master[1]/shape[1]         shape on the master (read-only)
 
 Masters and layouts are readable (`get`, `query`); editing them and
-paragraph/run addressing beneath them stay `unsupported_feature` until M2.
+paragraph/run addressing beneath them stay `unsupported_feature` (M3).
 
 ## Rules
 

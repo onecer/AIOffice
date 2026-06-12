@@ -36,6 +36,8 @@ internal static class PptxDoc
                 "Check the path spelling, or run 'aioffice create' to make a new document.");
         }
 
+        FileSizeGuard.Ensure(file); // file_too_large before any expensive open
+
         var stream = new MemoryStream();
         stream.Write(File.ReadAllBytes(file));
         stream.Position = 0;
@@ -386,6 +388,10 @@ internal static class PptxDoc
 
         return string.Concat(parts);
     }
+
+    /// <summary>Solid RRGGBB background of a slide, when one is set with an explicit RGB color.</summary>
+    public static string? BackgroundHex(SlidePart slidePart) => slidePart.Slide?.CommonSlideData?.Background?
+        .BackgroundProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
 
     /// <summary>Solid RRGGBB fill of a shape, when one is set with an explicit RGB color.</summary>
     public static string? FillHex(OpenXmlCompositeElement element)

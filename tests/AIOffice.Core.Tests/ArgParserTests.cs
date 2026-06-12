@@ -19,6 +19,18 @@ public class ArgParserTests
     }
 
     [Fact]
+    public void Track_is_a_boolean_flag_and_never_eats_the_next_token()
+    {
+        // --track must not consume the trailing k=v positional (M2 tracked changes).
+        var args = ArgParser.Parse(["edit", "r.docx", "--set", "/body/p[1]", "--track", "text=New", "--author", "Reviewer"]);
+
+        Assert.True(args.HasFlag("track"));
+        Assert.Equal("true", args.GetOption("track"));
+        Assert.Equal(["r.docx", "text=New"], args.Positionals);
+        Assert.Equal("Reviewer", args.GetOption("author"));
+    }
+
+    [Fact]
     public void Supports_equals_syntax_and_short_flags()
     {
         var args = ArgParser.Parse(["render", "deck.pptx", "--to=svg", "-o", "out.svg"]);

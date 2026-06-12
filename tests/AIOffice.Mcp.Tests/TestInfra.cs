@@ -102,12 +102,18 @@ internal sealed class FakeDocxHandler : IFormatHandler
         }
 
         int? snapshot = ctx.Args["snapshot"] is JsonValue sv && sv.TryGetValue<int>(out var n) ? n : null;
+
+        // Echo the M2 batch options so wiring tests can assert they reached the handler.
+        var track = ctx.Args["track"] is JsonValue kv && kv.TryGetValue<bool>(out var k) && k;
+        var author = ctx.Args["author"] is JsonValue av && av.TryGetValue<string>(out var a) ? a : null;
         return Envelope.Ok(new
         {
             applied = ops.Count,
             results = ops.Select(o => new { op = o.Op, path = o.Path, ok = true }).ToArray(),
             snapshot,
             dryRun,
+            track,
+            author,
         });
     }
 

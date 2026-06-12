@@ -31,7 +31,7 @@ public sealed partial class WordHandler
             if (scopePath is not null)
             {
                 var node = WordAddress.Resolve(doc, DocPath.Parse(scopePath));
-                content = to == "html" ? RenderHtmlNode(node) : RenderText(node.Element);
+                content = to == "html" ? RenderHtmlNode(doc, node) : RenderText(node.Element);
             }
             else
             {
@@ -73,55 +73,73 @@ public sealed partial class WordHandler
 
         foreach (var header in roots.Where(r => r.Type == "header"))
         {
-            AppendHeaderFooter(sb, header);
+            AppendHeaderFooter(sb, header, OwningPart(doc, header.Element));
         }
 
-        AppendContainer(sb, GetBody(doc, file), "/body");
+        AppendContainer(sb, GetBody(doc, file), "/body", doc.MainDocumentPart);
 
         foreach (var footer in roots.Where(r => r.Type == "footer"))
         {
-            AppendHeaderFooter(sb, footer);
+            AppendHeaderFooter(sb, footer, OwningPart(doc, footer.Element));
         }
 
         return sb.ToString().TrimEnd('\n');
     }
 
     /// <summary>Scoped render of one resolved node, blocks tagged with canonical paths.</summary>
-    internal static string RenderHtmlNode(ResolvedNode node)
+    internal static string RenderHtmlNode(WordprocessingDocument doc, ResolvedNode node)
     {
         var sb = new StringBuilder();
+        var part = OwningPart(doc, node.Element);
         switch (node.Element)
         {
             case Paragraph p:
-                AppendBlock(sb, p, listOpen: false, node.CanonicalPath);
+                AppendBlock(sb, p, listOpen: false, node.CanonicalPath, part);
                 break;
 
             case Table t:
-                AppendTable(sb, t, node.CanonicalPath);
+                AppendTable(sb, t, node.CanonicalPath, part);
                 break;
 
             case Header or Footer:
-                AppendHeaderFooter(sb, node);
+                AppendHeaderFooter(sb, node, part);
                 break;
 
             default:
-                AppendContainer(sb, node.Element, node.CanonicalPath);
+                AppendContainer(sb, node.Element, node.CanonicalPath, part);
                 break;
         }
 
         return sb.ToString().TrimEnd('\n');
     }
 
+    /// <summary>The part whose relationships resolve r:embed ids under this element.</summary>
+    private static OpenXmlPart? OwningPart(WordprocessingDocument doc, OpenXmlElement element)
+    {
+        var root = element;
+        while (root.Parent is { } parent)
+        {
+            root = parent;
+        }
+
+        return root switch
+        {
+            Header header => doc.MainDocumentPart?.HeaderParts.FirstOrDefault(p => ReferenceEquals(p.Header, header)),
+            Footer footer => doc.MainDocumentPart?.FooterParts.FirstOrDefault(p => ReferenceEquals(p.Footer, footer)),
+            _ => doc.MainDocumentPart,
+        };
+    }
+
     /// <summary>The html tag for a header/footer root is its type name, path on the wrapper.</summary>
-    private static void AppendHeaderFooter(StringBuilder sb, ResolvedNode root)
+    private static void AppendHeaderFooter(StringBuilder sb, ResolvedNode root, OpenXmlPart? part)
     {
         var tag = root.Type; // "header" | "footer"
         sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(root.CanonicalPath).Append("\">\n");
-        AppendContainer(sb, root.Element, root.CanonicalPath);
+        AppendContainer(sb, root.Element, root.CanonicalPath, part);
         sb.Append("</").Append(tag).Append(">\n");
     }
 
-    private static void AppendContainer(StringBuilder sb, OpenXmlElement container, string path)
+    private static void AppendContainer(StringBuilder sb, OpenXmlElement container, string path, OpenXmlPart? part)
     {
         var listOpen = false;
         var pIndex = 0;
@@ -144,7 +162,7 @@ public sealed partial class WordHandler
                         listOpen = false;
                     }
 
-                    AppendBlock(sb, p, listOpen, $"{path}/p[{pIndex}]");
+                    AppendBlock(sb, p, listOpen, $"{path}/p[{pIndex}]", part);
                     break;
 
                 case Table t:
@@ -155,7 +173,7 @@ public sealed partial class WordHandler
                         listOpen = false;
                     }
 
-                    AppendTable(sb, t, $"{path}/table[{tableIndex}]");
+                    AppendTable(sb, t, $"{path}/table[{tableIndex}]", part);
                     break;
 
                 default:
@@ -169,7 +187,7 @@ public sealed partial class WordHandler
         }
     }
 
-    private static void AppendBlock(StringBuilder sb, Paragraph p, bool listOpen, string path)
+    private static void AppendBlock(StringBuilder sb, Paragraph p, bool listOpen, string path, OpenXmlPart? part)
     {
         var style = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
         var level = HeadingLevel(style);
@@ -180,61 +198,125 @@ public sealed partial class WordHandler
                 : "p";
 
         sb.Append('<').Append(tag).Append(" data-aio-path=\"").Append(path).Append("\">");
-        AppendInline(sb, p);
+        AppendInline(sb, p, path, part);
         sb.Append("</").Append(tag).Append(">\n");
     }
 
-    private static void AppendInline(StringBuilder sb, Paragraph p)
+    /// <summary>
+    /// Inline content with tracked changes rendered at their end state:
+    /// w:ins content shows, w:del content is hidden. Inline images become
+    /// data-URI &lt;img&gt; tags carrying the run's canonical path.
+    /// </summary>
+    private static void AppendInline(StringBuilder sb, Paragraph p, string path, OpenXmlPart? part)
     {
-        foreach (var run in p.ChildElements.OfType<Run>())
+        var runIndex = 0;
+        foreach (var child in p.ChildElements)
         {
-            var open = new List<string>(3);
-            if (WordFormatting.IsOn(run.RunProperties?.Bold) == true)
+            switch (child)
             {
-                open.Add("strong");
-            }
+                case Run run:
+                    runIndex++;
+                    AppendRun(sb, run, $"{path}/run[{runIndex}]", part);
+                    break;
 
-            if (WordFormatting.IsOn(run.RunProperties?.Italic) == true)
-            {
-                open.Add("em");
-            }
+                case InsertedRun ins: // pending insertions are document content
+                    foreach (var run in ins.ChildElements.OfType<Run>())
+                    {
+                        AppendRun(sb, run, path, part);
+                    }
 
-            if (WordFormatting.IsUnderlined(run.RunProperties) == true)
-            {
-                open.Add("u");
-            }
+                    break;
 
-            foreach (var tag in open)
-            {
-                sb.Append('<').Append(tag).Append('>');
-            }
-
-            foreach (var piece in run.ChildElements)
-            {
-                switch (piece)
-                {
-                    case Text t:
-                        sb.Append(Escape(t.Text));
-                        break;
-                    case Break:
-                        sb.Append("<br/>");
-                        break;
-                    case TabChar:
-                        sb.Append('\t');
-                        break;
-                    default:
-                        break;
-                }
-            }
-
-            for (var i = open.Count - 1; i >= 0; i--)
-            {
-                sb.Append("</").Append(open[i]).Append('>');
+                default: // DeletedRun, comment markers, pPr, …
+                    break;
             }
         }
     }
 
-    private static void AppendTable(StringBuilder sb, Table table, string path)
+    private static void AppendRun(StringBuilder sb, Run run, string pathForImages, OpenXmlPart? part)
+    {
+        var open = new List<string>(3);
+        if (WordFormatting.IsOn(run.RunProperties?.Bold) == true)
+        {
+            open.Add("strong");
+        }
+
+        if (WordFormatting.IsOn(run.RunProperties?.Italic) == true)
+        {
+            open.Add("em");
+        }
+
+        if (WordFormatting.IsUnderlined(run.RunProperties) == true)
+        {
+            open.Add("u");
+        }
+
+        foreach (var tag in open)
+        {
+            sb.Append('<').Append(tag).Append('>');
+        }
+
+        foreach (var piece in run.ChildElements)
+        {
+            switch (piece)
+            {
+                case Text t:
+                    sb.Append(Escape(t.Text));
+                    break;
+                case Break:
+                    sb.Append("<br/>");
+                    break;
+                case TabChar:
+                    sb.Append('\t');
+                    break;
+                case Drawing drawing:
+                    AppendImage(sb, drawing, pathForImages, part);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        for (var i = open.Count - 1; i >= 0; i--)
+        {
+            sb.Append("</").Append(open[i]).Append('>');
+        }
+    }
+
+    /// <summary>Embed budget for data URIs; bigger images render as a sized placeholder.</summary>
+    private const int MaxInlineImageBytes = 512 * 1024;
+
+    private static void AppendImage(StringBuilder sb, Drawing drawing, string path, OpenXmlPart? part)
+    {
+        var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
+        var widthPx = extent?.Cx?.Value is { } cx ? (int)Math.Round(cx / 9_525.0) : 0;
+        var heightPx = extent?.Cy?.Value is { } cy ? (int)Math.Round(cy / 9_525.0) : 0;
+
+        sb.Append("<img data-aio-path=\"").Append(path).Append('"');
+        if (widthPx > 0 && heightPx > 0)
+        {
+            sb.Append(" width=\"").Append(widthPx).Append("\" height=\"").Append(heightPx).Append('"');
+        }
+
+        sb.Append(" alt=\"image\"");
+
+        var embedId = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault()?.Embed?.Value;
+        if (embedId is not null && part?.GetPartById(embedId) is ImagePart imagePart)
+        {
+            using var stream = imagePart.GetStream();
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            if (buffer.Length <= MaxInlineImageBytes)
+            {
+                sb.Append(" src=\"data:").Append(imagePart.ContentType).Append(";base64,")
+                  .Append(Convert.ToBase64String(buffer.ToArray())).Append('"');
+            }
+        }
+
+        sb.Append("/>");
+    }
+
+    private static void AppendTable(StringBuilder sb, Table table, string path, OpenXmlPart? part)
     {
         sb.Append("<table data-aio-path=\"").Append(path).Append("\">\n");
         var rowIndex = 0;
@@ -247,17 +329,18 @@ public sealed partial class WordHandler
             foreach (var cell in row.ChildElements.OfType<TableCell>())
             {
                 cellIndex++;
-                sb.Append("<td data-aio-path=\"").Append(rowPath).Append("/tc[").Append(cellIndex).Append("]\">");
-                var first = true;
+                var cellPath = $"{rowPath}/tc[{cellIndex}]";
+                sb.Append("<td data-aio-path=\"").Append(cellPath).Append("\">");
+                var pIndex = 0;
                 foreach (var p in cell.ChildElements.OfType<Paragraph>())
                 {
-                    if (!first)
+                    pIndex++;
+                    if (pIndex > 1)
                     {
                         sb.Append("<br/>");
                     }
 
-                    AppendInline(sb, p);
-                    first = false;
+                    AppendInline(sb, p, $"{cellPath}/p[{pIndex}]", part);
                 }
 
                 sb.Append("</td>");

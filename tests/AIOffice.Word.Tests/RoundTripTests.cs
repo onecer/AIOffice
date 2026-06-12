@@ -41,6 +41,50 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law extended over the M2 surface: tracked changes,
+    /// comments, custom styles and embedded images must all survive a no-edit
+    /// open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_m2_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "M2 round trip");
+        File.WriteAllBytes(
+            Path.Combine(Dir, "dot.png"),
+            Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="));
+
+        Edit(file, """
+            [
+              {"op":"add","path":"/styles","type":"style","props":{"id":"Callout","bold":true,"color":"1F4E79"}},
+              {"op":"add","path":"/body","props":{"text":"Styled","style":"Callout"}},
+              {"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"please check"}},
+              {"op":"add","path":"/body","type":"image","props":{"src":"dot.png","width":"2cm"}}
+            ]
+            """);
+        Edit(
+            file,
+            """[{"op":"set","path":"/body/p[3]","props":{"text":"Styled and tracked"}}]""",
+            new System.Text.Json.Nodes.JsonObject { ["track"] = true });
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body;
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            _ = doc.MainDocumentPart.WordprocessingCommentsPart?.Comments;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

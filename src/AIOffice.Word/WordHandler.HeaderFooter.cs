@@ -24,6 +24,7 @@ public sealed partial class WordHandler
         RequireHeaderFooterRootPath(op, kind);
 
         var props = op.Props?.DeepClone().AsObject() ?? [];
+        props.Remove("author"); // batch attribution metadata, not a paragraph prop
         RejectDeferredHeaderFooterType(props, kind);
 
         var main = doc.MainDocumentPart ?? throw new AiofficeException(

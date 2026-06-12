@@ -80,11 +80,14 @@ public sealed partial class ExcelHandler
 
     private static object ReadStructure(XLWorkbook workbook, string file)
     {
-        // Charts live in parts ClosedXML cannot see; read them raw.
+        // Charts and pivot source ranges live in parts ClosedXML cannot
+        // see (or keeps internal); read them raw in one pass.
         List<ChartInfo> allCharts;
+        Dictionary<(string, string), (string?, string?)> pivotSources;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
+            pivotSources = ExcelPivots.ReadSources(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
@@ -118,6 +121,15 @@ public sealed partial class ExcelHandler
                             anchor = c.Anchor,
                             series = c.Series,
                         })
+                        .ToList(),
+                    pivots = ws.PivotTables
+                        .Select(pt => ExcelPivots.Describe(ws, pt, pivotSources))
+                        .ToList(),
+                    conditionalFormats = ws.ConditionalFormats
+                        .Select((cf, i) => ExcelConditionalFormats.Describe(ws, cf, i + 1))
+                        .ToList(),
+                    images = ws.Pictures
+                        .Select((pic, i) => ExcelImages.Describe(ws, pic, i + 1))
                         .ToList(),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
                 })

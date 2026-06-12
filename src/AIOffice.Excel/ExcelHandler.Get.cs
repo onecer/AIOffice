@@ -24,9 +24,30 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Cell => Envelope.Ok(CellInfo(target.Sheet, target.Cell!), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
             ExcelTargetKind.Chart => Envelope.Ok(ChartTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.Pivot => Envelope.Ok(PivotTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.ConditionalFormat => Envelope.Ok(
+                ExcelConditionalFormats.Describe(
+                    target.Sheet, ExcelConditionalFormats.Find(target), target.ConditionalFormatIndex!.Value),
+                MetaFor(file, sw)),
+            ExcelTargetKind.Image => Envelope.Ok(
+                ExcelImages.Describe(target.Sheet, ExcelImages.Find(target), target.ImageIndex!.Value),
+                MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
+
+    /// <summary>One pivot table; the source range comes from the raw cache part.</summary>
+    private static object PivotTargetInfo(string file, ExcelTarget target)
+    {
+        var (pivot, _) = ExcelPivots.Find(target);
+        Dictionary<(string, string), (string?, string?)> sources;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            sources = ExcelPivots.ReadSources(document);
+        }
+
+        return ExcelPivots.Describe(target.Sheet, pivot, sources);
+    }
 
     /// <summary>One chart, read back from the raw package (ClosedXML cannot see charts).</summary>
     private static object ChartTargetInfo(string file, ExcelTarget target)

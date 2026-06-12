@@ -24,11 +24,13 @@ internal static class PptxRenderer
     public static string RenderSlideSvg(PresentationPart presentation, SlidePart slidePart, int slideIndex)
     {
         var (width, height) = SlideSizePx(presentation);
+        var background = PptxDoc.BackgroundHex(slidePart);
         var svg = new StringBuilder();
         svg.Append(Units.Inv($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {width:0.#} {height:0.#}\" "));
         svg.Append(Units.Inv($"width=\"{width:0.#}\" height=\"{height:0.#}\" font-family=\"Helvetica, Arial, sans-serif\" "));
         svg.Append(Units.Inv($"data-slide=\"{slideIndex}\">\n"));
-        svg.Append(Units.Inv($"  <rect x=\"0\" y=\"0\" width=\"{width:0.#}\" height=\"{height:0.#}\" fill=\"#ffffff\" stroke=\"#cccccc\"/>\n"));
+        svg.Append(Units.Inv($"  <rect x=\"0\" y=\"0\" width=\"{width:0.#}\" height=\"{height:0.#}\" "));
+        svg.Append(Units.Inv($"fill=\"#{background?.ToLowerInvariant() ?? "ffffff"}\" stroke=\"#cccccc\"/>\n"));
 
         foreach (var shape in PptxDoc.Shapes(slidePart))
         {
@@ -57,6 +59,13 @@ internal static class PptxRenderer
         svg.Append(Units.Inv($"  <g data-aio-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\">\n"));
         svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
         svg.Append(Units.Inv($"fill=\"{(fill is null ? "none" : "#" + fill)}\" stroke=\"#999999\"{dash}/>\n"));
+
+        if (shape.Kind == "picture")
+        {
+            // Pictures render as a labeled placeholder; the bytes are never rasterized into the svg.
+            svg.Append(Units.Inv($"    <text x=\"{x + (w / 2):0.#}\" y=\"{y + (h / 2):0.#}\" font-size=\"12\" "));
+            svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#666666\">[image] {Escape(shape.Name)}</text>\n"));
+        }
 
         if (shape.Element is P.Shape { TextBody: { } textBody })
         {

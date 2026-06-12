@@ -122,6 +122,7 @@ public sealed partial class WordHandler : IFormatHandler
                 "Check the path spelling, or run 'aioffice create' to make a new document.");
         }
 
+        FileSizeGuard.Ensure(file); // file_too_large before any expensive open
         return file;
     }
 

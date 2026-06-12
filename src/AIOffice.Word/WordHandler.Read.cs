@@ -8,7 +8,8 @@ namespace AIOffice.Word;
 
 public sealed partial class WordHandler
 {
-    private static readonly string[] ReadViews = ["text", "outline", "stats", "structure"];
+    private static readonly string[] ReadViews =
+        ["text", "outline", "stats", "structure", "revisions", "comments", "styles"];
 
     public Envelope Read(CommandContext ctx)
     {
@@ -19,7 +20,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use --view text, outline, stats or structure.",
+                "Use --view text, outline, stats, structure, revisions, comments or styles.",
                 candidates: ReadViews);
         }
 
@@ -35,6 +36,9 @@ public sealed partial class WordHandler
                 "text" => TextView(body, ctx.Args, warnings),
                 "outline" => OutlineView(body),
                 "stats" => StatsView(body),
+                "revisions" => RevisionsView(doc),
+                "comments" => CommentsView(doc),
+                "styles" => StylesView(doc),
                 _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 

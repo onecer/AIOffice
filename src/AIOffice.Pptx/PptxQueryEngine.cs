@@ -86,7 +86,7 @@ internal static class PptxQueryEngine
     /// <summary>Query restricted to one container: a slide, a master or one of its layouts.</summary>
     private static List<object> QueryScoped(PresentationPart presentation, Selector selector, PptxAddress scope)
     {
-        if (scope.HasShape || scope.ParagraphIndex is not null)
+        if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -366,10 +366,12 @@ internal static class PptxQueryEngine
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var shapes = PptxDoc.Shapes(slidePart);
+        var notes = PptxNotes.Text(slidePart);
         return new
         {
             Path = address.CanonicalSlidePath,
             Index = address.SlideIndex,
+            Background = PptxDoc.BackgroundHex(slidePart),
             ShapeCount = shapes.Count,
             Shapes = shapes.Select(s => new
             {
@@ -379,6 +381,7 @@ internal static class PptxQueryEngine
                 Name = s.Name,
                 Text = Snippet(PptxDoc.ShapeText(s.Element)),
             }).ToList<object>(),
+            Notes = notes.Length == 0 ? null : Snippet(notes),
         };
     }
 

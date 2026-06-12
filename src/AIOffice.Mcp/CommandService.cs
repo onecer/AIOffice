@@ -119,6 +119,13 @@ public sealed class CommandService
 
         GuardRev(resolved, OptionalString(a, "expect_rev"));
 
+        // M2 attribution: op props.author > tool arg author > AIOFFICE_AUTHOR > handler default.
+        if (OptionalString(a, "author") is null &&
+            Environment.GetEnvironmentVariable("AIOFFICE_AUTHOR") is { Length: > 0 } envAuthor)
+        {
+            a["author"] = envAuthor;
+        }
+
         var dryRun = OptionalBool(a, "dry_run", false);
         a["dryRun"] = dryRun;
         return WithPreImageSnapshot(resolved,

@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：M1 规格（v0.2.0）：**14 个工具全部注册**——v0 的 12 个 + M1 转正的 `preview_open` / `preview_selection`；`office_render` 新增 `to=png`（附 MCP image content block）。
+> 状态：M2 规格（v0.3.0）：**工具数维持 14 个**——M2 没有新工具，而是给 `office_edit` 增加 `track` / `author`（docx 修订）与 accept/reject op、给 `office_read` 增加 revisions/comments/styles 视图；新增错误码 `file_too_large`（大文件守卫）。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -37,7 +37,7 @@ aioffice mcp [--workspace <dir>]
     "file": "report.docx",            // when a file was involved
     "rev": "a3f9c12be01d",            // first 12 hex of SHA256 of file bytes, AFTER the call
     "elapsedMs": 42,
-    "version": "0.2.0",               // aioffice version
+    "version": "0.3.0",               // aioffice version
     "warnings": [                     // optional, non-fatal
       { "code": "formula_not_evaluated", "message": "B7 has no cached value; returned formula text" }
     ]
@@ -57,13 +57,13 @@ aioffice mcp [--workspace <dir>]
 
 | 格式 | 示例 |
 |---|---|
-| docx | `/body/p[3]`、`/body/table[1]/tr[2]/tc[1]`、`/body/p[3]/run[2]`、`/header[1]/p[1]`、`/footer[1]/p[1]` |
-| xlsx | `/Sheet1/A1`、`/Sheet1/A1:C10`、`/Sheet1/row[3]`、`/Sheet1/chart[1]`，含空格的表名加引号：`/'Q3 Data'/B2` |
-| pptx | `/slide[2]`、`/slide[2]/shape[3]`、`/slide[2]/shape[3]/p[1]`；M1 起 `/master[1]`、`/master[1]/layout[2]`（get/query 只读） |
+| docx | `/body/p[3]`、`/body/table[1]/tr[2]/tc[1]`、`/body/p[3]/run[2]`、`/header[1]/p[1]`、`/footer[1]/p[1]`；M2 起 `/revision[@id=3]`、`/comment[@id=2]`、`/styles`、`/style[@id=Callout]` |
+| xlsx | `/Sheet1/A1`、`/Sheet1/A1:C10`、`/Sheet1/row[3]`、`/Sheet1/chart[1]`，含空格的表名加引号：`/'Q3 Data'/B2`；M2 起 `/Pivot/pivot[@name=X]`、`/Sheet1/conditionalFormat[1]`、`/Sheet1/image[1]` |
+| pptx | `/slide[2]`、`/slide[2]/shape[3]`、`/slide[2]/shape[3]/p[1]`；M1 起 `/master[1]`、`/master[1]/layout[2]`（get/query 只读）；M2 起 `/slide[2]/notes` |
 
 索引一律 **1-based**。`office_query` 返回规范路径（canonical paths），`office_get` / `office_edit` 原样接受。位置索引在增删后会漂移——多步编辑中，删改之后**重新 query**，不要复用旧索引。
 
-### 0.4 错误码总表（全集 9 个 + 1 个 warning）
+### 0.4 错误码总表（全集 10 个 + 1 个 warning）
 
 | code | 含义 | 自愈线索 | CLI exit |
 |---|---|---|---:|
@@ -73,6 +73,7 @@ aioffice mcp [--workspace <dir>]
 | `invalid_path` | 元素路径不存在 | **必附 `candidates[]`**：服务端自动用路径末段元素名跑一次近似 query 回填 | 2 |
 | `stale_address` | `expect_rev` 与当前 rev 失配（文件被外部或并行修改） | 重新 `office_get` 拿新 rev 后重试；写入未发生 | 2 |
 | `unsupported_feature` | 能力在当前里程碑不可用（如 master/layout 编辑、scatter 图表） | **`suggestion` 必须给出 workaround** | 5 |
+| `file_too_large` | 文件超过大小守卫（默认 50MB，`AIOFFICE_MAX_FILE_MB` 可调），M2 起 | `suggestion` 提示拆分文件或调高环境变量 | 2 |
 | `format_corrupt` | 文件不是合法 OOXML / zip 损坏 | `suggestion` 提示 `office_validate` 与 `file_snapshot restore` | 3 |
 | `internal_error` | 未预期异常（我们的 bug） | `suggestion` 提示带 `office_status` 输出报 issue | 3 |
 | `formula_not_evaluated` | **warning（`meta.warnings`），非 error**：xlsx 公式无缓存值且本次未计算 | 读到的是公式文本而非值；data 中相应字段标注 | 0 |
@@ -131,8 +132,8 @@ aioffice mcp [--workspace <dir>]
   "type": "object",
   "properties": {
     "file": { "type": "string" },
-    "view": { "type": "string", "enum": ["outline", "text", "stats", "structure"], "default": "outline",
-      "description": "outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types" },
+    "view": { "type": "string", "enum": ["outline", "text", "stats", "structure", "revisions", "comments", "styles"], "default": "outline",
+      "description": "outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only (M2)" },
     "range": { "type": "string", "description": "Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx" },
     "max_bytes": { "type": "integer", "description": "Cap payload size; truncation reported in meta.warnings and data.truncated" }
   },
@@ -155,7 +156,7 @@ aioffice mcp [--workspace <dir>]
 ] } }
 ```
 
-**映射 CLI**：`aioffice read <file> [--view outline|text|stats|structure] [--range a..b] [--max-bytes N]`
+**映射 CLI**：`aioffice read <file> [--view outline|text|stats|structure|revisions|comments|styles] [--range a..b] [--max-bytes N]`
 
 **错误码**：`file_not_found`、`sandbox_denied`、`format_corrupt`、`invalid_args`（坏 range）。
 
@@ -237,7 +238,7 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.5 `office_edit`（fat tool — 所有变更走这里）
 
-**用途**：增 / 改 / 删 / 移，一次调用 = 一个**原子**保存周期：全部 ops 依序成功才落盘，任何一条失败则整批不写。自动快照 + rev 守卫。
+**用途**：增 / 改 / 删 / 移 / 修订裁决，一次调用 = 一个**原子**保存周期：全部 ops 依序成功才落盘，任何一条失败则整批不写。自动快照 + rev 守卫。M2 起支持 docx 修订（`track`/`author` + `accept`/`reject` op）。
 
 ```json
 {
@@ -251,9 +252,10 @@ aioffice mcp [--workspace <dir>]
       "items": {
         "type": "object",
         "properties": {
-          "op": { "type": "string", "enum": ["set", "add", "remove", "move"] },
+          "op": { "type": "string", "enum": ["set", "add", "remove", "move", "accept", "reject"],
+            "description": "accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body)" },
           "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)" },
-          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image. Per-format list: office_help" },
+          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image, comment, style, header, footer, chart, pivot, conditionalFormat" },
           "props": { "type": "object", "additionalProperties": { "type": "string" },
             "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named" },
           "position": { "type": ["integer", "string"],
@@ -262,6 +264,8 @@ aioffice mcp [--workspace <dir>]
         "required": ["op", "path"]
       }
     },
+    "track": { "type": "boolean", "default": false, "description": "docx: record text set/add/remove ops as tracked revisions (w:ins/w:del); resolve later with accept/reject" },
+    "author": { "type": "string", "description": "Author stamped on revisions/comments (op props.author wins; default: AIOFFICE_AUTHOR env, then \"AIOffice\")" },
     "expect_rev": { "type": "string", "description": "Optimistic lock: 12-hex rev from a previous meta.rev; mismatch fails with stale_address BEFORE any write" },
     "dry_run": { "type": "boolean", "default": false, "description": "Validate the whole batch without writing" }
   },
@@ -292,7 +296,7 @@ aioffice mcp [--workspace <dir>]
 
 > 注意示例最后一条：前面插入了一段，后续 ops 中的位置索引按**执行时点**解析（`/body/p[7]` 在插入后实际命中原第 7 段、现第 8 段）。同批内 ops 之间有索引依赖时，把目标排在插入/删除**之前**，或拆成两次 edit 用 query 重新寻址。
 
-**映射 CLI**：`aioffice edit <file> --ops <json|@file> [--dry-run] [--expect-rev R]`；单 op 糖：`--set <path> k=v...`、`--add <path> --type T k=v...`、`--remove <path>`。
+**映射 CLI**：`aioffice edit <file> --ops <json|@file> [--track] [--author NAME] [--dry-run] [--expect-rev R]`；单 op 糖：`--set <path> k=v...`、`--add <path> --type T k=v...`、`--remove <path>`。
 
 **错误码**：`stale_address`、`invalid_path`（带 candidates）、`invalid_args`（坏 op / 未知 type / 坏 position）、`unsupported_feature`（该元素类型或属性尚未实现，suggestion 给替代做法）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
 

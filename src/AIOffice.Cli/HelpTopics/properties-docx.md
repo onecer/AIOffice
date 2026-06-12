@@ -1,4 +1,4 @@
-# docx properties (v0)
+# docx properties
 
 Properties appear in `get` output and are written via `edit` ops
 (`set` props, `add` type+props). Unknown properties fail with `invalid_args`
@@ -39,5 +39,62 @@ listing the supported set; capabilities not built yet answer
 `{op:"add", path:"/body", type:"p", position:"inside"}` appends to the body;
 `position:"before"|"after"` inserts relative to the node at `path`.
 
-Headers/footers are addressable (`/header[1]/p[1]`) for read/set; creating new
-header parts is M1.
+Headers/footers are addressable (`/header[1]/p[1]`) for read/set, and created
+with `{op:"add", path:"/header[1]", type:"header", props:{text, align?}}`
+(same for `footer`).
+
+## tracked changes (M2)
+
+Pass `--track` (and optionally `--author NAME`) on `edit`: text `set`/`add`/
+`remove` ops are recorded as `w:ins`/`w:del` revisions instead of being applied
+silently. Only text changes can be tracked; tracked formatting answers
+`invalid_args` naming the workaround.
+
+    aioffice edit r.docx --track --author "Reviewer" --set /body/p[1] text='New wording'
+    aioffice read r.docx --view revisions     # -> [{id, kind, author, date, text, path}]
+    aioffice edit r.docx --ops '[{"op":"accept","path":"/revision[@id=3]"}]'
+    aioffice edit r.docx --ops '[{"op":"reject","path":"/body"}]'   # scope form: all in /body
+
+Author resolution: op `props.author` > `--author` > `AIOFFICE_AUTHOR` env >
+`AIOffice`. Revisions are never `remove`d — only accepted or rejected.
+
+## comment (M2)
+
+| prop   | type   | notes                                                |
+|--------|--------|------------------------------------------------------|
+| text   | string | required                                             |
+| author | string | optional; defaults like tracked changes              |
+
+`{op:"add", path:"/body/p[2]", type:"comment", props:{text:"check this"}}` —
+the path is the anchored content (paragraph or run). Read back with
+`read --view comments`; `get /comment[@id=2]`; `remove /comment[@id=2]`.
+
+## style (M2)
+
+| prop          | type   | notes                                         |
+|---------------|--------|-----------------------------------------------|
+| id            | string | required on `add`; letters/digits/_/-         |
+| kind          | string | paragraph (default) · character               |
+| name, basedOn | string | display name; parent style id                 |
+| bold/italic/underline | bool |                                        |
+| color         | string | hex RGB                                       |
+| fontSize      | number | points                                        |
+| alignment     | string | left · center · right · justify (paragraph)   |
+| spacingBefore/spacingAfter | number | points (paragraph)               |
+
+`{op:"add", path:"/styles", type:"style", props:{id:"Callout", bold:true}}` defines;
+`{op:"set", path:"/style[@id=Callout]", props:{color:"FF0000"}}` modifies;
+apply with `{op:"set", path:"/body/p[2]", props:{style:"Callout"}}`.
+`read --view styles` lists all; `remove` works on custom styles only.
+
+## image (M2)
+
+| prop          | type   | notes                                          |
+|---------------|--------|------------------------------------------------|
+| src           | string | required; PNG/JPEG path inside the workspace   |
+| width, height | length | e.g. "10cm", "72pt"; omit either to keep aspect|
+
+`{op:"add", path:"/body", type:"image", props:{src:"logo.png", width:"10cm"}}`
+appends; `{op:"add", path:"/body/p[1]", type:"image", position:"before"}`
+places it relative to a paragraph. An `src` escaping the workspace sandbox
+fails with `sandbox_denied`.

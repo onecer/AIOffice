@@ -6,6 +6,32 @@ using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace AIOffice.Word;
 
+/// <summary>
+/// Batch-level options threaded through every op: the sandbox (file-valued
+/// props MUST resolve through it), the tracked-changes flag and the batch
+/// author (op props.author &gt; batch author &gt; "AIOffice").
+/// </summary>
+internal sealed record EditSession(Workspace Workspace, bool Track, string? Author)
+{
+    public const string DefaultAuthor = "AIOffice";
+
+    /// <summary>Resolves the revision/comment author and consumes props.author so generic prop application never sees it.</summary>
+    public string ResolveAuthor(JsonObject? props)
+    {
+        if (props is not null && props.TryGetPropertyValue("author", out var node))
+        {
+            props.Remove("author");
+            var author = WordHandler.NodeToString(node);
+            if (author.Length > 0)
+            {
+                return author;
+            }
+        }
+
+        return Author is { Length: > 0 } ? Author : DefaultAuthor;
+    }
+}
+
 public sealed partial class WordHandler
 {
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops)
@@ -13,6 +39,7 @@ public sealed partial class WordHandler
         var file = RequireFile(ctx, mustExist: true);
         var dryRun = BoolArg(ctx.Args, "dryRun") || BoolArg(ctx.Args, "dry-run");
         var expectRev = StringArg(ctx.Args, "expectRev") ?? StringArg(ctx.Args, "expect-rev");
+        var session = new EditSession(ctx.Workspace, BoolArg(ctx.Args, "track"), StringArg(ctx.Args, "author"));
 
         var originalBytes = File.ReadAllBytes(file);
         var currentRev = Rev.OfBytes(originalBytes);
@@ -36,7 +63,7 @@ public sealed partial class WordHandler
             {
                 try
                 {
-                    summaries.Add(ApplyOp(doc, file, ops[i]));
+                    summaries.Add(ApplyOp(doc, file, ops[i], session));
                 }
                 catch (AiofficeException ex)
                 {
@@ -69,20 +96,41 @@ public sealed partial class WordHandler
 
     // ------------------------------------------------------------------- ops
 
-    private static object ApplyOp(WordprocessingDocument doc, string file, EditOp op) => op.Op switch
+    private static object ApplyOp(WordprocessingDocument doc, string file, EditOp op, EditSession session)
     {
-        "set" => ApplySet(doc, op),
-        // header/footer creation cannot resolve its anchor (the part does not exist yet).
-        "add" when op.Type is "header" or "footer" => ApplyAddHeaderFooter(doc, file, op),
-        "add" => ApplyAdd(doc, op),
-        "remove" => ApplyRemove(doc, op),
-        _ => ApplyMove(doc, op),
-    };
+        var rootName = DocPath.Parse(op.Path).Segments[0].Name;
+        return op.Op switch
+        {
+            "accept" or "reject" => ApplyAcceptOrReject(doc, op),
+            "set" when rootName == "style" => ApplySetStyle(doc, op),
+            "set" => ApplySet(doc, op, session),
+            // Part-backed adds cannot resolve their anchor through WordAddress
+            // (the target part/list, not body content, receives the element).
+            "add" when op.Type is "header" or "footer" => ApplyAddHeaderFooter(doc, file, op),
+            "add" when op.Type == "style" => ApplyAddStyle(doc, op),
+            "add" when op.Type == "comment" => ApplyAddComment(doc, op, session),
+            "add" when op.Type == "image" => ApplyAddImage(doc, op, session),
+            "add" => ApplyAdd(doc, op, session),
+            "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
+            "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
+            "remove" when rootName == "revision" => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "Revisions are not removed; they are accepted or rejected.",
+                "Use {\"op\":\"accept\",\"path\":\"" + op.Path + "\"} to apply it or {\"op\":\"reject\",...} to undo it."),
+            "remove" => ApplyRemove(doc, op, session),
+            _ => ApplyMove(doc, op),
+        };
+    }
 
-    private static object ApplySet(WordprocessingDocument doc, EditOp op)
+    private static object ApplySet(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var node = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
         var props = RequireProps(op);
+
+        if (session.Track)
+        {
+            return ApplyTrackedSet(doc, node, props, session);
+        }
 
         foreach (var (name, value) in OrderedProps(props))
         {
@@ -122,7 +170,7 @@ public sealed partial class WordHandler
         return new { op = "set", path = node.CanonicalPath, type = node.Type };
     }
 
-    private static object ApplyAdd(WordprocessingDocument doc, EditOp op)
+    private static object ApplyAdd(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var anchor = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
         var type = op.Type ?? "p";
@@ -136,13 +184,20 @@ public sealed partial class WordHandler
                 candidates: ["before", "after", "inside"]);
         }
 
+        // Tracked insertion is paragraph-scoped in M2; author resolution must run
+        // before BuildParagraph so props.author never reaches generic prop handling.
+        var props = op.Props?.DeepClone().AsObject();
+        var author = session.ResolveAuthor(props);
+
         OpenXmlElement created = type switch
         {
-            "p" => BuildParagraph(doc, op.Props),
-            "tr" => BuildRow(op.Props),
+            "p" => BuildParagraph(doc, props),
+            "tr" when session.Track => throw TrackedStructureUnsupported("tr"),
+            "table" when session.Track => throw TrackedStructureUnsupported("table"),
+            "tr" => BuildRow(props),
             "table" => WordFactory.Table(
-                rows: PropInt(op.Props, "rows") ?? 2,
-                columns: PropInt(op.Props, "columns") ?? PropInt(op.Props, "cols") ?? 2),
+                rows: PropInt(props, "rows") ?? 2,
+                columns: PropInt(props, "columns") ?? PropInt(props, "cols") ?? 2),
             _ => throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"add --type {type} is not supported for docx.",
@@ -174,9 +229,20 @@ public sealed partial class WordHandler
                 "add tr inside a table, or before/after an existing tr.");
         }
 
+        if (session.Track && created is Paragraph trackedParagraph)
+        {
+            RequireBodyScope(anchor.CanonicalPath, "add");
+            MarkParagraphInserted(doc, trackedParagraph, author);
+        }
+
         var canonical = Insert(doc, anchor, created, pos);
         return new { op = "add", type, anchor = anchor.CanonicalPath, path = canonical };
     }
+
+    private static AiofficeException TrackedStructureUnsupported(string type) => new(
+        ErrorCodes.UnsupportedFeature,
+        $"Tracked '{type}' changes are not supported yet (M2 tracks paragraph content; w:trPr revisions arrive in M3).",
+        "Run the op without track:true, or add tracked paragraphs instead.");
 
     /// <summary>Inserts at the validated position; appending to body keeps sectPr last.</summary>
     private static string Insert(WordprocessingDocument doc, ResolvedNode anchor, OpenXmlElement created, string pos)
@@ -209,9 +275,15 @@ public sealed partial class WordHandler
         return match?.CanonicalPath ?? anchor.CanonicalPath;
     }
 
-    private static object ApplyRemove(WordprocessingDocument doc, EditOp op)
+    private static object ApplyRemove(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var node = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
+
+        if (session.Track)
+        {
+            return ApplyTrackedRemove(doc, node, op, session);
+        }
+
         if (node.Element is not (Paragraph or Table or TableRow))
         {
             throw new AiofficeException(

@@ -20,6 +20,9 @@ public static class ErrorCodes
     public const string FormatCorrupt = "format_corrupt";
     public const string StaleAddress = "stale_address";
 
+    /// <summary>File exceeds the size guard. Suggestion MUST name AIOFFICE_MAX_FILE_MB.</summary>
+    public const string FileTooLarge = "file_too_large";
+
     /// <summary>Warning-level: a formula could not be evaluated; cached value returned.</summary>
     public const string FormulaNotEvaluated = "formula_not_evaluated";
 
@@ -32,7 +35,7 @@ public static class ErrorCodes
     public static readonly IReadOnlyList<string> All =
     [
         InvalidArgs, FileNotFound, SandboxDenied, InvalidPath, UnsupportedFeature,
-        FormatCorrupt, StaleAddress, FormulaNotEvaluated, InternalError, PreviewNotRunning,
+        FormatCorrupt, StaleAddress, FileTooLarge, FormulaNotEvaluated, InternalError, PreviewNotRunning,
     ];
 }
 

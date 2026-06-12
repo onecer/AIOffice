@@ -96,7 +96,13 @@ public sealed class FileVerbs
             _snapshots.Save(file);
         }
 
-        var ctx = Context(file, new JsonObject { ["dryRun"] = dryRun });
+        var ctx = Context(file, new JsonObject
+        {
+            ["dryRun"] = dryRun,
+            // M2 attribution: op props.author > --author > AIOFFICE_AUTHOR > handler default.
+            ["track"] = args.HasFlag("track"),
+            ["author"] = args.GetOption("author") ?? Environment.GetEnvironmentVariable("AIOFFICE_AUTHOR"),
+        });
         return handler.Edit(ctx, ops);
     }
 

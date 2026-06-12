@@ -56,7 +56,123 @@ public sealed class ManualCheckFixtureTests : WordTestBase
                 ]
                 """));
 
+        // M2 surface: a custom style, an embedded picture, a comment, and one
+        // tracked change deliberately left pending for the human to see.
+        var logo = Path.Combine(dir, "manual-check-logo.png");
+        File.WriteAllBytes(logo, OpaquePng(120, 40));
+        try
+        {
+            var m2 = Handler.Edit(
+                new CommandContext { Workspace = workspace, File = file, Args = [] },
+                EditOp.ParseBatch("""
+                    [
+                      {"op":"add","path":"/styles","type":"style","props":
+                        {"id":"Callout","bold":true,"color":"1F4E79","fontSize":12,"alignment":"center","spacingBefore":6,"spacingAfter":6}},
+                      {"op":"add","path":"/body","props":{"text":"Styles (M2)","style":"Heading2"}},
+                      {"op":"add","path":"/body","props":{"text":"This paragraph uses the custom Callout style.","style":"Callout"}},
+                      {"op":"add","path":"/body","props":{"text":"Image (M2)","style":"Heading2"}},
+                      {"op":"add","path":"/body","type":"image","props":{"src":"manual-check-logo.png","width":"4cm"}},
+                      {"op":"add","path":"/body/p[1]","type":"comment","props":{"text":"Comment written by aioffice — visible in the review pane.","author":"Reviewer"}}
+                    ]
+                    """));
+            Assert.True(m2.IsOk, m2.ToJson());
+        }
+        finally
+        {
+            File.Delete(logo);
+        }
+
+        // The pending tracked change: the human must see an insertion/deletion
+        // attributed to "Reviewer" in Word's review pane.
+        var tracked = Handler.Edit(
+            new CommandContext
+            {
+                Workspace = workspace,
+                File = file,
+                Args = new JsonObject { ["track"] = true, ["author"] = "Reviewer" },
+            },
+            EditOp.ParseBatch("""
+                [{"op":"set","path":"/body/p[2]","props":{"text":"Open this file in Word: heading, formatting, table, styles, image, comment and ONE PENDING tracked change must look right."}}]
+                """));
+        Assert.True(tracked.IsOk, tracked.ToJson());
+
+        var revisions = Handler.Read(new CommandContext
+        {
+            Workspace = workspace,
+            File = file,
+            Args = new JsonObject { ["view"] = "revisions" },
+        });
+        Assert.True(revisions.IsOk, revisions.ToJson());
+
         AssertValidatesClean(file);
+    }
+
+    /// <summary>A real, decodable PNG with opaque dark-blue pixels (zlib IDAT), so the human actually sees it.</summary>
+    private static byte[] OpaquePng(int width, int height)
+    {
+        using var png = new MemoryStream();
+        png.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        var ihdr = new byte[13];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(ihdr.AsSpan(0, 4), width);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(ihdr.AsSpan(4, 4), height);
+        ihdr[8] = 8; // bit depth
+        ihdr[9] = 6; // RGBA
+        WriteChunk(png, "IHDR", ihdr);
+
+        var raw = new byte[height * (1 + (width * 4))];
+        for (var y = 0; y < height; y++)
+        {
+            var row = y * (1 + (width * 4)) + 1; // skip the filter byte
+            for (var x = 0; x < width; x++)
+            {
+                raw[row + (x * 4) + 0] = 0x1F; // R
+                raw[row + (x * 4) + 1] = 0x4E; // G
+                raw[row + (x * 4) + 2] = 0x79; // B
+                raw[row + (x * 4) + 3] = 0xFF; // A opaque
+            }
+        }
+
+        using var idat = new MemoryStream();
+        using (var zlib = new System.IO.Compression.ZLibStream(idat, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        {
+            zlib.Write(raw);
+        }
+
+        WriteChunk(png, "IDAT", idat.ToArray());
+        WriteChunk(png, "IEND", []);
+        return png.ToArray();
+    }
+
+    private static void WriteChunk(MemoryStream png, string type, byte[] payload)
+    {
+        var header = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, payload.Length);
+        png.Write(header);
+        var typeBytes = System.Text.Encoding.ASCII.GetBytes(type);
+        png.Write(typeBytes);
+        png.Write(payload);
+        var crcInput = new byte[typeBytes.Length + payload.Length];
+        typeBytes.CopyTo(crcInput, 0);
+        payload.CopyTo(crcInput, typeBytes.Length);
+        var crc = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(crc, Crc32(crcInput));
+        png.Write(crc);
+    }
+
+    private static uint Crc32(byte[] data)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var b in data)
+        {
+            crc ^= b;
+            for (var i = 0; i < 8; i++)
+            {
+                crc = (crc >> 1) ^ (0xEDB88320u & (uint)(-(crc & 1)));
+            }
+        }
+
+        return crc ^ 0xFFFFFFFFu;
     }
 
     private static string? FindRepoRoot()

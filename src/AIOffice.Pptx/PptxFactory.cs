@@ -67,24 +67,27 @@ internal static class PptxFactory
 
     private static P.SlideMaster BuildMaster() => new(
         new P.CommonSlideData(EmptyShapeTree()),
-        new P.ColorMap
-        {
-            Background1 = A.ColorSchemeIndexValues.Light1,
-            Text1 = A.ColorSchemeIndexValues.Dark1,
-            Background2 = A.ColorSchemeIndexValues.Light2,
-            Text2 = A.ColorSchemeIndexValues.Dark2,
-            Accent1 = A.ColorSchemeIndexValues.Accent1,
-            Accent2 = A.ColorSchemeIndexValues.Accent2,
-            Accent3 = A.ColorSchemeIndexValues.Accent3,
-            Accent4 = A.ColorSchemeIndexValues.Accent4,
-            Accent5 = A.ColorSchemeIndexValues.Accent5,
-            Accent6 = A.ColorSchemeIndexValues.Accent6,
-            Hyperlink = A.ColorSchemeIndexValues.Hyperlink,
-            FollowedHyperlink = A.ColorSchemeIndexValues.FollowedHyperlink,
-        },
+        BuildColorMap(),
         new P.SlideLayoutIdList(new P.SlideLayoutId { Id = (UInt32Value)2147483649U, RelationshipId = "rId1" }));
 
-    private static A.Theme BuildTheme()
+    /// <summary>The standard scheme-to-slot color map (shared by slide and notes masters).</summary>
+    internal static P.ColorMap BuildColorMap() => new()
+    {
+        Background1 = A.ColorSchemeIndexValues.Light1,
+        Text1 = A.ColorSchemeIndexValues.Dark1,
+        Background2 = A.ColorSchemeIndexValues.Light2,
+        Text2 = A.ColorSchemeIndexValues.Dark2,
+        Accent1 = A.ColorSchemeIndexValues.Accent1,
+        Accent2 = A.ColorSchemeIndexValues.Accent2,
+        Accent3 = A.ColorSchemeIndexValues.Accent3,
+        Accent4 = A.ColorSchemeIndexValues.Accent4,
+        Accent5 = A.ColorSchemeIndexValues.Accent5,
+        Accent6 = A.ColorSchemeIndexValues.Accent6,
+        Hyperlink = A.ColorSchemeIndexValues.Hyperlink,
+        FollowedHyperlink = A.ColorSchemeIndexValues.FollowedHyperlink,
+    };
+
+    internal static A.Theme BuildTheme()
     {
         static A.SolidFill PlaceholderFill() => new(new A.SchemeColor { Val = A.SchemeColorValues.PhColor });
 

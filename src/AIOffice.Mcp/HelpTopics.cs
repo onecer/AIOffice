@@ -24,8 +24,18 @@ public static class HelpTopics
                 - envelope        the {ok,data,error,meta} result shape
                 - errors          all error codes and how to recover
                 - docx/paragraph  paragraph element: settable props
+                - docx/revisions  tracked changes: track:true, accept/reject ops
+                - docx/comment    comments: add/read/remove
+                - docx/style      style definitions: add/set/remove, apply
+                - docx/image      inline pictures: add type "image"
                 - xlsx/cell       cell element: settable props
+                - xlsx/pivot      pivot tables: add type "pivot"
+                - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
+                - xlsx/image      anchored pictures: add type "image"
                 - pptx/shape      shape element: settable props
+                - pptx/slide      slide props incl. background
+                - pptx/notes      speaker notes: /slide[i]/notes
+                - pptx/image      pictures: add type "image"
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops"]),
@@ -90,11 +100,116 @@ public static class HelpTopics
                 invalid_path         element path does not resolve; candidates[] holds the nearest canonical paths — pick one
                 stale_address        expect_rev mismatch: file changed since you read it; re-read, then retry (nothing was written)
                 unsupported_feature  capability not in this milestone; suggestion names the workaround
+                file_too_large       file exceeds the size guard (default 50 MB); split it, or raise AIOFFICE_MAX_FILE_MB
                 format_corrupt       not valid OOXML; try office_validate and file_snapshot restore
                 internal_error       our bug; report with office_status output
                 formula_not_evaluated  WARNING in meta.warnings, not an error: formula text returned instead of a value
                 """,
                 ["envelope"]),
+
+            ["docx/revisions"] = (
+                """
+                ## docx tracked changes (M2)
+                Record: office_edit {track:true, author:"Reviewer", ops:[…]} — text set/add/remove ops become w:ins/w:del.
+                Only TEXT changes can be tracked ({"props":{"text":…}}); tracked formatting -> invalid_args naming the workaround.
+                Author resolution: op props.author > tool arg author > AIOFFICE_AUTHOR env > "AIOffice". Date = now UTC.
+                Read:    office_read {view:"revisions"} -> [{id, kind:insert|delete, author, date, text, path}].
+                Resolve: {"op":"accept","path":"/revision[@id=3]"} applies one; path "/body" resolves every revision in scope.
+                         {"op":"reject",…} undoes instead. Revisions are never "removed" — only accepted or rejected.
+                """,
+                ["docx/comment", "edit-ops"]),
+
+            ["docx/comment"] = (
+                """
+                ## docx comments (M2)
+                Add:    {"op":"add","path":"/body/p[2]","type":"comment","props":{"text":"…","author":"Reviewer"?}}
+                        (path = anchored content: a paragraph or a run; result reports /comment[@id=N] + anchor).
+                Read:   office_read {view:"comments"} -> [{id, author, date, text, anchorPath, anchorText}].
+                Get:    office_get {path:"/comment[@id=2]"}. Remove: {"op":"remove","path":"/comment[@id=2]"}.
+                """,
+                ["docx/revisions", "edit-ops"]),
+
+            ["docx/style"] = (
+                """
+                ## docx style definitions (M2)
+                Add:    {"op":"add","path":"/styles","type":"style","props":{"id":"Callout","kind":"paragraph"?,
+                        "name"?,"basedOn"?,"bold"?,"italic"?,"underline"?,"color"?,"fontSize"?,"alignment"?,
+                        "spacingBefore"?,"spacingAfter"?}}
+                Modify: {"op":"set","path":"/style[@id=Callout]","props":{…}} (id/kind are fixed).
+                Apply:  {"op":"set","path":"/body/p[2]","props":{"style":"Callout"}}.
+                Read:   office_read {view:"styles"}; office_get {path:"/style[@id=Callout]"}.
+                Remove: {"op":"remove","path":"/style[@id=Callout]"} (custom styles only; built-ins are modified, not removed).
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["docx/image"] = (
+                """
+                ## docx inline pictures (M2)
+                Add: {"op":"add","path":"/body","type":"image","props":{"src":"logo.png","width":"10cm"?,"height":"3cm"?}}
+                     position "before:<path>"/"after:<path>" places it; omit = append. PNG/JPEG; src resolves through the
+                     workspace sandbox (escaping it -> sandbox_denied). Omitted width/height keep the natural aspect ratio.
+                """,
+                ["edit-ops", "addressing"]),
+
+            ["xlsx/pivot"] = (
+                """
+                ## xlsx pivot tables (M2)
+                Add: {"op":"add","path":"/Sheet1","type":"pivot","props":{
+                       "sourceRange":"A1:E7","targetSheet":"Pivot","name"?,"targetAnchor"?,
+                       "rows":["Region"],"columns"?,"filters"?,
+                       "values":[{"field":"Sales","agg":"sum|average|count|min|max"}]}}
+                     path = SOURCE sheet; sourceRange needs a header row. targetSheet is created when absent.
+                Get: office_get {path:"/Pivot/pivot[1]"} or {path:"/Pivot/pivot[@name=SalesPivot]"} (the TARGET sheet).
+                Remove: {"op":"remove","path":"/Pivot/pivot[@name=SalesPivot]"}. Excel recomputes on open (refreshOnLoad).
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["xlsx/conditionalFormat"] = (
+                """
+                ## xlsx conditional formatting (M2)
+                Add (path = the range): {"op":"add","path":"/Sheet1/A1:C10","type":"conditionalFormat","props":{…}}
+                kinds: cellIs      {operator:"> >= < <= == != between", value, value2 (between only), fill?, color?, bold?}
+                       colorScale  {minColor, maxColor, midColor?}   dataBar {color}   containsText {text, fill?, color?, bold?}
+                Get: office_get {path:"/Sheet1/conditionalFormat[1]"}; remove by the same path (later indices shift down).
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["xlsx/image"] = (
+                """
+                ## xlsx anchored pictures (M2)
+                Add: {"op":"add","path":"/Sheet1","type":"image","props":{"src":"logo.png","anchor":"E2","name"?,
+                     "widthPx"?,"heightPx"?}} — PNG/JPEG; src resolves through the workspace sandbox.
+                Get: office_get {path:"/Sheet1/image[1]"} -> name, format, anchor, size. Remove by the same path.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["pptx/slide"] = (
+                """
+                ## pptx slide (incl. M2 background)
+                Add:        {"op":"add","path":"/slide[3]","type":"slide","props":{"title"?,"background"?}} — becomes slide 3.
+                Background: {"op":"set","path":"/slide[1]","props":{"background":"0F172A"}} — a real p:bg solid fill (hex).
+                Move/remove a slide by its /slide[i] path. render {to:"svg"|"png", scope:"/slide[N]"} to look after edits.
+                """,
+                ["pptx/shape", "pptx/notes"]),
+
+            ["pptx/notes"] = (
+                """
+                ## pptx speaker notes (M2)
+                Path /slide[i]/notes addresses the whole notes body (no /p[j] beneath it).
+                Set:    {"op":"set","path":"/slide[2]/notes","props":{"text":"line1\nline2"}} (replaces; \n = new paragraph)
+                Append: {"op":"add","path":"/slide[2]/notes","props":{"text":"follow-up"}}
+                Remove: {"op":"remove","path":"/slide[2]/notes"}. office_read outline + office_get /slide[i]/notes read them back.
+                """,
+                ["pptx/slide", "edit-ops"]),
+
+            ["pptx/image"] = (
+                """
+                ## pptx pictures (M2)
+                Add: {"op":"add","path":"/slide[1]","type":"image","props":{"src":"logo.png","x"?,"y"?,"w"?,"h"?,"name"?}}
+                     sizes unit-qualified ("6cm","1.5in") or EMU; omit w/h to keep natural size/aspect. PNG/JPEG;
+                     src resolves through the workspace sandbox. Result path: /slide[1]/shape[@id=N] (remove by that path).
+                """,
+                ["pptx/slide", "edit-ops"]),
 
             ["docx/paragraph"] = (
                 """

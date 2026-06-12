@@ -53,11 +53,12 @@ public static class CommandSurface
             "office_create"),
 
         new("read",
-            "Read a document as outline, plain text, stats or structure.",
-            "aioffice read <file> [--view outline|text|stats|structure] [--range a..b] [--max-bytes N]",
+            "Read a document as outline, plain text, stats or structure (docx adds revisions/comments/styles).",
+            "aioffice read <file> [--view outline|text|stats|structure|revisions|comments|styles] [--range a..b] [--max-bytes N]",
             [new("file", true, "Document to read.")],
             [
-                new("view", "outline|text|stats|structure", "Projection to return (default: outline)."),
+                new("view", "outline|text|stats|structure|revisions|comments|styles",
+                    "Projection to return (default: outline). revisions/comments/styles are docx views."),
                 new("range", "a..b", "Limit to an element range, e.g. paragraphs 3..10 or slides 1..4."),
                 new("max-bytes", "N", "Truncate the response payload to at most N bytes."),
             ],
@@ -84,19 +85,21 @@ public static class CommandSurface
             "office_get"),
 
         new("edit",
-            "Apply an atomic batch of operations (set/add/remove/move). Auto-snapshots the pre-image.",
-            "aioffice edit <file> --ops <json|@file> | --set <path> k=v... | --add <path> --type T k=v... | --remove <path> [--dry-run] [--expect-rev R]",
+            "Apply an atomic batch of operations (set/add/remove/move/accept/reject). Auto-snapshots the pre-image.",
+            "aioffice edit <file> --ops <json|@file> | --set <path> k=v... | --add <path> --type T k=v... | --remove <path> [--track] [--author NAME] [--dry-run] [--expect-rev R]",
             [
                 new("file", true, "Document to edit."),
                 new("k=v", false, "Property assignments for the --set/--add sugar forms."),
             ],
             [
-                new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move, path, type?, props?, position?}]."),
+                new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|accept|reject, path, type?, props?, position?}]."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
-                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape."),
+                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, style, pivot, conditionalFormat."),
                 new("remove", "<path>", "Sugar: remove the node at <path>.", Repeatable: true),
                 new("position", "at|before|after|inside", "Placement for the --add sugar (format-specific; default: append)."),
+                new("track", null, "docx: record text set/add/remove ops as tracked revisions (w:ins/w:del); resolve later with accept/reject ops."),
+                new("author", "<name>", "Author stamped on revisions/comments (op props.author wins; default: AIOFFICE_AUTHOR env, then 'AIOffice')."),
                 new("dry-run", null, "Validate and report what would change without writing."),
                 new("expect-rev", "R", "Fail with stale_address before any write unless the file's rev is R."),
             ],
@@ -237,13 +240,17 @@ public static class GrammarPointers
 {
     public static readonly object Addressing = new
     {
-        summary = "Slash-separated 1-based paths. docx: /body/p[3], /body/table[1]/tr[2]/tc[1], /header[1]/p[1]. " +
-                  "xlsx: /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /'Q3 Data'/B2. " +
-                  "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1].",
+        summary = "Slash-separated 1-based paths. docx: /body/p[3], /body/table[1]/tr[2]/tc[1], /header[1]/p[1], " +
+                  "/revision[@id=3], /comment[@id=1], /style[@id=Callout]. " +
+                  "xlsx: /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /'Q3 Data'/B2, /Pivot/pivot[@name=SalesPivot], " +
+                  "/Sheet1/conditionalFormat[1], /Sheet1/image[1]. " +
+                  "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1], /slide[2]/notes.",
         helpTopic = "addressing",
         examples = new[]
         {
-            "/body/p[3]", "/body/table[1]/tr[2]/tc[1]", "/Sheet1/A1:C10", "/'Q3 Data'/B2", "/slide[2]/shape[3]",
+            "/body/p[3]", "/revision[@id=3]", "/comment[@id=1]", "/style[@id=Callout]",
+            "/Sheet1/A1:C10", "/Pivot/pivot[@name=SalesPivot]", "/Sheet1/conditionalFormat[1]",
+            "/slide[2]/shape[3]", "/slide[2]/notes",
         },
     };
 

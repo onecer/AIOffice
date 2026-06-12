@@ -1,4 +1,4 @@
-# xlsx properties (v0)
+# xlsx properties
 
 ## cell (`/Sheet1/A1`)
 
@@ -39,5 +39,49 @@ returned and the envelope carries a `formula_not_evaluated` warning in
 `{op:"add", path:"/'New Sheet'", type:"sheet"}` creates a sheet. Sheet names
 with spaces are quoted in paths: `/'Q3 Data'/B2`.
 
-Charts, pivot tables and conditional formatting are M1+ and currently answer
-`unsupported_feature` with the closest workaround.
+## chart (M1, `/Sheet1/chart[1]`)
+
+`{op:"add", path:"/Sheet1", type:"chart", props:{kind:"bar|line|pie",
+dataRange:"A1:C6", anchor:"E3", title?}}`.
+
+## pivot (M2, `/Pivot/pivot[@name=SalesPivot]`)
+
+| prop        | type   | notes                                              |
+|-------------|--------|----------------------------------------------------|
+| sourceRange | string | required; header row + data rows, e.g. `A1:E7`     |
+| targetSheet | string | required; created when absent — pivots land THERE  |
+| name        | string | default auto-generated; used in the canonical path |
+| targetAnchor| string | top-left cell on the target sheet (default A1/A3)  |
+| rows / columns / filters | string[] | source column header names           |
+| values      | array  | `[{field:"Sales", agg:"sum|average|count|min|max"}]` |
+
+`{op:"add", path:"/Sheet1", type:"pivot", props:{...}}` — the op path is the
+SOURCE sheet. `get`/`remove` address the pivot on its TARGET sheet:
+`/Pivot/pivot[1]` or `/Pivot/pivot[@name=SalesPivot]`. Excel recomputes the
+pivot on open (refreshOnLoad).
+
+## conditionalFormat (M2, `/Sheet1/conditionalFormat[1]`)
+
+`{op:"add", path:"/Sheet1/A1:C10", type:"conditionalFormat", props:{...}}` —
+the op path is the range the rule covers.
+
+| kind         | props                                                        |
+|--------------|--------------------------------------------------------------|
+| cellIs       | operator (`>` `>=` `<` `<=` `==` `!=` `between`), value, value2 (between only), fill?, color?, bold? |
+| colorScale   | minColor, maxColor, midColor?                                |
+| dataBar      | color                                                        |
+| containsText | text, fill?, color?, bold?                                   |
+
+`get`/`remove` by `/Sheet1/conditionalFormat[i]` (later indices shift down
+after a remove).
+
+## image (M2, `/Sheet1/image[1]`)
+
+| prop              | type   | notes                                      |
+|-------------------|--------|--------------------------------------------|
+| src               | string | required; PNG/JPEG path inside the sandbox |
+| anchor            | string | required; top-left cell, e.g. `E2`         |
+| name              | string | optional picture name                      |
+| widthPx, heightPx | number | omit either to keep the aspect ratio       |
+
+`{op:"add", path:"/Sheet1", type:"image", props:{src:"logo.png", anchor:"E2"}}`.

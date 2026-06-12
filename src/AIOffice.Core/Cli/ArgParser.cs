@@ -34,7 +34,7 @@ public static class ArgParser
     /// <summary>Options that never consume the next token as a value.</summary>
     private static readonly HashSet<string> BooleanFlags = new(StringComparer.Ordinal)
     {
-        "json", "pretty", "quiet", "dry-run",
+        "json", "pretty", "quiet", "dry-run", "track",
     };
 
     public static ParsedArgs Parse(IReadOnlyList<string> argv)

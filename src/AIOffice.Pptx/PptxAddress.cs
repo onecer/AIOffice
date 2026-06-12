@@ -15,6 +15,7 @@ internal enum PptxRootKind
 /// A parsed pptx address. Accepted forms (1-based indices):
 /// <code>
 /// /slide[2]
+/// /slide[2]/notes             (the slide's speaker notes)
 /// /slide[2]/shape[3]          (ordinal)
 /// /slide[2]/shape[@id=7]      (stable id — the canonical form aioffice emits)
 /// /slide[2]/shape[3]/p[1]
@@ -27,7 +28,7 @@ internal enum PptxRootKind
 internal sealed partial record PptxAddress
 {
     public const string GrammarHint =
-        "pptx paths look like /slide[2], /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
+        "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /master[1], /master[1]/layout[2] or /master[1]/shape[1]; " +
         "indices are 1-based, @id is the stable shape id from query.";
 
@@ -75,6 +76,9 @@ internal sealed partial record PptxAddress
 
     public int? RunIndex { get; init; }
 
+    /// <summary>True when the path addresses a slide's speaker notes (/slide[i]/notes).</summary>
+    public bool IsNotes { get; init; }
+
     public bool HasShape => ShapeOrdinal.HasValue || ShapeId.HasValue;
 
     public bool IsMaster => Root == PptxRootKind.Master;
@@ -94,7 +98,7 @@ internal sealed partial record PptxAddress
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"Notes/handout addressing is reserved for a later milestone: {raw}",
-                "Address slide content directly instead, e.g. /slide[2]/shape[3].");
+                "Speaker notes live under their slide — use /slide[2]/notes; address slide content via /slide[2]/shape[3].");
         }
 
         var masterMatch = MasterSegment().Match(segments[0]);
@@ -120,8 +124,21 @@ internal sealed partial record PptxAddress
             return address;
         }
 
+        if (string.Equals(segments[1], "notes", StringComparison.OrdinalIgnoreCase))
+        {
+            if (segments.Length > 2)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    $"Paragraph/run addressing inside notes is not supported yet: {raw}",
+                    "Target the whole notes body: get/set /slide[i]/notes, or use op 'add' to append one paragraph.");
+            }
+
+            return address with { IsNotes = true };
+        }
+
         var shaped = WithShapeSegment(address, segments[1], raw,
-            $"The second segment must be shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"The second segment must be notes, shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -205,6 +222,9 @@ internal sealed partial record PptxAddress
     }
 
     public string CanonicalSlidePath => Units.Inv($"/slide[{SlideIndex}]");
+
+    /// <summary>The canonical speaker-notes path of the addressed slide.</summary>
+    public string CanonicalNotesPath => Units.Inv($"/slide[{SlideIndex}]/notes");
 
     /// <summary>The container the address points into: /slide[i], /master[m] or /master[m]/layout[l].</summary>
     public string CanonicalContainerPath => Root == PptxRootKind.Master

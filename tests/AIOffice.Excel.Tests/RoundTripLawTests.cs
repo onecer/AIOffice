@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
+using AIOffice.Core;
 using ClosedXML.Excel;
 using Xunit;
 
@@ -103,6 +104,76 @@ public sealed class RoundTripLawTests : ExcelTestBase
             .Where(name => !before[name].AsSpan().SequenceEqual(after[name]))
             .ToHashSet(StringComparer.Ordinal);
         Assert.Equal(DocumentedChangedParts, changed); // chart parts NOT in the set
+
+        AssertValidatorClean(resaved);
+    }
+
+    /// <summary>
+    /// The pivot corollary of the round-trip law. MEASURED for ClosedXML
+    /// 0.105.0: with a pivot table present, a no-edit open/save additionally
+    /// rewrites <c>pivotCache/pivotCacheDefinition1.xml</c> — and ONLY in the
+    /// already-documented way (namespace attribute order on the root element;
+    /// semantically a no-op). Worksheet parts change as documented; the
+    /// pivotTable part and the cache records stay byte-identical.
+    /// </summary>
+    [Fact]
+    public void NoEdit_resave_with_pivot_changes_only_documented_parts()
+    {
+        var original = BuildRichFixture();
+        var pivotEnvelope = EditOps(original, new EditOp
+        {
+            Op = "add",
+            Path = "/Sheet1",
+            Type = "pivot",
+            Props = new JsonObject
+            {
+                ["name"] = "StockPivot",
+                ["sourceRange"] = "A10:C12",
+                ["targetSheet"] = "Pivot",
+                ["rows"] = new JsonArray("Name"),
+                ["values"] = new JsonArray(new JsonObject { ["field"] = "Qty", ["agg"] = "sum" }),
+            },
+        });
+        Assert.True(pivotEnvelope.IsOk, pivotEnvelope.ToJson());
+
+        var resaved = Path.Combine(Dir, "resaved-pivot.xlsx");
+        File.Copy(original, resaved);
+        using (var workbook = new XLWorkbook(resaved))
+        {
+            workbook.Save(); // no edits at all
+        }
+
+        var before = ReadParts(original);
+        var after = ReadParts(resaved);
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
+        Assert.Contains(before.Keys, k => k.Contains("pivotCacheDefinition", StringComparison.Ordinal));
+
+        var changed = before.Keys
+            .Where(name => !before[name].AsSpan().SequenceEqual(after[name]))
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Worksheets (documented) plus the pivot cache definition may differ…
+        Assert.Subset(
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "xl/worksheets/sheet1.xml",
+                "xl/worksheets/sheet2.xml",
+                "pivotCache/pivotCacheDefinition1.xml",
+            },
+            changed);
+        Assert.Contains(before.Keys, k => k.StartsWith("xl/pivotTables/", StringComparison.Ordinal));
+        Assert.DoesNotContain(changed, k => k.StartsWith("xl/pivotTables/", StringComparison.Ordinal));
+        Assert.DoesNotContain(changed, k => k.Contains("pivotCacheRecords", StringComparison.Ordinal));
+
+        // …and only by the documented attribute-order / dropped-cached-<v> diffs.
+        foreach (var name in changed)
+        {
+            var beforeXml = Normalize(LoadXml(before[name]).Root!);
+            var afterXml = Normalize(LoadXml(after[name]).Root!);
+            Assert.True(
+                XNode.DeepEquals(beforeXml, afterXml),
+                $"{name} changed beyond the documented diffs");
+        }
 
         AssertValidatorClean(resaved);
     }

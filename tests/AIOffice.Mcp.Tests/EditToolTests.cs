@@ -155,4 +155,44 @@ public sealed class EditToolTests
         var envelope = await srv.CallAsync("office_edit", SetTextOps("../outside.docx", "x"));
         EnvelopeAssert.Fail(envelope, "sandbox_denied");
     }
+
+    [Fact]
+    public async Task Edit_TrackAndAuthor_ReachTheHandlerContext()
+    {
+        using var ws = new TempWorkspace();
+        await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
+        ws.WriteFile("test.docx", "original");
+
+        var args = SetTextOps("test.docx", "tracked text");
+        args["track"] = true;
+        args["author"] = "Reviewer";
+
+        var data = EnvelopeAssert.Ok(await srv.CallAsync("office_edit", args));
+
+        // The fake handler echoes what it saw in ctx.Args — proves the M2 wiring.
+        Assert.True(data.GetProperty("track").GetBoolean());
+        Assert.Equal("Reviewer", data.GetProperty("author").GetString());
+    }
+
+    [Fact]
+    public async Task Edit_WithoutTrack_DefaultsToUntracked()
+    {
+        using var ws = new TempWorkspace();
+        await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
+        ws.WriteFile("test.docx", "original");
+
+        var previousAuthor = Environment.GetEnvironmentVariable("AIOFFICE_AUTHOR");
+        Environment.SetEnvironmentVariable("AIOFFICE_AUTHOR", null);
+        try
+        {
+            var data = EnvelopeAssert.Ok(await srv.CallAsync("office_edit", SetTextOps("test.docx", "plain")));
+
+            Assert.False(data.GetProperty("track").GetBoolean());
+            Assert.False(data.TryGetProperty("author", out _)); // no author arg, no env -> omitted from the wire
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AIOFFICE_AUTHOR", previousAuthor);
+        }
+    }
 }
