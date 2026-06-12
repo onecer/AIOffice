@@ -21,10 +21,12 @@ internal sealed record PptxChartData(
 
 /// <summary>
 /// Native pptx charts: a p:graphicFrame in the slide's shape tree referencing a
-/// ChartPart whose series carry literal data caches (c:strLit / c:numLit) — no
-/// embedded workbook. PowerPoint renders the cached data as-is; "Edit Data"
-/// prompts to create a workbook, which is why every projection reports
-/// <c>dataEditable: false</c> and chart creation attaches an envelope warning.
+/// ChartPart whose series carry reference caches (c:strRef / c:numRef) backed by
+/// a minimal real workbook embedded in the chart part (c:externalData with
+/// autoUpdate=false) — so PowerPoint's "Edit Data" opens a live sheet. Charts
+/// created by aioffice embed the workbook from the start; foreign cached-only
+/// charts report <c>dataEditable: false</c> until retrofitted via
+/// <c>{"op":"set","path":"/slide[i]/chart[k]","props":{"embedData":true}}</c>.
 /// </summary>
 internal static class PptxCharts
 {
@@ -41,15 +43,9 @@ internal static class PptxCharts
     private const uint CategoryAxisId = 100001u;
     private const uint ValueAxisId = 100002u;
 
-    /// <summary>The warning attached to every edit envelope that created a chart.</summary>
-    public static readonly Warning DataNotEditableWarning = new(
-        "chart_data_not_editable",
-        "Chart data is cached literally in the chart XML (no embedded workbook). PowerPoint renders it " +
-        "as-is, but 'Edit Data' will prompt to create a new workbook; to change values, re-add the chart.");
-
     // ----- create --------------------------------------------------------------
 
-    /// <summary>Adds a chart graphic frame to the slide and returns its stable shape id.</summary>
+    /// <summary>Adds a chart graphic frame (with an embedded data workbook) and returns its stable shape id.</summary>
     public static uint Add(SlidePart slidePart, JsonObject? props)
     {
         props ??= [];
@@ -63,7 +59,7 @@ internal static class PptxCharts
         var h = Length(props, "h", Units.CmToEmu(12));
 
         var chartPart = slidePart.AddNewPart<ChartPart>();
-        chartPart.ChartSpace = BuildChartSpace(data);
+        chartPart.ChartSpace = BuildChartSpace(data, EmbedWorkbook(chartPart, data));
 
         tree.Append(new P.GraphicFrame(
             new P.NonVisualGraphicFrameProperties(
@@ -234,9 +230,120 @@ internal static class PptxCharts
         "The full shape is {\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"chart\",\"props\":{\"kind\":\"bar\"," +
         "\"categories\":[\"Q1\",\"Q2\"],\"series\":[{\"name\":\"Sales\",\"values\":[10,20]}],\"title\":\"Sales\"}}.");
 
+    // ----- embedded workbook ----------------------------------------------------
+
+    /// <summary>Embeds the data workbook in the chart part and returns its relationship id.</summary>
+    private static string EmbedWorkbook(ChartPart chartPart, PptxChartData data)
+    {
+        var embedded = chartPart.AddNewPart<EmbeddedPackagePart>(PptxChartWorkbook.ContentType);
+        using (var workbook = new MemoryStream(PptxChartWorkbook.Build(data)))
+        {
+            embedded.FeedData(workbook);
+        }
+
+        return chartPart.GetIdOfPart(embedded);
+    }
+
+    /// <summary>True when the chart references an embedded workbook (PowerPoint "Edit Data" works).</summary>
+    public static bool DataEditable(ChartPart part) =>
+        part.ChartSpace?.Elements<C.ExternalData>().FirstOrDefault()?.Id?.Value is { } relId &&
+        part.TryGetPartById(relId, out var referenced) &&
+        referenced is EmbeddedPackagePart;
+
+    /// <summary>
+    /// set /slide[i]/chart[k] {embedData:true}: retrofits a cached-only chart with
+    /// an embedded workbook and rewrites its series to reference caches. Already
+    /// embedded charts are rebuilt from their current caches (idempotent).
+    /// </summary>
+    public static string EmbedData(PresentationPart presentation, PptxAddress address)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var (index, _, part) = Resolve(slidePart, address);
+        var chartSpace = part.ChartSpace ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The chart part has no chartSpace XML.",
+            "Remove the chart and add it again, or restore a snapshot.");
+
+        var serElements = chartSpace.Descendants<C.PlotArea>().FirstOrDefault()?.ChildElements
+            .FirstOrDefault(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal))?.ChildElements
+            .Where(e => e.LocalName == "ser")
+            .Cast<OpenXmlCompositeElement>()
+            .ToList() ?? [];
+        if (serElements.Count == 0 || serElements.Any(ser => ser.ChildElements.All(c => c.LocalName != "val")))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "This chart's series carry no category/value caches aioffice can embed.",
+                "Only bar/line/pie-style charts (c:cat/c:val series) can be retrofitted; " +
+                "remove the chart and re-add it with explicit data instead.");
+        }
+
+        var data = ReadData(part);
+
+        // Idempotent rebuild: drop any previous embedded workbook and wiring first.
+        foreach (var external in chartSpace.Elements<C.ExternalData>().ToList())
+        {
+            external.Remove();
+        }
+
+        foreach (var embedded in part.Parts.Select(p => p.OpenXmlPart).OfType<EmbeddedPackagePart>().ToList())
+        {
+            part.DeletePart(embedded);
+        }
+
+        chartSpace.Append(new C.ExternalData(new C.AutoUpdate { Val = false }) { Id = EmbedWorkbook(part, data) });
+
+        for (var i = 0; i < serElements.Count; i++)
+        {
+            var ser = serElements[i];
+            ReplaceSerChild(ser, "tx", BuildSeriesText(data.Series[i].Name, i), insertAfter: ["order", "idx"]);
+            if (data.Categories.Count > 0)
+            {
+                ReplaceSerChild(ser, "cat", BuildCategoryData(data.Categories), insertBefore: "val");
+            }
+
+            ReplaceSerChild(ser, "val", BuildValues(data.Series[i].Values, i), insertAfter: ["cat", "order", "idx"]);
+        }
+
+        return Units.Inv($"/slide[{address.SlideIndex}]/chart[{index}]");
+    }
+
+    /// <summary>Replaces a ser child by local name, inserting at a schema-valid spot when absent.</summary>
+    private static void ReplaceSerChild(
+        OpenXmlCompositeElement ser,
+        string localName,
+        OpenXmlElement replacement,
+        string[]? insertAfter = null,
+        string? insertBefore = null)
+    {
+        if (ser.ChildElements.FirstOrDefault(c => c.LocalName == localName) is { } existing)
+        {
+            ser.ReplaceChild(replacement, existing);
+            return;
+        }
+
+        if (insertBefore is not null &&
+            ser.ChildElements.FirstOrDefault(c => c.LocalName == insertBefore) is { } anchorBefore)
+        {
+            ser.InsertBefore(replacement, anchorBefore);
+            return;
+        }
+
+        foreach (var name in insertAfter ?? [])
+        {
+            if (ser.ChildElements.FirstOrDefault(c => c.LocalName == name) is { } anchorAfter)
+            {
+                ser.InsertAfter(replacement, anchorAfter);
+                return;
+            }
+        }
+
+        ser.Append(replacement);
+    }
+
     // ----- chartml -------------------------------------------------------------
 
-    private static C.ChartSpace BuildChartSpace(PptxChartData data)
+    private static C.ChartSpace BuildChartSpace(PptxChartData data, string externalDataRelId)
     {
         var plotArea = new C.PlotArea(new C.Layout());
         plotArea.Append(BuildChartGroup(data));
@@ -276,6 +383,7 @@ internal static class PptxCharts
         chartSpace.AddNamespaceDeclaration("a", MainNs);
         chartSpace.AddNamespaceDeclaration("r", RelNs);
         chartSpace.Append(chart);
+        chartSpace.Append(new C.ExternalData(new C.AutoUpdate { Val = false }) { Id = externalDataRelId });
         return chartSpace;
     }
 
@@ -330,34 +438,54 @@ internal static class PptxCharts
         }
     }
 
-    /// <summary>idx/order/tx/cat/val with literal caches — the no-workbook series skeleton.</summary>
+    /// <summary>idx/order/tx/cat/val with reference caches pointing at the embedded Sheet1.</summary>
     private static void AppendSeriesChildren(OpenXmlCompositeElement series, PptxChartData data, int ordinal)
     {
         var spec = data.Series[ordinal];
         series.Append(new C.Index { Val = (uint)ordinal });
         series.Append(new C.Order { Val = (uint)ordinal });
-        series.Append(new C.SeriesText(new C.NumericValue(spec.Name)));
+        series.Append(BuildSeriesText(spec.Name, ordinal));
+        series.Append(BuildCategoryData(data.Categories));
+        series.Append(BuildValues(spec.Values, ordinal));
+    }
 
-        var stringLiteral = new C.StringLiteral(new C.PointCount { Val = (uint)data.Categories.Count });
-        for (var i = 0; i < data.Categories.Count; i++)
+    /// <summary>c:tx as a string reference into the embedded sheet's header row.</summary>
+    private static C.SeriesText BuildSeriesText(string name, int ordinal) => new(
+        new C.StringReference(
+            new C.Formula(PptxChartWorkbook.SeriesNameReference(ordinal)),
+            new C.StringCache(
+                new C.PointCount { Val = 1u },
+                new C.StringPoint { Index = 0u, NumericValue = new C.NumericValue(name) })));
+
+    /// <summary>c:cat as a string reference (with cache) into column A of the embedded sheet.</summary>
+    private static C.CategoryAxisData BuildCategoryData(IReadOnlyList<string> categories)
+    {
+        var cache = new C.StringCache(new C.PointCount { Val = (uint)categories.Count });
+        for (var i = 0; i < categories.Count; i++)
         {
-            stringLiteral.Append(new C.StringPoint
+            cache.Append(new C.StringPoint
             {
                 Index = (uint)i,
-                NumericValue = new C.NumericValue(data.Categories[i]),
+                NumericValue = new C.NumericValue(categories[i]),
             });
         }
 
-        series.Append(new C.CategoryAxisData(stringLiteral));
+        return new C.CategoryAxisData(new C.StringReference(
+            new C.Formula(PptxChartWorkbook.CategoriesRange(categories.Count)),
+            cache));
+    }
 
-        var numberLiteral = new C.NumberLiteral(
+    /// <summary>c:val as a number reference (with cache) into the series' column of the embedded sheet.</summary>
+    private static C.Values BuildValues(IReadOnlyList<double?> values, int ordinal)
+    {
+        var cache = new C.NumberingCache(
             new C.FormatCode("General"),
-            new C.PointCount { Val = (uint)spec.Values.Count });
-        for (var i = 0; i < spec.Values.Count; i++)
+            new C.PointCount { Val = (uint)values.Count });
+        for (var i = 0; i < values.Count; i++)
         {
-            if (spec.Values[i] is { } value)
+            if (values[i] is { } value)
             {
-                numberLiteral.Append(new C.NumericPoint
+                cache.Append(new C.NumericPoint
                 {
                     Index = (uint)i,
                     NumericValue = new C.NumericValue(value.ToString(CultureInfo.InvariantCulture)),
@@ -365,7 +493,9 @@ internal static class PptxCharts
             }
         }
 
-        series.Append(new C.Values(numberLiteral));
+        return new C.Values(new C.NumberReference(
+            new C.Formula(PptxChartWorkbook.ValuesRange(ordinal, values.Count)),
+            cache));
     }
 
     // ----- enumerate / resolve -------------------------------------------------
@@ -544,7 +674,7 @@ internal static class PptxCharts
             Title = data.Title,
             Categories = data.Categories,
             Series = data.Series.Select(s => (object)new { Name = s.Name, Values = s.Values }).ToList(),
-            DataEditable = false,
+            DataEditable = DataEditable(part),
             X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
             W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
@@ -568,7 +698,7 @@ internal static class PptxCharts
             Title = data.Title,
             Categories = data.Categories,
             SeriesNames = data.Series.Select(s => s.Name).ToList(),
-            DataEditable = false,
+            DataEditable = DataEditable(part),
         };
     }
 

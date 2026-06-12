@@ -18,6 +18,15 @@ The intended agent loop:
     4. aioffice edit  <file> --ops '[...]'      # atomic batch (auto-snapshots)
     5. aioffice validate <file>                 # prove the file is still sound
 
+Document-wide find/replace sugar (M4):
+
+    aioffice edit <file> --find X --replace Y [--regex] [--match-case] [--whole-word]
+
+covers the whole document (docx body + headers/footers, every sheet, every
+slide incl. notes) and reports aggregate {replacements, locations}. On docx,
+add --track to record every hit as a w:del+w:ins revision pair. The same op is
+available in --ops batches as {"op":"replace","path":"<scope>|/","props":{...}}.
+
 Global flags: `--json` (compact; default when stdout is not a TTY), `--pretty`,
 `--workspace <dir>` (sandbox root, default cwd, also AIOFFICE_WORKSPACE),
 `--quiet` (suppress success envelopes).

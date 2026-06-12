@@ -128,6 +128,48 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the M4 surface: find/replace rewrites, a TOC
+    /// (sdt + field + bookmarks), a VML watermark in the header, endnotes and
+    /// a multi-section body must survive a no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_m4_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "M4 round trip");
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"p","props":{"text":"Chapter one","style":"Heading1"}},
+              {"op":"add","path":"/body","type":"p","props":{"text":"Original body text."}},
+              {"op":"add","path":"/body","type":"toc","props":{"levels":"1-3","title":"Contents","position":"before /body/p[1]"}},
+              {"op":"add","path":"/body","type":"watermark","props":{"text":"DRAFT"}},
+              {"op":"add","path":"/body/p[3]","type":"endnote","props":{"text":"an endnote"}},
+              {"op":"add","path":"/body/p[2]","type":"sectionBreak","props":{"kind":"continuous"}},
+              {"op":"replace","path":"/body","props":{"find":"Original","replace":"Replaced"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body;
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            _ = doc.MainDocumentPart.EndnotesPart?.Endnotes;
+            foreach (var headerPart in doc.MainDocumentPart.HeaderParts)
+            {
+                _ = headerPart.Header; // loads the VML watermark DOM
+            }
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

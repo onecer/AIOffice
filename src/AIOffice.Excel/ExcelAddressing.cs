@@ -12,6 +12,7 @@ internal enum ExcelTargetKind
     Cell,
     Range,
     Row,
+    Column,
     Chart,
     Pivot,
     ConditionalFormat,
@@ -34,6 +35,9 @@ internal sealed record ExcelTarget
     /// <summary>1-based worksheet row number when <see cref="Kind"/> is Row.</summary>
     public int? RowNumber { get; init; }
 
+    /// <summary>1-based worksheet column number when <see cref="Kind"/> is Column.</summary>
+    public int? ColumnNumber { get; init; }
+
     /// <summary>1-based per-sheet chart index when <see cref="Kind"/> is Chart.</summary>
     public int? ChartIndex { get; init; }
 
@@ -52,8 +56,9 @@ internal sealed record ExcelTarget
 
 /// <summary>
 /// xlsx addressing: <c>/Sheet1/A1</c>, <c>/Sheet1/A1:C10</c>, <c>/Sheet1/row[3]</c>,
-/// <c>/Sheet1/chart[1]</c>, <c>/Sheet1/pivot[1]</c>, <c>/Pivot/pivot[@name=Sales]</c>,
-/// <c>/Sheet1/conditionalFormat[1]</c>, <c>/Sheet1/image[1]</c>, <c>/'Q3 Data'/B2</c>.
+/// <c>/Sheet1/col[C]</c>, <c>/Sheet1/chart[1]</c>, <c>/Sheet1/pivot[1]</c>,
+/// <c>/Pivot/pivot[@name=Sales]</c>, <c>/Sheet1/conditionalFormat[1]</c>,
+/// <c>/Sheet1/image[1]</c>, <c>/'Q3 Data'/B2</c>.
 /// Resolution failures throw <c>invalid_path</c> with nearest-match candidates,
 /// as the envelope contract requires.
 /// </summary>
@@ -166,6 +171,23 @@ internal static partial class ExcelPaths
                 return new ExcelTarget { Kind = ExcelTargetKind.Row, Sheet = sheet, RowNumber = rowNumber };
 
             case PathSegmentKind.Element when
+                string.Equals(segment.Name, "col", StringComparison.OrdinalIgnoreCase) &&
+                segment.Letter is { } columnLetter:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.Column,
+                    Sheet = sheet,
+                    ColumnNumber = new CellRef(columnLetter, 1).ColumnNumber,
+                };
+
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "col", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } columnNumber:
+                // Numeric col index is accepted as a convenience; the canonical
+                // form aioffice emits is the letter form, col[C].
+                return new ExcelTarget { Kind = ExcelTargetKind.Column, Sheet = sheet, ColumnNumber = columnNumber };
+
+            case PathSegmentKind.Element when
                 string.Equals(segment.Name, "chart", StringComparison.OrdinalIgnoreCase) &&
                 segment.Index is { } chartIndex:
                 return new ExcelTarget { Kind = ExcelTargetKind.Chart, Sheet = sheet, ChartIndex = chartIndex };
@@ -193,9 +215,9 @@ internal static partial class ExcelPaths
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
-                    $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], chart[n], pivot[n], " +
+                    $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], col[C], chart[n], pivot[n], " +
                     $"conditionalFormat[n] or image[n] in: {pathText}",
-                    "After the sheet name use A1, A1:C10, row[3], chart[1], pivot[1] (or pivot[@name=X]), " +
+                    "After the sheet name use A1, A1:C10, row[3], col[C], chart[1], pivot[1] (or pivot[@name=X]), " +
                     "conditionalFormat[1] or image[1]; column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
@@ -210,6 +232,13 @@ internal static partial class ExcelPaths
 
     public static string ImagePath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/image[{index}]");
+
+    /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
+    public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>
+        $"{SheetPath(sheet)}/col[{ExcelCharts.ColumnLetters(columnNumber)}]";
+
+    public static string RowPath(IXLWorksheet sheet, int rowNumber) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/row[{rowNumber}]");
 
     private static IXLWorksheet ResolveSheet(XLWorkbook workbook, DocPath path, string pathText)
     {
@@ -259,8 +288,9 @@ internal static partial class ExcelPaths
         var basePath = SheetPath(sheet);
         return
         [
-            basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/chart[1]",
-            basePath + "/pivot[1]", basePath + "/conditionalFormat[1]", basePath + "/image[1]",
+            basePath + "/A1", basePath + "/A1:C10", basePath + "/row[1]", basePath + "/col[A]",
+            basePath + "/chart[1]", basePath + "/pivot[1]", basePath + "/conditionalFormat[1]",
+            basePath + "/image[1]",
         ];
     }
 

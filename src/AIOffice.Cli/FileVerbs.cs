@@ -80,6 +80,12 @@ public sealed class FileVerbs
         // BEFORE the rev guard and snapshot so a bad source range writes nothing.
         ops = AIOffice.Mcp.CrossDocDataFrom.Expand(ops, handler.Kind, _workspace, _handlers.Registry);
 
+        // M4 find/replace sugar (same path as MCP office_edit): a root-scoped
+        // replace op ("/") fans out over the format's default scopes — docx
+        // body+headers+footers, every sheet, every slide incl. notes.
+        ops = AIOffice.Mcp.ReplaceSugar.ExpandDocumentScopes(
+            ops, handler.Kind, file, args.HasFlag("track"), out var replaceExpansion);
+
         // Optimistic concurrency: verified BEFORE any write or snapshot.
         if (args.GetOption("expect-rev") is { } expected)
         {
@@ -108,7 +114,10 @@ public sealed class FileVerbs
             ["track"] = args.HasFlag("track"),
             ["author"] = args.GetOption("author") ?? Environment.GetEnvironmentVariable("AIOFFICE_AUTHOR"),
         });
-        return handler.Edit(ctx, ops);
+        var envelope = handler.Edit(ctx, ops);
+        return replaceExpansion is null
+            ? envelope
+            : AIOffice.Mcp.ReplaceSugar.Aggregate(envelope, replaceExpansion);
     }
 
     public Envelope Render(ParsedArgs args)
@@ -254,9 +263,47 @@ public sealed class FileVerbs
         return value;
     }
 
-    /// <summary>Builds the op batch from --ops or from the --set/--add/--remove sugar.</summary>
+    /// <summary>Builds the op batch from --ops or from the --set/--add/--remove/--find sugar.</summary>
     private IReadOnlyList<EditOp> CollectOps(ParsedArgs args)
     {
+        var findText = args.GetOption("find");
+        if (findText is not null &&
+            (args.HasFlag("ops") || args.HasFlag("set") || args.HasFlag("add") || args.HasFlag("remove")))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "--find/--replace cannot be combined with --ops/--set/--add/--remove in one invocation.",
+                "Run the find/replace alone, or express it as a batch op: " +
+                "{\"op\":\"replace\",\"path\":\"/\",\"props\":{\"find\":\"…\",\"replace\":\"…\"}}.");
+        }
+
+        if (findText is not null)
+        {
+            // M4 sugar: one document-wide replace op; "/" fans out over the
+            // format's default scopes in Edit, results aggregated afterwards.
+            var replaceProps = new JsonObject
+            {
+                ["find"] = findText,
+                ["replace"] = args.GetOption("replace") ?? string.Empty,
+            };
+            if (args.HasFlag("regex"))
+            {
+                replaceProps["regex"] = true;
+            }
+
+            if (args.HasFlag("match-case"))
+            {
+                replaceProps["matchCase"] = true;
+            }
+
+            if (args.HasFlag("whole-word"))
+            {
+                replaceProps["wholeWord"] = true;
+            }
+
+            return [new EditOp { Op = "replace", Path = "/", Props = replaceProps }];
+        }
+
         if (args.GetOption("ops") is { } opsText)
         {
             return EditOp.ParseBatch(ArgParser.ExpandAtFile(opsText, _workspace));
@@ -270,8 +317,8 @@ public sealed class FileVerbs
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                "edit needs --ops, or one of the sugar forms --set/--add/--remove.",
-                "Example: aioffice edit report.docx --set /body/p[1] text='Hello' — or pass a batch with --ops '[...]'.");
+                "edit needs --ops, one of the sugar forms --set/--add/--remove, or --find/--replace.",
+                "Example: aioffice edit report.docx --set /body/p[1] text='Hello' — or aioffice edit report.docx --find 2025 --replace 2026.");
         }
 
         if (setPath is not null && addPath is not null)

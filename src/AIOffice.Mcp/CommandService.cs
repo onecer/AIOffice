@@ -125,6 +125,12 @@ public sealed class CommandService
         // rev guard and snapshot so a bad source range writes nothing.
         ops = CrossDocDataFrom.Expand(ops, handler.Kind, Workspace, Handlers);
 
+        // M4 find/replace sugar: a root-scoped replace op ("/") fans out over
+        // the format's default scopes (docx body+headers+footers, every sheet,
+        // every slide incl. notes); results are aggregated after the edit.
+        ops = ReplaceSugar.ExpandDocumentScopes(
+            ops, handler.Kind, resolved, OptionalBool(a, "track", false), out var replaceExpansion);
+
         GuardRev(resolved, OptionalString(a, "expect_rev"));
 
         // M2 attribution: op props.author > tool arg author > AIOFFICE_AUTHOR > handler default.
@@ -136,9 +142,12 @@ public sealed class CommandService
 
         var dryRun = OptionalBool(a, "dry_run", false);
         a["dryRun"] = dryRun;
-        return WithPreImageSnapshot(resolved,
+        var envelope = WithPreImageSnapshot(resolved,
             takeSnapshot: !dryRun && !_handlerManagedSnapshots.Contains(handler.Kind), a,
             () => handler.Edit(Context(resolved, a), ops));
+        return replaceExpansion is null
+            ? envelope
+            : ReplaceSugar.Aggregate(envelope, replaceExpansion);
     });
 
     public Envelope Template(JsonObject args) => Run(args, a =>

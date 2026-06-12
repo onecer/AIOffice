@@ -55,6 +55,9 @@ public sealed record PathSegment
     /// <summary>1-based index for indexed elements; null when the element is unindexed.</summary>
     public int? Index { get; init; }
 
+    /// <summary>Uppercase column letters for letter-indexed elements (xlsx <c>col[C]</c>); null otherwise.</summary>
+    public string? Letter { get; init; }
+
     /// <summary>Stable-id selector value for <c>element[@id=…]</c> / <c>element[@name=…]</c> segments (e.g. shape[@id=7], revision[@id=3], bookmark[@name=Results]); null otherwise.</summary>
     public string? Id { get; init; }
 
@@ -71,9 +74,11 @@ public sealed record PathSegment
     {
         PathSegmentKind.Element => Id is { } id
             ? string.Create(CultureInfo.InvariantCulture, $"{Name}[@{IdAttribute ?? "id"}={id}]")
-            : Index is { } i
-                ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
-                : Name!,
+            : Letter is { } letter
+                ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{letter}]")
+                : Index is { } i
+                    ? string.Create(CultureInfo.InvariantCulture, $"{Name}[{i}]")
+                    : Name!,
         PathSegmentKind.Name => Quote(Name!),
         PathSegmentKind.Cell => Start!.Value.ToString(),
         PathSegmentKind.Range => $"{Start!.Value}:{End!.Value}",
@@ -90,7 +95,7 @@ public sealed record PathSegment
 /// A parsed document path. Grammar (1-based indices throughout):
 /// <code>
 /// docx:  /body/p[3]   /body/table[1]/tr[2]/tc[1]   /body/p[3]/run[2]   /header[1]/p[1]
-/// xlsx:  /Sheet1/A1   /Sheet1/A1:C10   /Sheet1/row[3]   /'Q3 Data'/B2
+/// xlsx:  /Sheet1/A1   /Sheet1/A1:C10   /Sheet1/row[3]   /Sheet1/col[C]   /'Q3 Data'/B2
 /// pptx:  /slide[2]    /slide[2]/shape[3]   /slide[2]/shape[3]/p[1]
 /// </code>
 /// </summary>
@@ -101,6 +106,9 @@ public sealed partial record DocPath
 
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([0-9]+)\]$")]
     private static partial Regex IndexedElement();
+
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([A-Z]{1,3})\]$")]
+    private static partial Regex LetterElement();
 
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name)=([A-Za-z0-9_.-]+)\]$")]
     private static partial Regex IdElement();
@@ -252,6 +260,18 @@ public sealed partial record DocPath
             }
 
             return new PathSegment { Kind = PathSegmentKind.Element, Name = indexed.Groups[1].Value, Index = index };
+        }
+
+        // Letter-indexed elements address spreadsheet columns: col[C], col[AB].
+        var lettered = LetterElement().Match(raw);
+        if (lettered.Success)
+        {
+            return new PathSegment
+            {
+                Kind = PathSegmentKind.Element,
+                Name = lettered.Groups[1].Value,
+                Letter = lettered.Groups[2].Value,
+            };
         }
 
         if (BareName().IsMatch(raw))

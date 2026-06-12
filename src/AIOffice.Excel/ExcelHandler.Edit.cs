@@ -13,10 +13,11 @@ public sealed partial class ExcelHandler
     [
         "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name",
         "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
+        "height", "width", "hidden",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
-        ["sheet", "table", "row", "chart", "pivot", "conditionalFormat", "image", "name"];
+        ["sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note"];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
     {
@@ -43,23 +44,55 @@ public sealed partial class ExcelHandler
         // parts; measured: it preserves them byte-identical once present).
         var charts = new ChartOpBatch(file);
         var post = new PostSaveWork();
+        var opWarnings = new List<Warning>();
         var details = new List<object>(ops.Count);
         for (var i = 0; i < ops.Count; i++)
         {
-            ApplyOp(ctx, workbook, ops[i], i, details, charts, post);
+            // Sequential-op semantics: a queued streamed bulk write must land
+            // before any later op that addresses the same sheet (it would
+            // otherwise replay after that op and clobber its cells).
+            FlushStreamedWritesFor(post, ops[i].Path);
+            ApplyOp(ctx, workbook, ops[i], i, details, charts, post, opWarnings);
         }
 
         if (ArgBool(ctx, "dryRun"))
         {
             return Envelope.Ok(
                 new { dryRun = true, wouldApply = details.Count, ops = details },
-                MetaFor(file, sw));
+                MetaFor(file, sw, opWarnings));
         }
 
+        // Safety net: a queued streamed write only stays streamed while its
+        // sheet is still bare (e.g. a pivot's targetSheet can land cells on it
+        // without addressing it by path). Anything else falls back to the DOM.
+        FlushStreamedWritesNoLongerBare(workbook, post);
+
         var snapshot = _snapshots.Save(file); // pre-image: every successful edit is undoable
-        var warnings = SaveWithCachedValues(workbook, file);
+        var warnings = new List<Warning>(opWarnings);
+        if (SaveWithCachedValues(workbook, file) is { } saveWarnings)
+        {
+            warnings.AddRange(saveWarnings);
+        }
+
         try
         {
+            if (post.StreamedWrites.Count > 0)
+            {
+                ExcelBulkWrites.ApplyAfterSave(file, post.StreamedWrites);
+
+                // Formulas written by the SAX path (and any formula elsewhere in
+                // the workbook that references the streamed sheet) need cached
+                // values: run the normal pipeline once over the streamed bytes.
+                if (post.StreamedWrites.Any(w => w.HasFormulas) || HasAnyFormula(workbook))
+                {
+                    using var reopened = OpenWorkbook(file);
+                    if (SaveWithCachedValues(reopened, file) is { } formulaWarnings)
+                    {
+                        warnings.AddRange(formulaWarnings);
+                    }
+                }
+            }
+
             if (!charts.IsEmpty)
             {
                 ExcelCharts.Apply(file, charts.Ops);
@@ -94,6 +127,9 @@ public sealed partial class ExcelHandler
             MetaFor(file, sw, warnings));
     });
 
+    private static bool HasAnyFormula(XLWorkbook workbook) =>
+        workbook.Worksheets.Any(ws => ws.CellsUsed().Any(c => c.HasFormula));
+
     /// <summary>Raw clean-up passes an edit batch queues for after the ClosedXML save.</summary>
     private sealed class PostSaveWork
     {
@@ -113,16 +149,86 @@ public sealed partial class ExcelHandler
                 .Where(r => string.Equals(r.Sheet, sheetName, StringComparison.OrdinalIgnoreCase))
                 .Select(r => r.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Bulk 2D writes queued for the SAX streaming path (&gt;50k cells into
+        /// a bare sheet). The ClosedXML model is left untouched; the post-save
+        /// pass rewrites the sheet's part directly.
+        /// </summary>
+        public List<ExcelBulkWrites.Pending> StreamedWrites { get; } = [];
+    }
+
+    /// <summary>
+    /// Materializes queued streamed writes whose sheet the next op addresses,
+    /// preserving sequential-op semantics (the queued write happened earlier).
+    /// </summary>
+    private static void FlushStreamedWritesFor(PostSaveWork post, string nextOpPath)
+    {
+        if (post.StreamedWrites.Count == 0)
+        {
+            return;
+        }
+
+        string? sheetName = null;
+        if (ExcelNames.TryParsePath(nextOpPath, out var nameSheetPath, out _))
+        {
+            nextOpPath = nameSheetPath ?? string.Empty;
+        }
+
+        if (nextOpPath.Length > 0 && DocPath.TryParse(nextOpPath, out var path, out _) &&
+            path!.Segments[0] is { } first && first.Kind is PathSegmentKind.Name or PathSegmentKind.Element)
+        {
+            sheetName = first.Name;
+        }
+
+        if (sheetName is null)
+        {
+            return;
+        }
+
+        for (var i = post.StreamedWrites.Count - 1; i >= 0; i--)
+        {
+            var pending = post.StreamedWrites[i];
+            if (string.Equals(pending.Sheet.Name, sheetName, StringComparison.OrdinalIgnoreCase))
+            {
+                WriteGridDom(pending.Sheet, pending.FirstRow, pending.FirstColumn, pending.Grid);
+                post.StreamedWrites.RemoveAt(i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Save-time safety net: drops queued writes whose sheet was deleted later
+    /// in the batch, and falls back to the DOM for any sheet that is no longer
+    /// bare (something else wrote to it without addressing it by path).
+    /// </summary>
+    private static void FlushStreamedWritesNoLongerBare(XLWorkbook workbook, PostSaveWork post)
+    {
+        for (var i = post.StreamedWrites.Count - 1; i >= 0; i--)
+        {
+            var pending = post.StreamedWrites[i];
+            if (!workbook.Worksheets.Any(ws => ReferenceEquals(ws, pending.Sheet)))
+            {
+                post.StreamedWrites.RemoveAt(i); // the sheet (and its write) was removed later in the batch
+                continue;
+            }
+
+            if (!SheetIsBare(pending.Sheet))
+            {
+                WriteGridDom(pending.Sheet, pending.FirstRow, pending.FirstColumn, pending.Grid);
+                post.StreamedWrites.RemoveAt(i);
+            }
+        }
     }
 
     private static void ApplyOp(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, PostSaveWork post)
+        ChartOpBatch charts, PostSaveWork post, List<Warning> warnings)
     {
         switch (op.Op)
         {
             case "set":
-                ApplySet(workbook, op, index, details);
+                ApplySet(workbook, op, index, details, post);
                 break;
             case "add":
                 ApplyAdd(ctx, workbook, op, index, details, charts, post);
@@ -130,17 +236,25 @@ public sealed partial class ExcelHandler
             case "remove":
                 ApplyRemove(workbook, op, index, details, charts, post);
                 break;
-            default: // "move" — ParseBatch already rejected anything else
+            case "replace":
+                ApplyReplace(workbook, op, index, details, warnings);
+                break;
+            case "move":
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
                     $"ops[{index}]: move is not supported for xlsx yet.",
                     "Copy the content to the destination with get + set, then remove the source.");
+            default: // "accept"/"reject" — ParseBatch already rejected anything else
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    $"ops[{index}]: {op.Op} is not supported for xlsx.",
+                    "accept/reject resolve tracked docx revisions; xlsx has no tracked changes.");
         }
     }
 
     // ----- set --------------------------------------------------------------
 
-    private static void ApplySet(XLWorkbook workbook, EditOp op, int index, List<object> details)
+    private static void ApplySet(XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -195,7 +309,7 @@ public sealed partial class ExcelHandler
 
         if (props.TryGetPropertyValue("values", out var valuesNode))
         {
-            SetValues(target, valuesNode, index, applied);
+            SetValues(target, valuesNode, index, applied, post);
         }
 
         if (props.TryGetPropertyValue("numberFormat", out var formatNode) && formatNode is not null)
@@ -293,6 +407,21 @@ public sealed partial class ExcelHandler
             ApplyPrintArea(target, op, printAreaNode, index, applied);
         }
 
+        if (props.TryGetPropertyValue("height", out var heightNode) && heightNode is not null)
+        {
+            ApplyRowHeight(target, op, heightNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("width", out var widthNode) && widthNode is not null)
+        {
+            ApplyColumnWidth(target, op, widthNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("hidden", out var hiddenNode) && hiddenNode is not null)
+        {
+            ApplyHidden(target, op, hiddenNode, index, applied);
+        }
+
         details.Add(new { op = "set", path = DocPath.Parse(op.Path).ToCanonicalString(), applied });
     }
 
@@ -329,14 +458,27 @@ public sealed partial class ExcelHandler
         applied.Add(parsed.IsFormula ? "formula" : "value");
     }
 
-    private static void SetValues(ExcelTarget target, JsonNode? valuesNode, int index, List<string> applied)
+    /// <summary>
+    /// Bulk 2D writes. Two forms (one op writes a whole table):
+    /// <list type="bullet">
+    /// <item>anchor — <c>{op:set, path:/Sheet1/A2, props:{values:[[…],[…]]}}</c>:
+    /// the extent is inferred from the array (rows may be ragged);</item>
+    /// <item>range — <c>{op:set, path:/Sheet1/A2:D101, props:{values:[[…]]}}</c>:
+    /// the array shape must match the range exactly.</item>
+    /// </list>
+    /// Values are typed like single-cell set (numbers/booleans/strings/dates/
+    /// formula strings). Writes over 50k cells into a bare sheet take the SAX
+    /// streaming path (see <see cref="ExcelBulkWrites"/>); everything else goes
+    /// through the ClosedXML DOM. Rows keep their flat-array form.
+    /// </summary>
+    private static void SetValues(ExcelTarget target, JsonNode? valuesNode, int index, List<string> applied, PostSaveWork post)
     {
         if (valuesNode is not JsonArray array)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"ops[{index}]: 'values' must be a JSON array.",
-                "Rows take a flat array ([1,\"a\",true]); ranges take a 2D array ([[1,2],[3,4]]).");
+                "Rows take a flat array ([1,\"a\",true]); cells (anchor form) and ranges take a 2D array ([[1,2],[3,4]]).");
         }
 
         switch (target.Kind)
@@ -345,57 +487,154 @@ public sealed partial class ExcelHandler
                 WriteRowValues(target.Sheet, target.RowNumber!.Value, array);
                 break;
 
-            case ExcelTargetKind.Range:
+            case ExcelTargetKind.Cell: // anchor form: extent inferred from the array
+            {
+                var grid = ParseGrid(array, index);
+                WriteGrid(
+                    target.Sheet, target.Cell!.Address.RowNumber, target.Cell!.Address.ColumnNumber,
+                    grid, index, post);
+                break;
+            }
+
+            case ExcelTargetKind.Range: // range form: the shapes must match exactly
             {
                 var address = target.Range!.RangeAddress;
                 var rangeRows = address.LastAddress.RowNumber - address.FirstAddress.RowNumber + 1;
                 var rangeColumns = address.LastAddress.ColumnNumber - address.FirstAddress.ColumnNumber + 1;
-                if (array.Count > rangeRows)
-                {
-                    throw new AiofficeException(
-                        ErrorCodes.InvalidArgs,
-                        $"ops[{index}]: 'values' has {array.Count} rows but the range has only {rangeRows}.",
-                        "Match the range size, or target a larger range.");
-                }
-
-                for (var r = 0; r < array.Count; r++)
-                {
-                    if (array[r] is not JsonArray rowArray)
-                    {
-                        throw new AiofficeException(
-                            ErrorCodes.InvalidArgs,
-                            $"ops[{index}]: 'values' on a range must be a 2D array; row {r + 1} is not an array.",
-                            "Pass [[1,2],[3,4]] — one inner array per row.");
-                    }
-
-                    if (rowArray.Count > rangeColumns)
-                    {
-                        throw new AiofficeException(
-                            ErrorCodes.InvalidArgs,
-                            $"ops[{index}]: row {r + 1} has {rowArray.Count} values but the range has only {rangeColumns} columns.",
-                            "Match the range size, or target a larger range.");
-                    }
-
-                    for (var c = 0; c < rowArray.Count; c++)
-                    {
-                        WriteParsed(
-                            target.Sheet.Cell(address.FirstAddress.RowNumber + r, address.FirstAddress.ColumnNumber + c),
-                            ExcelValues.Parse(rowArray[c]));
-                    }
-                }
-
+                var grid = ParseGrid(array, index);
+                RequireExactShape(grid, rangeRows, rangeColumns, address, index);
+                WriteGrid(target.Sheet, address.FirstAddress.RowNumber, address.FirstAddress.ColumnNumber, grid, index, post);
                 break;
             }
 
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
-                    $"ops[{index}]: 'values' targets a row or range.",
-                    "For a single cell use the 'value' prop instead.");
+                    $"ops[{index}]: 'values' targets a row, a cell (anchor form) or a range.",
+                    "Anchor a 2D array at a cell ({op:set, path:/Sheet1/A2, props:{values:[[1,2],[3,4]]}}) " +
+                    "or address the exact range (/Sheet1/A2:B3).");
         }
 
         applied.Add("values");
     }
+
+    /// <summary>Parses a 2D JSON array into typed cell values (formula strings included).</summary>
+    private static List<List<ExcelValues.ParsedValue>> ParseGrid(JsonArray array, int index)
+    {
+        if (array.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: 'values' must not be empty.",
+                "Pass at least one row, e.g. [[1,2],[3,4]].");
+        }
+
+        var grid = new List<List<ExcelValues.ParsedValue>>(array.Count);
+        for (var r = 0; r < array.Count; r++)
+        {
+            if (array[r] is not JsonArray rowArray)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: 'values' must be a 2D array; row {r + 1} is not an array.",
+                    "Pass [[1,2],[3,4]] — one inner array per row. (Only row targets take a flat array.)");
+            }
+
+            var row = new List<ExcelValues.ParsedValue>(rowArray.Count);
+            for (var c = 0; c < rowArray.Count; c++)
+            {
+                row.Add(ExcelValues.Parse(rowArray[c]));
+            }
+
+            grid.Add(row);
+        }
+
+        return grid;
+    }
+
+    /// <summary>Range form contract: dimension mismatches name BOTH shapes.</summary>
+    private static void RequireExactShape(
+        List<List<ExcelValues.ParsedValue>> grid, int rangeRows, int rangeColumns, IXLRangeAddress address, int index)
+    {
+        var gridColumns = grid.Max(r => r.Count);
+        if (grid.Count != rangeRows)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: 'values' is {grid.Count} row(s) x {gridColumns} column(s) but the range " +
+                $"{address} is {rangeRows} row(s) x {rangeColumns} column(s).",
+                "Make the array shape match the range exactly, or anchor at the top-left cell " +
+                "(path /Sheet/A2) to infer the extent from the array.");
+        }
+
+        for (var r = 0; r < grid.Count; r++)
+        {
+            if (grid[r].Count != rangeColumns)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: 'values' row {r + 1} has {grid[r].Count} column(s) but the range " +
+                    $"{address} is {rangeRows} row(s) x {rangeColumns} column(s).",
+                    "Make the array shape match the range exactly, or anchor at the top-left cell " +
+                    "(path /Sheet/A2) to infer the extent from the array.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes a parsed grid at an anchor: the SAX streaming path when it is
+    /// large and the sheet is bare, otherwise cell-by-cell through the DOM.
+    /// </summary>
+    private static void WriteGrid(
+        IXLWorksheet sheet, int firstRow, int firstColumn, List<List<ExcelValues.ParsedValue>> grid,
+        int index, PostSaveWork post)
+    {
+        var lastRow = firstRow + grid.Count - 1;
+        var lastColumn = firstColumn + grid.Max(r => r.Count) - 1;
+        if (lastRow > MaxSheetRows || lastColumn > MaxSheetColumns)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: 'values' runs past the sheet edge (to row {lastRow}, column {lastColumn}; " +
+                $"the sheet ends at row {MaxSheetRows}, column {MaxSheetColumns}).",
+                "Move the anchor up/left or shrink the array.");
+        }
+
+        if (ExcelBulkWrites.CellCount(grid) > ExcelBulkWrites.StreamingThresholdCells &&
+            SheetIsBare(sheet) && ExcelBulkWrites.IsStreamable(grid))
+        {
+            post.StreamedWrites.Add(new ExcelBulkWrites.Pending(sheet, firstRow, firstColumn, grid));
+            return;
+        }
+
+        WriteGridDom(sheet, firstRow, firstColumn, grid);
+    }
+
+    private static void WriteGridDom(
+        IXLWorksheet sheet, int firstRow, int firstColumn, List<List<ExcelValues.ParsedValue>> grid)
+    {
+        for (var r = 0; r < grid.Count; r++)
+        {
+            var row = grid[r];
+            for (var c = 0; c < row.Count; c++)
+            {
+                WriteParsed(sheet.Cell(firstRow + r, firstColumn + c), row[c]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when nothing in the sheet's ClosedXML model would be lost by a raw
+    /// sheetData rewrite. (Charts/drawings live in elements the rewrite
+    /// preserves verbatim, so they do not gate streaming.)
+    /// </summary>
+    private static bool SheetIsBare(IXLWorksheet sheet) =>
+        sheet.FirstCellUsed(XLCellsUsedOptions.All) is null &&
+        !sheet.Tables.Any() &&
+        !sheet.PivotTables.Any() &&
+        !sheet.ConditionalFormats.Any() &&
+        !sheet.Pictures.Any() &&
+        !sheet.MergedRanges.Any();
 
     private static void WriteRowValues(IXLWorksheet sheet, int rowNumber, JsonArray values)
     {
@@ -422,9 +661,10 @@ public sealed partial class ExcelHandler
         ExcelTargetKind.Cell => target.Cell!.Style,
         ExcelTargetKind.Range => target.Range!.Style,
         ExcelTargetKind.Row => target.Sheet.Row(target.RowNumber!.Value).Style,
+        ExcelTargetKind.Column => target.Sheet.Column(target.ColumnNumber!.Value).Style,
         _ => throw new AiofficeException(
             ErrorCodes.InvalidArgs,
-            "Style props (numberFormat, bold, italic, fill) target a cell, range or row.",
+            "Style props (numberFormat, bold, italic, fill) target a cell, range, row or col.",
             "Address a cell like /Sheet1/A1 or a range like /Sheet1/A1:C10."),
     };
 
@@ -476,6 +716,12 @@ public sealed partial class ExcelHandler
                 break;
             case "row":
                 AddRow(workbook, op, index, details);
+                break;
+            case "col":
+                AddColumn(workbook, op, index, details);
+                break;
+            case "note":
+                details.Add(AddNote(ExcelPaths.Resolve(workbook, op.Path), op, index));
                 break;
             case "chart":
                 AddChart(workbook, op, index, details, charts);
@@ -600,13 +846,18 @@ public sealed partial class ExcelHandler
     private static void AddRow(XLWorkbook workbook, EditOp op, int index, List<object> details)
     {
         var target = ExcelPaths.Resolve(workbook, op.Path);
+        var position = InsertPosition(op, index);
         int rowNumber;
         switch (target.Kind)
         {
             case ExcelTargetKind.Sheet: // append after the used range
                 rowNumber = (target.Sheet.LastRowUsed()?.RowNumber() ?? 0) + 1;
                 break;
-            case ExcelTargetKind.Row: // insert at this position, pushing rows down
+            case ExcelTargetKind.Row when position == "after": // insert below, pushing rows down
+                rowNumber = target.RowNumber!.Value + 1;
+                target.Sheet.Row(target.RowNumber!.Value).InsertRowsBelow(1);
+                break;
+            case ExcelTargetKind.Row: // default "before": insert at this position, pushing rows down
                 rowNumber = target.RowNumber!.Value;
                 target.Sheet.Row(rowNumber).InsertRowsAbove(1);
                 break;
@@ -614,7 +865,7 @@ public sealed partial class ExcelHandler
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"ops[{index}]: add row targets a sheet (/Sheet1 appends) or a row (/Sheet1/row[3] inserts).",
-                    "Pass values via props, e.g. {\"values\":[1,\"a\",true]}.");
+                    "Pass values via props, e.g. {\"values\":[1,\"a\",true]}; position is \"before\" (default) or \"after\".");
         }
 
         if (op.Props?.TryGetPropertyValue("values", out var valuesNode) == true && valuesNode is JsonArray values)
@@ -626,9 +877,7 @@ public sealed partial class ExcelHandler
         {
             op = "add",
             type = "row",
-            path = string.Create(
-                CultureInfo.InvariantCulture,
-                $"{ExcelPaths.SheetPath(target.Sheet)}/row[{rowNumber}]"),
+            path = ExcelPaths.RowPath(target.Sheet, rowNumber),
             row = rowNumber,
         });
     }
@@ -682,6 +931,14 @@ public sealed partial class ExcelHandler
         }
 
         var target = ExcelPaths.Resolve(workbook, op.Path);
+
+        // remove with props {target:"note"} deletes a cell's note, not its contents.
+        if (op.Props?.TryGetPropertyValue("target", out var removeTargetNode) == true && removeTargetNode is not null)
+        {
+            details.Add(RemoveCellTarget(target, op, removeTargetNode, index));
+            return;
+        }
+
         switch (target.Kind)
         {
             case ExcelTargetKind.Pivot:
@@ -750,6 +1007,16 @@ public sealed partial class ExcelHandler
             case ExcelTargetKind.Row:
                 target.Sheet.Row(target.RowNumber!.Value).Delete();
                 details.Add(new { op = "remove", path = canonical, removed = "row" });
+                break;
+
+            case ExcelTargetKind.Column:
+                target.Sheet.Column(target.ColumnNumber!.Value).Delete();
+                details.Add(new
+                {
+                    op = "remove",
+                    path = ExcelPaths.ColumnPath(target.Sheet, target.ColumnNumber!.Value),
+                    removed = "col",
+                });
                 break;
 
             case ExcelTargetKind.Chart:

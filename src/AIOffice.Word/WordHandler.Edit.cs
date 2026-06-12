@@ -15,6 +15,9 @@ internal sealed record EditSession(Workspace Workspace, bool Track, string? Auth
 {
     public const string DefaultAuthor = "AIOffice";
 
+    /// <summary>Non-fatal warnings raised by ops (find_no_match, toc_pages_unknown, …); surfaced on envelope meta.</summary>
+    public List<Warning> Warnings { get; } = [];
+
     /// <summary>Resolves the revision/comment author and consumes props.author so generic prop application never sees it.</summary>
     public string ResolveAuthor(JsonObject? props)
     {
@@ -83,7 +86,7 @@ public sealed partial class WordHandler
         {
             return Envelope.Ok(
                 new { applied = summaries.Count, dryRun = true, ops = summaries },
-                MetaFor(file, currentRev));
+                MetaFor(file, currentRev, session.Warnings));
         }
 
         var snapshot = _snapshots.Save(file); // pre-image, so the edit is undoable
@@ -91,7 +94,7 @@ public sealed partial class WordHandler
 
         return Envelope.Ok(
             new { applied = summaries.Count, snapshot = snapshot.Number, ops = summaries },
-            MetaFor(file, Rev.OfBytes(newBytes)));
+            MetaFor(file, Rev.OfBytes(newBytes), session.Warnings));
     }
 
     // ------------------------------------------------------------------- ops
@@ -102,6 +105,7 @@ public sealed partial class WordHandler
         return op.Op switch
         {
             "accept" or "reject" => ApplyAcceptOrReject(doc, op),
+            "replace" => ApplyReplace(doc, op, session),
             "set" when rootName == "style" => ApplySetStyle(doc, op),
             "set" when rootName == "section" => ApplySetSection(doc, op),
             "set" => ApplySet(doc, op, session),
@@ -117,12 +121,24 @@ public sealed partial class WordHandler
             "add" when op.Type == "bookmark" => ApplyAddBookmark(doc, op),
             "add" when op.Type == "footnote" && session.Track => throw TrackedStructureUnsupported("footnote"),
             "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op),
-            "add" when op.Type == "endnote" => throw EndnotesUnsupported(),
+            // Endnotes are real since M4 (the M3 unsupported_feature refusal is gone).
+            "add" when op.Type == "endnote" && session.Track => throw TrackedStructureUnsupported("endnote"),
+            "add" when op.Type == "endnote" => ApplyAddEndnote(doc, op),
+            "add" when op.Type == "toc" && session.Track => throw TrackedStructureUnsupported("toc"),
+            "add" when op.Type == "toc" => ApplyAddToc(doc, file, op, session),
+            "add" when op.Type == "watermark" && session.Track => throw TrackedStructureUnsupported("watermark"),
+            "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op),
+            "add" when op.Type == "sectionBreak" && session.Track => throw TrackedStructureUnsupported("sectionBreak"),
+            "add" when op.Type == "sectionBreak" => ApplyAddSectionBreak(doc, op),
             "add" => ApplyAdd(doc, op, session),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
             "remove" when rootName == "bookmark" => ApplyRemoveBookmark(doc, op),
             "remove" when rootName == "footnote" => ApplyRemoveFootnote(doc, op),
+            "remove" when rootName == "endnote" => ApplyRemoveEndnote(doc, op),
+            "remove" when rootName == "toc" => ApplyRemoveToc(doc, op),
+            "remove" when rootName == "watermark" => ApplyRemoveWatermark(doc, op),
+            "remove" when rootName == "section" => ApplyRemoveSection(doc, op),
             "remove" when rootName == "revision" => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 "Revisions are not removed; they are accepted or rejected.",
@@ -214,9 +230,11 @@ public sealed partial class WordHandler
                 $"add --type {type} is not supported for docx.",
                 "Add p (props.style=Heading1 for headings, props.list=bullet|number for lists), tr (props.cells=[…]), " +
                 "table (props.rows/columns), image (props.src), link (props.url), bookmark (props.name), " +
-                "footnote (props.text), comment/reply, style, or header/footer targeting /header[1] | /footer[1]. " +
+                "footnote/endnote (props.text), comment/reply, style, toc (props.levels), watermark (props.text), " +
+                "sectionBreak (props.kind), or header/footer targeting /header[1] | /footer[1]. " +
                 "For runs, set text on the paragraph instead.",
-                candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "comment", "reply", "style", "header", "footer"]),
+                candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
+                    "style", "header", "footer", "toc", "watermark", "sectionBreak"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

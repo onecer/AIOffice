@@ -171,6 +171,7 @@ public sealed partial class ExcelHandler
                     images = ws.Pictures
                         .Select((pic, i) => ExcelImages.Describe(ws, pic, i + 1))
                         .ToList(),
+                    notes = NoteList(ws),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
                     autoFilter = ws.AutoFilter.IsEnabled ? ws.AutoFilter.Range?.RangeAddress.ToString() : null,
                 })
@@ -270,6 +271,7 @@ public sealed partial class ExcelHandler
         ExcelTargetKind.Cell => target.Cell!.AsRange(),
         ExcelTargetKind.Range => target.Range,
         ExcelTargetKind.Row => RowUsedRange(target.Sheet, target.RowNumber!.Value),
+        ExcelTargetKind.Column => ColumnUsedRange(target.Sheet, target.ColumnNumber!.Value),
         _ => target.Sheet.RangeUsed(),
     };
 
@@ -277,5 +279,11 @@ public sealed partial class ExcelHandler
     {
         var lastColumn = sheet.Row(rowNumber).LastCellUsed()?.Address.ColumnNumber;
         return lastColumn is null ? null : sheet.Range(rowNumber, 1, rowNumber, lastColumn.Value);
+    }
+
+    private static IXLRange? ColumnUsedRange(IXLWorksheet sheet, int columnNumber)
+    {
+        var lastRow = sheet.Column(columnNumber).LastCellUsed()?.Address.RowNumber;
+        return lastRow is null ? null : sheet.Range(1, columnNumber, lastRow.Value, columnNumber);
     }
 }

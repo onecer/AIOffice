@@ -101,6 +101,46 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>The round-trip law over the M4 surface: embedded chart workbooks, animations, comments.</summary>
+    [Fact]
+    public void M4Features_ReadSideVerbs_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Immutable"))));
+        var added = TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "animate me"))),
+        ]));
+        var shapePath = added["results"]![0]!["target"]!.GetValue<string>();
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[1]", type: "chart", props: TestEnv.Props(
+                ("kind", "line"),
+                ("categories", new JsonArray("A", "B")),
+                ("series", new JsonArray(new JsonObject
+                {
+                    ["name"] = "S1",
+                    ["values"] = new JsonArray(1, 2),
+                })))),
+            TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(
+                ("effect", "flyIn"), ("direction", "left"), ("duration", "0.5s"))),
+            TestEnv.Op("add", "/slide[1]", type: "comment", props: TestEnv.Props(
+                ("text", "reviewed"), ("author", "Dana"))),
+            TestEnv.Op("replace", "/slide[1]", props: TestEnv.Props(
+                ("find", "animate"), ("replace", "animated"))),
+        ]));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "outline"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "structure"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "comments"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/chart[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/animation[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/comment[@id=1]"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {
@@ -196,6 +236,33 @@ public sealed class RoundTripTests : IDisposable
             TestEnv.Op("add", "/slide[4]", type: "shape", props: TestEnv.Props(
                 ("shape", "line"), ("x", "20cm"), ("y", "9cm"), ("w", "11cm"), ("h", "3cm"),
                 ("flip", "v"), ("fill", "4472C4"))),
+        ]));
+
+        // M4 surface: an animated shape, a slide comment and a find/replace pass.
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[5]", type: "slide", props: TestEnv.Props(
+                ("title", "M4: animations, comments & replace"))),
+            TestEnv.Op("add", "/slide[5]", type: "shape", props: TestEnv.Props(
+                ("x", "4cm"), ("y", "6cm"), ("w", "12cm"), ("h", "4cm"),
+                ("text", "This box fades in on click PLACEHOLDER"), ("fill", "DCE6F2"))),
+        ]));
+        var slide5 = TestEnv.AssertOk(handler.Get(
+            new CommandContext
+            {
+                Workspace = ws,
+                File = ctx.File,
+                Args = new JsonObject { ["path"] = "/slide[5]" },
+            }));
+        var animatedShape = slide5["shapes"]!.AsArray()
+            .Single(s => s!["text"]!.GetValue<string>().Contains("fades in", StringComparison.Ordinal))!["path"]!
+            .GetValue<string>();
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", animatedShape, type: "animation", props: TestEnv.Props(
+                ("effect", "fade"), ("trigger", "click"), ("duration", "0.5s"))),
+            TestEnv.Op("add", "/slide[5]", type: "comment", props: TestEnv.Props(
+                ("text", "Added by aioffice M4 — check the comments pane."), ("author", "AIOffice"))),
+            TestEnv.Op("replace", "/slide[5]", props: TestEnv.Props(
+                ("find", "PLACEHOLDER"), ("replace", "(replaced by aioffice)"))),
         ]));
 
         var validation = TestEnv.AssertOk(handler.Validate(

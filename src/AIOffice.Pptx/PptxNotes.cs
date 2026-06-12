@@ -32,6 +32,9 @@ internal static class PptxNotes
     /// <summary>Newline-joined notes text; empty when the slide has no notes.</summary>
     public static string Text(SlidePart slidePart) => string.Join('\n', Paragraphs(slidePart));
 
+    /// <summary>The notes body shape when a notes part exists (the find/replace surface); null otherwise.</summary>
+    public static P.Shape? Body(SlidePart slidePart) => BodyShape(slidePart.NotesSlidePart);
+
     /// <summary>The `get` projection for /slide[i]/notes.</summary>
     public static object NotesDetail(PresentationPart presentation, PptxAddress address)
     {

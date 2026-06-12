@@ -249,6 +249,262 @@ public sealed partial class WordHandler
         }
     }
 
+    // ----------------------------------------------------------- add / remove
+
+    /// <summary>
+    /// <c>{"op":"add","path":"/body/p[5]","type":"sectionBreak","props":{"kind":"nextPage|continuous"}}</c>:
+    /// ends a section at the target paragraph. In the OOXML section model a
+    /// paragraph-level w:pPr/w:sectPr marks the END of a section, so the new
+    /// sectPr lands on p[5] and clones the setup of the section that governed it
+    /// (ultimately the trailing body-level sectPr, materialized on demand) —
+    /// both halves start out looking identical, exactly like Word's own
+    /// Insert ▸ Section Break.
+    /// </summary>
+    private static object ApplyAddSectionBreak(WordprocessingDocument doc, EditOp op)
+    {
+        var kind = op.Props?["kind"] is { } kindNode ? NodeToString(kindNode) : "nextPage";
+        if (kind is not ("nextPage" or "continuous"))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"sectionBreak kind '{kind}' is not supported.",
+                "Use kind nextPage (the new section starts on a fresh page) or continuous (same page).",
+                candidates: ["nextPage", "continuous"]);
+        }
+
+        var anchor = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
+        if (anchor.Element is not Paragraph paragraph || paragraph.Parent is not Body body)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Section breaks end a top-level body paragraph, not '{anchor.Type}' at {anchor.CanonicalPath}.",
+                "Target a direct /body/p[n] paragraph; sections cannot break inside tables, headers or footers.");
+        }
+
+        if (paragraph.ParagraphProperties?.SectionProperties is not null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"{anchor.CanonicalPath} already ends a section.",
+                "Pick a different paragraph, or set the existing /section[i] properties instead.");
+        }
+
+        // The final section must stay addressable, so the body-level sectPr is materialized first.
+        var bodySectPr = body.Elements<SectionProperties>().FirstOrDefault();
+        if (bodySectPr is null)
+        {
+            bodySectPr = new SectionProperties();
+            body.AppendChild(bodySectPr);
+        }
+
+        var governing = GoverningSectionProperties(body, paragraph) ?? bodySectPr;
+        var sectPr = (SectionProperties)governing.CloneNode(true);
+        sectPr.RemoveAllChildren<SectionType>(); // the break kind belongs to the new break, not the clone source
+        if (kind == "continuous")
+        {
+            InsertSectionChild(sectPr, new SectionType { Val = SectionMarkValues.Continuous });
+        }
+
+        var pPr = paragraph.ParagraphProperties ??= new ParagraphProperties();
+        pPr.SectionProperties = sectPr;
+
+        var sections = EnumerateSections(doc);
+        var index = sections.FindIndex(s => ReferenceEquals(s, sectPr)) + 1;
+        return new
+        {
+            op = "add",
+            type = "sectionBreak",
+            path = SectionPath(index),
+            kind,
+            sections = sections.Count,
+        };
+    }
+
+    /// <summary>The sectPr that governs the target paragraph: the first one at or after it in document order.</summary>
+    private static SectionProperties? GoverningSectionProperties(Body body, Paragraph target)
+    {
+        var seen = false;
+        foreach (var child in body.ChildElements)
+        {
+            if (ReferenceEquals(child, target))
+            {
+                seen = true;
+            }
+
+            if (!seen)
+            {
+                continue;
+            }
+
+            if (child is Paragraph p && p.ParagraphProperties?.SectionProperties is { } sectPr)
+            {
+                return sectPr;
+            }
+
+            if (child is SectionProperties bodySectPr)
+            {
+                return bodySectPr;
+            }
+        }
+
+        return body.Elements<SectionProperties>().FirstOrDefault();
+    }
+
+    /// <summary>
+    /// <c>{"op":"remove","path":"/section[i]"}</c>: removing a paragraph-level
+    /// break merges FORWARD — the removed section's content joins the following
+    /// section and adopts ITS page setup (Word's delete-a-break behavior).
+    /// Removing the final (body-level) section merges BACKWARD: the previous
+    /// break's sectPr moves to the body, so the previous section's setup governs
+    /// the trailing content. The single remaining section cannot be removed.
+    /// </summary>
+    private static object ApplyRemoveSection(WordprocessingDocument doc, EditOp op)
+    {
+        var path = DocPath.Parse(op.Path);
+        var sectPr = ResolveSection(doc, path, createImplicit: false);
+        var canonical = path.ToCanonicalString();
+
+        if (sectPr.Parent is ParagraphProperties pPr)
+        {
+            sectPr.Remove();
+            if (!pPr.HasChildren)
+            {
+                pPr.Remove();
+            }
+
+            return new
+            {
+                op = "remove",
+                path = canonical,
+                type = "section",
+                merge = "forward",
+                sections = Math.Max(EnumerateSections(doc).Count, 1),
+            };
+        }
+
+        var sections = EnumerateSections(doc);
+        if (sections.Count <= 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "A document always has at least one section; /section[1] cannot be removed.",
+                "Remove a section break instead (a /section[i] that ends mid-document), or change this section's setup with set.");
+        }
+
+        var body = (Body)sectPr.Parent!;
+        var previous = sections[^2]; // the last paragraph-level break
+        var previousPPr = (ParagraphProperties)previous.Parent!;
+
+        sectPr.Remove();
+        previous.Remove();
+        if (!previousPPr.HasChildren)
+        {
+            previousPPr.Remove();
+        }
+
+        body.AppendChild(previous); // body-level sectPr must stay the last body child
+
+        return new
+        {
+            op = "remove",
+            path = canonical,
+            type = "section",
+            merge = "backward",
+            sections = Math.Max(EnumerateSections(doc).Count, 1),
+        };
+    }
+
+    // -------------------------------------------------------------- structure
+
+    /// <summary>
+    /// Sections with their block ranges for read --view structure: every
+    /// paragraph-level sectPr closes a section at its paragraph; the body-level
+    /// (or implicit) sectPr closes the final one at the last block.
+    /// </summary>
+    private static List<object> SectionsStructure(Body body)
+    {
+        var blocks = new List<string>();
+        var breakAt = new List<(int BlockIndex, SectionProperties SectPr)>();
+        int p = 0, table = 0;
+        foreach (var child in body.ChildElements)
+        {
+            switch (child)
+            {
+                case Paragraph paragraph:
+                    blocks.Add(SectionBlockPath("p", ++p));
+                    if (paragraph.ParagraphProperties?.SectionProperties is { } sectPr)
+                    {
+                        breakAt.Add((blocks.Count - 1, sectPr));
+                    }
+
+                    break;
+
+                case Table:
+                    blocks.Add(SectionBlockPath("table", ++table));
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        var sections = new List<object>();
+        var start = 0;
+        foreach (var (blockIndex, sectPr) in breakAt)
+        {
+            sections.Add(SectionRangeShape(sections.Count + 1, sectPr, blocks, start, blockIndex));
+            start = blockIndex + 1;
+        }
+
+        var bodySectPr = body.Elements<SectionProperties>().FirstOrDefault();
+        sections.Add(SectionRangeShape(sections.Count + 1, bodySectPr, blocks, start, blocks.Count - 1));
+        return sections;
+    }
+
+    private static string SectionBlockPath(string name, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"/body/{name}[{index}]");
+
+    private static object SectionRangeShape(int index, SectionProperties? sectPr, List<string> blocks, int from, int to) => new
+    {
+        path = SectionPath(index),
+        kind = SectionKindName(sectPr),
+        start = from <= to && from < blocks.Count ? blocks[from] : null,
+        end = to >= from && to >= 0 && to < blocks.Count ? blocks[to] : null,
+        blocks = Math.Max(0, to - from + 1),
+    };
+
+    /// <summary>How the section begins; absent w:type means nextPage.</summary>
+    private static string SectionKindName(SectionProperties? sectPr)
+    {
+        var value = sectPr?.GetFirstChild<SectionType>()?.Val?.Value;
+        if (value is null)
+        {
+            return "nextPage";
+        }
+
+        if (value == SectionMarkValues.Continuous)
+        {
+            return "continuous";
+        }
+
+        if (value == SectionMarkValues.EvenPage)
+        {
+            return "evenPage";
+        }
+
+        if (value == SectionMarkValues.OddPage)
+        {
+            return "oddPage";
+        }
+
+        if (value == SectionMarkValues.NextColumn)
+        {
+            return "nextColumn";
+        }
+
+        return "nextPage";
+    }
+
     // ------------------------------------------------------------------- get
 
     /// <summary>get /section[i] data: orientation, page size and margins (cm).</summary>
@@ -280,6 +536,7 @@ public sealed partial class WordHandler
         {
             ["index"] = index,
             ["sections"] = Math.Max(sections.Count, 1),
+            ["kind"] = SectionKindName(sectPr),
             ["orientation"] = landscape ? "landscape" : "portrait",
             ["pageSize"] = sizeName,
             ["widthCm"] = width is { } w ? TwipsToCm(w) : null,

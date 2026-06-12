@@ -8,13 +8,17 @@ using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx;
 
+/// <summary>What one applied op reports back: the canonical target, plus replace counters for replace ops.</summary>
+internal sealed record PptxOpOutcome(string Target, int? Replacements = null, IReadOnlyList<string>? Locations = null);
+
 /// <summary>
 /// Applies one edit op to an open presentation. Callers batch ops over an
 /// in-memory stream and only write the file when every op succeeded (atomic).
 /// </summary>
 internal static class PptxEditor
 {
-    private static readonly IReadOnlyList<string> AddTypes = ["slide", "shape", "textbox", "image", "chart"];
+    private static readonly IReadOnlyList<string> AddTypes =
+        ["slide", "shape", "textbox", "image", "chart", "animation", "comment"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
@@ -42,8 +46,8 @@ internal static class PptxEditor
     /// <summary>Default stroke width for line shapes (1.5pt).</summary>
     private const int LineWidthEmu = 19_050;
 
-    /// <summary>Applies the op and returns the canonical path of the affected node.</summary>
-    public static string Apply(PresentationPart presentation, EditOp op, Workspace workspace)
+    /// <summary>Applies the op and returns the canonical path of the affected node (plus replace counters).</summary>
+    public static PptxOpOutcome Apply(PresentationPart presentation, EditOp op, Workspace workspace)
     {
         if (PptxAddress.Parse(op.Path).IsMaster)
         {
@@ -53,18 +57,26 @@ internal static class PptxEditor
                 "Edit slides instead, or copy a layout-derived slide via 'add slide' with props {\"layout\": N}.");
         }
 
-        return op.Op switch
+        switch (op.Op)
         {
-            "add" => ApplyAdd(presentation, op, workspace),
-            "set" => ApplySet(presentation, op),
-            "remove" => ApplyRemove(presentation, op),
-            "move" => ApplyMove(presentation, op),
-            _ => throw new AiofficeException(
-                ErrorCodes.InvalidArgs,
-                $"Unknown op '{op.Op}'.",
-                "Use set, add, remove or move.",
-                candidates: EditOp.Kinds),
-        };
+            case "add":
+                return new PptxOpOutcome(ApplyAdd(presentation, op, workspace));
+            case "set":
+                return new PptxOpOutcome(ApplySet(presentation, op));
+            case "remove":
+                return new PptxOpOutcome(ApplyRemove(presentation, op));
+            case "move":
+                return new PptxOpOutcome(ApplyMove(presentation, op));
+            case "replace":
+                var result = PptxReplace.Apply(presentation, op);
+                return new PptxOpOutcome(result.Target, result.Replacements, result.Locations);
+            default:
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown op '{op.Op}' for pptx.",
+                    "Use set, add, remove, move or replace (accept/reject apply to docx tracked changes).",
+                    candidates: ["set", "add", "remove", "move", "replace"]);
+        }
     }
 
     private static string ApplyAdd(PresentationPart presentation, EditOp op, Workspace workspace)
@@ -102,19 +114,42 @@ internal static class PptxEditor
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
+            case "animation":
+                return PptxAnimations.Add(presentation, address, op.Props);
+
+            case "comment":
+            {
+                if (address.IsComment)
+                {
+                    throw PptxComments.RepliesUnsupported();
+                }
+
+                if (address.HasShape || address.IsChart || address.IsAnimation)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add comment targets a slide, not '{op.Path}'.",
+                        "Use the slide path: {\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"comment\"," +
+                        "\"props\":{\"text\":\"...\"}}.");
+                }
+
+                return PptxComments.Add(presentation, address, op.Props);
+            }
+
             default:
                 throw new AiofficeException(
                     op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
-                    "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture) " +
-                    "and chart (bar/line/pie). For tables, build the deck and add them in PowerPoint for now.",
+                    "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture), " +
+                    "chart (bar/line/pie), animation (on a shape path) and comment. " +
+                    "For tables, build the deck and add them in PowerPoint for now.",
                     candidates: AddTypes);
         }
     }
 
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape || address.IsChart)
+        if (address.HasShape || address.IsChart || address.IsAnimation || address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -255,11 +290,35 @@ internal static class PptxEditor
 
         if (address.IsChart)
         {
+            if (op.Props.ContainsKey("embedData"))
+            {
+                return SetChartEmbedData(presentation, address, op.Props);
+            }
+
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 "Chart data and titles cannot be edited in place yet.",
                 "Remove the chart ({\"op\":\"remove\",\"path\":\"" + address.CanonicalChartPath + "\"}) " +
-                "and add it again with the new data; position/size/name sets target its shape path.");
+                "and add it again with the new data; {\"embedData\":true} retrofits an editable workbook; " +
+                "position/size/name sets target its shape path.");
+        }
+
+        if (address.IsAnimation)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Animations cannot be edited in place yet.",
+                "Remove the animation ({\"op\":\"remove\",\"path\":\"" + address.CanonicalAnimationPath + "\"}) " +
+                "and add it again with the new effect/trigger/duration.");
+        }
+
+        if (address.IsComment)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Comments cannot be edited in place yet.",
+                "Remove the comment ({\"op\":\"remove\",\"path\":\"" + address.CanonicalCommentPath + "\"}) " +
+                "and add a new one with the corrected text.");
         }
 
         if (!address.HasShape)
@@ -286,6 +345,28 @@ internal static class PptxEditor
 
         SetShapeProps(view, op.Props);
         return view.CanonicalPath(address.SlideIndex);
+    }
+
+    /// <summary>set /slide[i]/chart[k] {embedData:true}: retrofit an embedded, editable data workbook.</summary>
+    private static string SetChartEmbedData(PresentationPart presentation, PptxAddress address, JsonObject props)
+    {
+        if (props.Count > 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "embedData cannot be combined with other chart props.",
+                "Send {\"op\":\"set\",\"path\":\"" + address.CanonicalChartPath + "\",\"props\":{\"embedData\":true}} on its own.");
+        }
+
+        if (!props.TryGetPropertyValue("embedData", out var node) || node is null || !AsBool("embedData", node))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "embedData only supports the value true (charts cannot be un-embedded).",
+                "Use {\"embedData\":true} to retrofit the workbook; to drop it, re-add the chart in PowerPoint.");
+        }
+
+        return PptxCharts.EmbedData(presentation, address);
     }
 
     /// <summary>Slide-level set: solid background, transition and transition duration.</summary>
@@ -378,6 +459,16 @@ internal static class PptxEditor
             return PptxCharts.Remove(presentation, address);
         }
 
+        if (address.IsAnimation)
+        {
+            return PptxAnimations.Remove(presentation, address);
+        }
+
+        if (address.IsComment)
+        {
+            return PptxComments.Remove(presentation, address);
+        }
+
         if (address.RunIndex is not null)
         {
             throw new AiofficeException(
@@ -437,6 +528,14 @@ internal static class PptxEditor
                 ErrorCodes.InvalidArgs,
                 "Speaker notes cannot be moved; they belong to their slide.",
                 "Move the slide itself ({\"op\":\"move\",\"path\":\"/slide[3]\",\"position\":\"1\"}), or set/remove the notes text.");
+        }
+
+        if (address.IsAnimation || address.IsComment)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved.",
+                "Animations play in insertion order (remove and re-add to reorder); comments are anchored by x/y.");
         }
 
         if (address.HasShape || address.IsChart)

@@ -238,7 +238,7 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.5 `office_edit`（fat tool — 所有变更走这里）
 
-**用途**：增 / 改 / 删 / 移 / 修订裁决，一次调用 = 一个**原子**保存周期：全部 ops 依序成功才落盘，任何一条失败则整批不写。自动快照 + rev 守卫。M2 起支持 docx 修订（`track`/`author` + `accept`/`reject` op）。
+**用途**：增 / 改 / 删 / 移 / 查找替换 / 修订裁决，一次调用 = 一个**原子**保存周期：全部 ops 依序成功才落盘，任何一条失败则整批不写。自动快照 + rev 守卫。M2 起支持 docx 修订（`track`/`author` + `accept`/`reject` op）；M4 起支持 `replace` op（三格式共享契约）。
 
 ```json
 {
@@ -252,10 +252,10 @@ aioffice mcp [--workspace <dir>]
       "items": {
         "type": "object",
         "properties": {
-          "op": { "type": "string", "enum": ["set", "add", "remove", "move", "accept", "reject"],
-            "description": "accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body)" },
-          "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". \"/\" = document-level props (set only)" },
-          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, cell, slide, shape, image, comment, style, header, footer, chart, pivot, conditionalFormat" },
+          "op": { "type": "string", "enum": ["set", "add", "remove", "move", "replace", "accept", "reject"],
+            "description": "accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning" },
+          "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\"" },
+          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation" },
           "props": { "type": "object", "additionalProperties": { "type": "string" },
             "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals" },
           "position": { "type": ["integer", "string"],
@@ -297,6 +297,8 @@ aioffice mcp [--workspace <dir>]
 > 注意示例最后一条：前面插入了一段，后续 ops 中的位置索引按**执行时点**解析（`/body/p[7]` 在插入后实际命中原第 7 段、现第 8 段）。同批内 ops 之间有索引依赖时，把目标排在插入/删除**之前**，或拆成两次 edit 用 query 重新寻址。
 
 **跨文档 dataFrom（M3）**：目标是 pptx 时，`add chart` 的 props 可用 `{"dataFrom":"metrics.xlsx!Sheet1/A1:B5"}` 取代字面量 categories/series——命令层（CLI 与 MCP 共用）经 workspace 沙箱解析工作簿、用 xlsx handler 读取区域：首列 → 分类，表头行 → 系列名，其余列 → 系列值（空格 = 数据缺口）。区域写错 → 类型化错误 + candidates（表名 / 最近 usedRange）；展开发生在 rev 守卫与快照**之前**，坏数据源不会写盘。带空格的表名用引号：`book.xlsx!'Q3 Data'/A1:C5`。
+
+**文档级查找替换（M4）**：`{"op":"replace","path":"/","props":{"find":"2025","replace":"2026"}}` 在命令层（CLI 与 MCP 共用 `ReplaceSugar`）展开为该格式的缺省作用域——docx `/body` + 全部 `/header[i]`/`/footer[i]`（`track:true` 时仅 body，tracked replace 是 body 契约）、xlsx 每个 sheet、pptx 每页 `/slide[i]`（slide 作用域缺省含演讲者备注）。逐作用域结果聚合为顶层 `data.replacements` + `data.locations`（≤20 条规范路径）；任一处命中则逐作用域的 `find_no_match` warning 全部吞掉，全文档零命中则坍缩为**一条**文档级 warning。展开同样发生在 rev 守卫与快照之前。CLI 等价糖：`aioffice edit f --find X --replace Y [--regex] [--match-case] [--whole-word]`。
 
 **映射 CLI**：`aioffice edit <file> --ops <json|@file> [--track] [--author NAME] [--dry-run] [--expect-rev R]`；单 op 糖：`--set <path> k=v...`、`--add <path> --type T k=v...`、`--remove <path>`。
 

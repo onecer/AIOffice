@@ -7,7 +7,7 @@ using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx.Tests;
 
-/// <summary>M3 native charts: graphicFrame + ChartPart with literal data caches.</summary>
+/// <summary>Native charts: graphicFrame + ChartPart with reference caches and an embedded data workbook (M4).</summary>
 public sealed class ChartTests : IDisposable
 {
     private readonly TempWorkspace _ws = new();
@@ -55,7 +55,7 @@ public sealed class ChartTests : IDisposable
     }
 
     [Fact]
-    public void AddBarChart_WritesCachedChartMl()
+    public void AddBarChart_WritesReferenceCachedChartMl()
     {
         Create();
         var data = Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("bar", "Revenue")));
@@ -72,16 +72,25 @@ public sealed class ChartTests : IDisposable
             var series = barChart.Elements<C.BarChartSeries>().ToList();
             Assert.Equal(2, series.Count);
 
-            // Categories live in a literal string cache (no workbook references anywhere).
-            var stringLiteral = series[0].Descendants<C.StringLiteral>().Single();
-            Assert.Equal(4u, stringLiteral.GetFirstChild<C.PointCount>()!.Val!.Value);
-            Assert.Equal("Q1", stringLiteral.Elements<C.StringPoint>().First().NumericValue!.Text);
+            // Categories live in a string reference cache pointing at the embedded Sheet1.
+            var categoryRef = series[0].Descendants<C.StringReference>()
+                .Single(r => r.Parent is C.CategoryAxisData);
+            Assert.Equal("Sheet1!$A$2:$A$5", categoryRef.GetFirstChild<C.Formula>()!.Text);
+            var stringCache = categoryRef.GetFirstChild<C.StringCache>()!;
+            Assert.Equal(4u, stringCache.GetFirstChild<C.PointCount>()!.Val!.Value);
+            Assert.Equal("Q1", stringCache.Elements<C.StringPoint>().First().NumericValue!.Text);
 
-            var numberLiteral = series[0].Descendants<C.NumberLiteral>().Single();
-            Assert.Equal(4u, numberLiteral.GetFirstChild<C.PointCount>()!.Val!.Value);
-            Assert.Equal("10", numberLiteral.Elements<C.NumericPoint>().First().NumericValue!.Text);
+            var valuesRef = series[0].Descendants<C.NumberReference>().Single();
+            Assert.Equal("Sheet1!$B$2:$B$5", valuesRef.GetFirstChild<C.Formula>()!.Text);
+            var numberCache = valuesRef.GetFirstChild<C.NumberingCache>()!;
+            Assert.Equal(4u, numberCache.GetFirstChild<C.PointCount>()!.Val!.Value);
+            Assert.Equal("10", numberCache.Elements<C.NumericPoint>().First().NumericValue!.Text);
 
-            Assert.Empty(chartPart.ChartSpace.Descendants<C.Formula>());
+            // The second series points at its own column.
+            Assert.Equal(
+                "Sheet1!$C$2:$C$5",
+                series[1].Descendants<C.NumberReference>().Single().GetFirstChild<C.Formula>()!.Text);
+
             Assert.NotNull(chartPart.ChartSpace.Descendants<C.CategoryAxis>().SingleOrDefault());
             Assert.NotNull(chartPart.ChartSpace.Descendants<C.ValueAxis>().SingleOrDefault());
             Assert.Contains("Revenue", chartPart.ChartSpace.Descendants<C.Title>().Single().InnerText, StringComparison.Ordinal);
@@ -126,7 +135,7 @@ public sealed class ChartTests : IDisposable
     }
 
     [Fact]
-    public void AddChart_AttachesDataNotEditableWarning()
+    public void AddChart_AttachesNoWarning_DataIsEmbedded()
     {
         Create();
         var envelope = _handler.Edit(
@@ -134,13 +143,12 @@ public sealed class ChartTests : IDisposable
             [TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("bar"))]);
 
         TestEnv.AssertOk(envelope);
-        var warning = Assert.Single(envelope.Meta.Warnings!);
-        Assert.Equal("chart_data_not_editable", warning.Code);
+        Assert.Null(envelope.Meta.Warnings); // the M3 chart_data_not_editable warning is gone
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
     [Fact]
-    public void Get_ChartPath_ReportsDataAndNotEditable()
+    public void Get_ChartPath_ReportsDataAndEditable()
     {
         Create();
         Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("bar", "Revenue")));
@@ -151,7 +159,7 @@ public sealed class ChartTests : IDisposable
         Assert.Equal("chart", detail["kind"]!.GetValue<string>());
         Assert.Equal("bar", detail["chartKind"]!.GetValue<string>());
         Assert.Equal("Revenue", detail["title"]!.GetValue<string>());
-        Assert.False(detail["dataEditable"]!.GetValue<bool>());
+        Assert.True(detail["dataEditable"]!.GetValue<bool>());
 
         var categories = detail["categories"]!.AsArray();
         Assert.Equal(["Q1", "Q2", "Q3", "Q4"], categories.Select(c => c!.GetValue<string>()));
@@ -179,7 +187,7 @@ public sealed class ChartTests : IDisposable
         var chart = detail["chart"]!.AsObject();
         Assert.Equal("pie", chart["kind"]!.GetValue<string>());
         Assert.Equal("Share", chart["title"]!.GetValue<string>());
-        Assert.False(chart["dataEditable"]!.GetValue<bool>());
+        Assert.True(chart["dataEditable"]!.GetValue<bool>());
         Assert.Equal("Series A", chart["seriesNames"]![0]!.GetValue<string>());
         TestEnv.AssertValid(_ws, "deck.pptx");
     }

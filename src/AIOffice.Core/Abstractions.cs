@@ -18,7 +18,7 @@ public enum DocumentKind
 /// </summary>
 public sealed record EditOp
 {
-    public static readonly IReadOnlyList<string> Kinds = ["set", "add", "remove", "move", "accept", "reject"];
+    public static readonly IReadOnlyList<string> Kinds = ["set", "add", "remove", "move", "replace", "accept", "reject"];
 
     /// <summary>set | add | remove | move.</summary>
     [JsonPropertyName("op")]
@@ -72,8 +72,9 @@ public sealed record EditOp
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
-                    $"ops[{i}].op is '{op.Op}' but must be one of: set, add, remove, move, accept, reject.",
-                    "Use set to change properties, add to insert, remove to delete, move to reposition, accept/reject to resolve tracked revisions.",
+                    $"ops[{i}].op is '{op.Op}' but must be one of: set, add, remove, move, replace, accept, reject.",
+                    "Use set to change properties, add to insert, remove to delete, move to reposition, " +
+                    "replace for find/replace, accept/reject to resolve tracked revisions.",
                     candidates: Kinds);
             }
 
@@ -85,7 +86,12 @@ public sealed record EditOp
                     "Every operation needs a target path, e.g. /body/p[3] or /Sheet1/A1.");
             }
 
-            _ = DocPath.Parse(op.Path); // throws invalid_path with grammar hint
+            // "/" is the document-wide replace scope (M4): the command layer
+            // expands it into the format's default scopes before handlers run.
+            if (op.Op != "replace" || op.Path != "/")
+            {
+                _ = DocPath.Parse(op.Path); // throws invalid_path with grammar hint
+            }
         }
 
         return ops;

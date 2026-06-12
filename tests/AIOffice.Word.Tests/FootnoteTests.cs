@@ -103,17 +103,8 @@ public sealed class FootnoteTests : WordTestBase
         AssertValidatesClean(file);
     }
 
-    [Fact]
-    public void Endnotes_are_unsupported_naming_footnotes()
-    {
-        var file = CreateDoc(title: "Ends");
-
-        var ex = Assert.Throws<AiofficeException>(() =>
-            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"x"}}]"""));
-
-        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
-        Assert.Contains("footnote", ex.Suggestion, StringComparison.Ordinal);
-    }
+    // Endnotes_are_unsupported_naming_footnotes was removed in M4: endnotes are
+    // a real feature now (same surface as footnotes) — see EndnoteTests.
 
     [Fact]
     public void Footnote_text_is_required()

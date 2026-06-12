@@ -70,6 +70,11 @@ public sealed partial class WordHandler
             .ToList();
         var footnoteSection = footnotes.Count > 0 ? footnotes : null;
 
+        var endnotes = EnumerateEndnotes(doc)
+            .Select(e => new { path = EndnotePath(e.Id), id = e.Id, text = EndnoteText(e.Endnote) })
+            .ToList();
+        var endnoteSection = endnotes.Count > 0 ? endnotes : null;
+
         var total = paragraphs.Count;
         var (from, to) = ParseRange(StringArg(args, "range"), total);
         var window = paragraphs.Skip(from - 1).Take(to - from + 1).ToList();
@@ -92,10 +97,10 @@ public sealed partial class WordHandler
                 kept.Add(line);
             }
 
-            return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = kept, footnotes = footnoteSection };
+            return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = kept, footnotes = footnoteSection, endnotes = endnoteSection };
         }
 
-        return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = window, footnotes = footnoteSection };
+        return new { view = "text", totalParagraphs = total, range = $"{from}..{to}", lines = window, footnotes = footnoteSection, endnotes = endnoteSection };
     }
 
     private static (int From, int To) ParseRange(string? range, int total)
@@ -228,6 +233,10 @@ public sealed partial class WordHandler
             .Select(b => BookmarkShape(doc, b))
             .ToList();
 
+        var tocs = EnumerateTocs(doc)
+            .Select((sdt, i) => new { path = $"/toc[{i + 1}]", properties = TocShape(sdt) })
+            .ToList();
+
         return new
         {
             view = "structure",
@@ -235,6 +244,8 @@ public sealed partial class WordHandler
             headers = headers.Count > 0 ? headers : null,
             footers = footers.Count > 0 ? footers : null,
             bookmarks = bookmarks.Count > 0 ? bookmarks : null,
+            tocs = tocs.Count > 0 ? tocs : null,
+            sections = SectionsStructure(body),
         };
 
         object Describe(OpenXmlElement element, string path, string type, int depth)

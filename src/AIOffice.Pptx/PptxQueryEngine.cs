@@ -86,7 +86,8 @@ internal static class PptxQueryEngine
     /// <summary>Query restricted to one container: a slide, a master or one of its layouts.</summary>
     private static List<object> QueryScoped(PresentationPart presentation, Selector selector, PptxAddress scope)
     {
-        if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes || scope.IsChart)
+        if (scope.HasShape || scope.ParagraphIndex is not null || scope.IsNotes || scope.IsChart ||
+            scope.IsAnimation || scope.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,

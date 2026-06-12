@@ -75,7 +75,12 @@ public static class HelpTopics
             ["edit-ops"] = (
                 """
                 ## office_edit ops — the only mutation surface
-                kinds: set (change props), add (insert child; path = PARENT; needs type), remove (delete), move (reposition).
+                kinds: set (change props), add (insert child; path = PARENT; needs type), remove (delete), move (reposition),
+                       replace (find/replace: props {find, replace, regex?, matchCase?, wholeWord?}; scope = any container path,
+                       or "/" for the whole document — docx body+headers+footers, every sheet, every slide incl. notes).
+                replace results carry {replacements, locations (max 20)}; 0 matches is ok:true + a find_no_match warning.
+                replace with track:true (docx) records w:del+w:ins revision pairs; tracked replace is body-scoped.
+                regex uses .NET syntax with a 2s match budget (timeout -> invalid_args). CLI sugar: --find X --replace Y [--regex --match-case --whole-word].
                 position (add/move): 1-based integer within parent | "before:<path>" | "after:<path>" | omit = append.
                 props are string-valued: {"text":"Hi","bold":"true","size":"12pt","fill":"FF0000"}; sizes unit-qualified (12pt, 2cm); colors hex or named.
                 Atomicity: the whole ops[] batch is one save — any failure means NOTHING is written.

@@ -75,6 +75,30 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "endnote":
+                {
+                    var properties = GetEndnoteProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = EndnotePath((int)properties["id"]!), type = "endnote", properties },
+                        meta);
+                }
+
+                case "toc":
+                {
+                    var properties = GetTocProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = "/toc[1]", type = "toc", properties },
+                        meta);
+                }
+
+                case "watermark":
+                {
+                    var properties = GetWatermarkProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = "/watermark[1]", type = "watermark", properties },
+                        meta);
+                }
+
                 default:
                     break;
             }

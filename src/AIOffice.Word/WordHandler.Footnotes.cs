@@ -58,12 +58,8 @@ public sealed partial class WordHandler
         return new { op = "add", type = "footnote", path = FootnotePath(id), anchor = anchor.CanonicalPath };
     }
 
-    /// <summary>The honest refusal for endnotes, naming the footnote workaround.</summary>
-    private static AiofficeException EndnotesUnsupported() => new(
-        ErrorCodes.UnsupportedFeature,
-        "Endnotes are not supported.",
-        "Use a footnote instead ({\"op\":\"add\",\"path\":\"/body/p[n]\",\"type\":\"footnote\",\"props\":{\"text\":\"…\"}}); " +
-        "it renders at the bottom of the page rather than the end of the document.");
+    // The EndnotesUnsupported() refusal that lived here through M3 is gone:
+    // endnotes are a real feature since M4 (see WordHandler.Endnotes.cs).
 
     // ---------------------------------------------------------------- remove
 
@@ -201,8 +197,8 @@ public sealed partial class WordHandler
     // ------------------------------------------------------------- text view
 
     /// <summary>
-    /// InnerText-compatible paragraph text with list markers prefixed and
-    /// [^n] footnote markers where the references sit.
+    /// InnerText-compatible paragraph text with list markers prefixed, [^n]
+    /// footnote markers and [^eN] endnote markers where the references sit.
     /// </summary>
     private static string DisplayText(WordprocessingDocument doc, OpenXmlElement element)
     {
@@ -218,6 +214,10 @@ public sealed partial class WordHandler
             {
                 case FootnoteReference reference:
                     sb.Append("[^").Append(reference.Id?.Value ?? 0).Append(']');
+                    break;
+
+                case EndnoteReference reference:
+                    sb.Append("[^e").Append(reference.Id?.Value ?? 0).Append(']');
                     break;
 
                 case OpenXmlLeafTextElement leaf:

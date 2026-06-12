@@ -19,7 +19,7 @@ namespace AIOffice.Pptx;
 /// </summary>
 public sealed partial class PptxHandler : IFormatHandler
 {
-    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure"];
+    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure", "comments"];
     private static readonly IReadOnlyList<string> RenderTargets = ["svg", "html", "text"];
 
     [GeneratedRegex(@"^([0-9]+)(?:\.\.([0-9]+))?$")]
@@ -59,7 +59,7 @@ public sealed partial class PptxHandler : IFormatHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}' for pptx.",
-                "Use --view outline, text, stats or structure.",
+                "Use --view outline, text, stats, structure or comments.",
                 candidates: Views);
         }
 
@@ -73,6 +73,7 @@ public sealed partial class PptxHandler : IFormatHandler
             "outline" => BuildOutline(slides),
             "text" => BuildTextView(slides),
             "stats" => BuildStats(slides),
+            "comments" => PptxComments.CommentsView(presentation, slides.Select(s => (s.Index, s.Part))),
             _ => BuildStructure(presentation, slides),
         };
     });
@@ -100,6 +101,16 @@ public sealed partial class PptxHandler : IFormatHandler
         if (address.IsChart)
         {
             return PptxCharts.Detail(presentation, address);
+        }
+
+        if (address.IsAnimation)
+        {
+            return PptxAnimations.Detail(presentation, address);
+        }
+
+        if (address.IsComment)
+        {
+            return PptxComments.Detail(presentation, address);
         }
 
         if (address.IsMaster)
@@ -153,18 +164,31 @@ public sealed partial class PptxHandler : IFormatHandler
             var presentation = PptxDoc.RequirePresentationPart(doc, file);
             foreach (var op in ops)
             {
-                var target = PptxEditor.Apply(presentation, op, ctx.Workspace);
-                results.Add(new { Op = op.Op, Path = op.Path, Target = target });
+                var outcome = PptxEditor.Apply(presentation, op, ctx.Workspace);
+                if (outcome.Replacements is { } replacements)
+                {
+                    results.Add(new
+                    {
+                        Op = op.Op,
+                        Path = op.Path,
+                        Target = outcome.Target,
+                        Replacements = replacements,
+                        Locations = outcome.Locations,
+                    });
+                    if (replacements == 0)
+                    {
+                        warnings.Add(new Warning(
+                            "find_no_match",
+                            Units.Inv($"replace on '{op.Path}' matched nothing; the deck is unchanged for this op.")));
+                    }
+                }
+                else
+                {
+                    results.Add(new { Op = op.Op, Path = op.Path, Target = outcome.Target });
+                }
             }
 
             slideCount = PptxDoc.Slides(presentation).Count;
-        }
-
-        // Charts carry cached literal data only — be honest about "Edit Data".
-        if (ops.Any(op => string.Equals(op.Op, "add", StringComparison.Ordinal) &&
-                          string.Equals(op.Type?.Trim(), "chart", StringComparison.OrdinalIgnoreCase)))
-        {
-            warnings.Add(PptxCharts.DataNotEditableWarning);
         }
 
         // Every op succeeded: snapshot the pre-image, then write atomically.
@@ -404,7 +428,7 @@ public sealed partial class PptxHandler : IFormatHandler
                 "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
         }
 
-        if (address.HasShape || address.IsNotes || address.IsChart)
+        if (address.HasShape || address.IsNotes || address.IsChart || address.IsAnimation || address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -519,30 +543,37 @@ public sealed partial class PptxHandler : IFormatHandler
                         .ToList(),
                 };
             }).ToList<object>(),
-            Slides = slides.Select(s => new
+            Slides = slides.Select(s =>
             {
-                Path = Units.Inv($"/slide[{s.Index}]"),
-                Index = s.Index,
-                Layout = PptxDoc.LayoutPathOf(presentation, s.Part),
-                Shapes = PptxDoc.Shapes(s.Part).Select(shape =>
+                var animations = PptxAnimations.List(s.Part);
+                return new
                 {
-                    var geometry = PptxDoc.Geometry(shape.Element);
-                    var paragraphs = (shape.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().Count() ?? 0;
-                    return new
+                    Path = Units.Inv($"/slide[{s.Index}]"),
+                    Index = s.Index,
+                    Layout = PptxDoc.LayoutPathOf(presentation, s.Part),
+                    Shapes = PptxDoc.Shapes(s.Part).Select(shape =>
                     {
-                        Path = shape.CanonicalPath(s.Index),
-                        OrdinalPath = shape.OrdinalPath(s.Index),
-                        Id = shape.Id,
-                        Kind = shape.Kind,
-                        Name = shape.Name,
-                        X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
-                        Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
-                        W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
-                        H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
-                        Fill = PptxDoc.FillHex(shape.Element),
-                        Paragraphs = paragraphs,
-                    };
-                }).ToList<object>(),
+                        var geometry = PptxDoc.Geometry(shape.Element);
+                        var paragraphs = (shape.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().Count() ?? 0;
+                        return new
+                        {
+                            Path = shape.CanonicalPath(s.Index),
+                            OrdinalPath = shape.OrdinalPath(s.Index),
+                            Id = shape.Id,
+                            Kind = shape.Kind,
+                            Name = shape.Name,
+                            X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
+                            Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
+                            W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
+                            H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
+                            Fill = PptxDoc.FillHex(shape.Element),
+                            Paragraphs = paragraphs,
+                        };
+                    }).ToList<object>(),
+                    Animations = animations.Count == 0
+                        ? null
+                        : animations.Select(a => PptxAnimations.Project(a, s.Index, s.Part)).ToList(),
+                };
             }).ToList<object>(),
         };
     }

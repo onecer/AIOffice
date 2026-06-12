@@ -35,6 +35,8 @@ public static class ArgParser
     private static readonly HashSet<string> BooleanFlags = new(StringComparer.Ordinal)
     {
         "json", "pretty", "quiet", "dry-run", "track",
+        // find/replace sugar modifiers (M4): never eat the next token.
+        "regex", "match-case", "whole-word",
     };
 
     public static ParsedArgs Parse(IReadOnlyList<string> argv)

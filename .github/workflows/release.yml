@@ -1,0 +1,89 @@
+name: release
+
+# Tag-driven release automation (M4): pushing a tag like v0.5.0 builds, tests,
+# publishes the 6 single-file self-contained binaries (cross-compile from one
+# macOS job is proven — same flags as the manual v0.4.0 run), checksums them
+# and creates the GitHub release with notes rendered from
+# scripts/release-notes-template.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build (warnings are errors)
+        run: dotnet build AIOffice.sln -c Release -warnaserror
+
+      - name: Test (all projects)
+        run: dotnet test AIOffice.sln -c Release --no-build --verbosity normal
+
+      - name: Publish single-file binaries (6 rids)
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_for() {
+            case "$1" in
+              osx-arm64)   echo aioffice-mac-arm64 ;;
+              osx-x64)     echo aioffice-mac-x64 ;;
+              linux-x64)   echo aioffice-linux-x64 ;;
+              linux-arm64) echo aioffice-linux-arm64 ;;
+              win-x64)     echo aioffice-win-x64.exe ;;
+              win-arm64)   echo aioffice-win-arm64.exe ;;
+            esac
+          }
+          mkdir -p release
+          for rid in osx-arm64 osx-x64 linux-x64 linux-arm64 win-x64 win-arm64; do
+            dotnet publish src/AIOffice.Cli -r "$rid" -c Release \
+              -p:PublishSingleFile=true --self-contained -o "dist/$rid"
+            src="dist/$rid/aioffice"
+            case "$rid" in win-*) src="dist/$rid/aioffice.exe" ;; esac
+            cp "$src" "release/$(asset_for "$rid")"
+          done
+
+      - name: Checksums
+        shell: bash
+        run: cd release && shasum -a 256 aioffice-* > SHA256SUMS
+
+      - name: Smoke the host binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x release/aioffice-mac-arm64
+          mkdir -p smoke
+          ./release/aioffice-mac-arm64 --workspace smoke --json doctor \
+            | python3 -c 'import json,sys; e=json.load(sys.stdin); assert e["ok"], e'
+
+      - name: Render release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -e "s/{{version}}/${VERSION}/g" -e "s/{{tag}}/${GITHUB_REF_NAME}/g" \
+            scripts/release-notes-template.md > release/NOTES.md
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "AIOffice $GITHUB_REF_NAME" \
+            --notes-file release/NOTES.md \
+            release/aioffice-mac-arm64 \
+            release/aioffice-mac-x64 \
+            release/aioffice-linux-x64 \
+            release/aioffice-linux-arm64 \
+            release/aioffice-win-x64.exe \
+            release/aioffice-win-arm64.exe \
+            release/SHA256SUMS

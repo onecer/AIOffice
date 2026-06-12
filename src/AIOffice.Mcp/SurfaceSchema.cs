@@ -64,15 +64,17 @@ public static class SurfaceSchema
             [ErrorCodes.InvalidPath, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
             [("aioffice get data.xlsx /Sheet1/B2", "value, valueType, formula, numberFormat")]),
 
-        Verb("edit", "Apply an atomic batch of set/add/remove/move ops: all-or-nothing single save, auto-snapshot, optional rev guard.", "office_edit",
+        Verb("edit", "Apply an atomic batch of set/add/remove/move/replace ops: all-or-nothing single save, auto-snapshot, optional rev guard.", "office_edit",
             [("file", "document path"),
              ("--ops", "JSON array of ops, or @ops.json"),
              ("--set/--add/--remove", "single-op sugar: --set <path> k=v..., --add <path> --type T k=v..., --remove <path>"),
+             ("--find/--replace", "document-wide find/replace sugar (docx body+headers+footers, every sheet, every slide+notes); modifiers: --regex, --match-case, --whole-word; returns aggregate {replacements, locations}"),
              ("--expect-rev", "12-hex rev from a previous meta.rev; mismatch -> stale_address before any write"),
              ("--dry-run", "validate the whole batch without writing")],
             [ErrorCodes.StaleAddress, ErrorCodes.InvalidPath, ErrorCodes.InvalidArgs, ErrorCodes.UnsupportedFeature,
              ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
             [("aioffice edit r.docx --set /body/p[1] style=Heading1", "single-op sugar"),
+             ("aioffice edit r.docx --find 2025 --replace 2026 --track", "document-wide tracked find/replace"),
              ("aioffice edit r.docx --ops @ops.json --expect-rev a3f9c12be01d", "atomic batch with optimistic lock")]),
 
         Verb("render", "Render the document (or a subtree) to html/svg/text/png for inspection.", "office_render",

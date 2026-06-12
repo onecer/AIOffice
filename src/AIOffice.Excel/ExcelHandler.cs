@@ -34,7 +34,15 @@ namespace AIOffice.Excel;
 /// <item>Big workbooks (M3): <c>read --view stats|text</c> and <c>get</c> of a
 /// cell/range stream the raw XML without loading the DOM — see
 /// <see cref="ExcelStreaming"/>. Mutating ops on huge files still load the
-/// full workbook through ClosedXML (streaming is read-only for now).</item>
+/// full workbook through ClosedXML, with ONE exception: bulk 2D writes over
+/// 50k cells into a bare sheet stream through a SAX writer — see
+/// <see cref="ExcelBulkWrites"/>. In-place streaming edits remain M5.</item>
+/// <item>M4: find/replace (<see cref="ApplyReplace"/>; text cells + optional
+/// formula text, regex with 2s timeout, zero matches = <c>find_no_match</c>
+/// warning), bulk 2D writes (anchor + strict range forms), row/column
+/// insert/delete/size/hide (<c>/Sheet1/col[C]</c> letter addressing; ClosedXML
+/// shifts formula references and tests assert it), and cell notes (always
+/// addressed via their cell; no <c>note[i]</c> index form).</item>
 /// <item><c>move</c> ops and png rendering are not implemented; they return
 /// typed <c>unsupported_feature</c> envelopes with workarounds.</item>
 /// </list>

@@ -20,6 +20,8 @@ internal enum PptxRootKind
 /// /slide[2]/shape[@id=7]      (stable id — the canonical form aioffice emits)
 /// /slide[2]/shape[3]/p[1]
 /// /slide[2]/chart[1]          (1-based chart index on the slide)
+/// /slide[2]/animation[1]      (1-based animation index on the slide)
+/// /slide[2]/comment[@id=3]    (stable comment id on the slide)
 /// /master[1]                  (read-only in this milestone)
 /// /master[1]/layout[2]
 /// /master[1]/layout[2]/shape[1]
@@ -30,8 +32,9 @@ internal sealed partial record PptxAddress
 {
     public const string GrammarHint =
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
-        "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /master[1], /master[1]/layout[2] or /master[1]/shape[1]; " +
-        "indices are 1-based, @id is the stable shape id from query.";
+        "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
+        "/master[1], /master[1]/layout[2] or /master[1]/shape[1]; " +
+        "indices are 1-based, @id is the stable id from query/get.";
 
     [GeneratedRegex(@"^slide\[([0-9]+)\]$")]
     private static partial Regex SlideSegment();
@@ -47,6 +50,12 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^chart\[([0-9]+)\]$")]
     private static partial Regex ChartSegment();
+
+    [GeneratedRegex(@"^animation\[([0-9]+)\]$")]
+    private static partial Regex AnimationSegment();
+
+    [GeneratedRegex(@"^comment\[@id=([0-9]+)\]$")]
+    private static partial Regex CommentSegment();
 
     [GeneratedRegex(@"^shape\[@id=([0-9]+)\]$")]
     private static partial Regex ShapeIdSegment();
@@ -79,6 +88,12 @@ internal sealed partial record PptxAddress
     /// <summary>1-based chart index on the slide (/slide[i]/chart[k]); null otherwise.</summary>
     public int? ChartIndex { get; init; }
 
+    /// <summary>1-based animation index on the slide (/slide[i]/animation[k]); null otherwise.</summary>
+    public int? AnimationIndex { get; init; }
+
+    /// <summary>Stable comment id on the slide (/slide[i]/comment[@id=N]); null otherwise.</summary>
+    public uint? CommentId { get; init; }
+
     public int? ParagraphIndex { get; init; }
 
     public int? RunIndex { get; init; }
@@ -90,6 +105,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses a chart by index (/slide[i]/chart[k]).</summary>
     public bool IsChart => ChartIndex.HasValue;
+
+    /// <summary>True when the path addresses an animation by index (/slide[i]/animation[k]).</summary>
+    public bool IsAnimation => AnimationIndex.HasValue;
+
+    /// <summary>True when the path addresses a comment by id (/slide[i]/comment[@id=N]).</summary>
+    public bool IsComment => CommentId.HasValue;
 
     public bool IsMaster => Root == PptxRootKind.Master;
 
@@ -157,8 +178,28 @@ internal sealed partial record PptxAddress
             return address with { ChartIndex = ParseIndex(chartMatch.Groups[1].Value, raw) };
         }
 
+        if (AnimationSegment().Match(segments[1]) is { Success: true } animationMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow animation[k].");
+            }
+
+            return address with { AnimationIndex = ParseIndex(animationMatch.Groups[1].Value, raw) };
+        }
+
+        if (CommentSegment().Match(segments[1]) is { Success: true } commentMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow comment[@id=N].");
+            }
+
+            return address with { CommentId = uint.Parse(commentMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
+        }
+
         var shaped = WithShapeSegment(address, segments[1], raw,
-            $"The second segment must be notes, chart[k], shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"The second segment must be notes, chart[k], animation[k], comment[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -248,6 +289,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical chart-index path (/slide[i]/chart[k]) of the addressed chart.</summary>
     public string CanonicalChartPath => Units.Inv($"/slide[{SlideIndex}]/chart[{ChartIndex}]");
+
+    /// <summary>The canonical animation-index path (/slide[i]/animation[k]) of the addressed animation.</summary>
+    public string CanonicalAnimationPath => Units.Inv($"/slide[{SlideIndex}]/animation[{AnimationIndex}]");
+
+    /// <summary>The canonical comment path (/slide[i]/comment[@id=N]) of the addressed comment.</summary>
+    public string CanonicalCommentPath => Units.Inv($"/slide[{SlideIndex}]/comment[@id={CommentId}]");
 
     /// <summary>The container the address points into: /slide[i], /master[m] or /master[m]/layout[l].</summary>
     public string CanonicalContainerPath => Root == PptxRootKind.Master

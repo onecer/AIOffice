@@ -576,10 +576,20 @@ public sealed class AiofficeError : Exception
 - ✅ pptx：原生图表（bar/line/pie，字面量缓存 + `dataEditable:false` 诚实告知）、切换动画（fade/push/wipe + 时长）、预设几何（ellipse/triangle/diamond/arrow/roundRect + line 连接线、翻转）、z 序（front/back/forward/backward）。
 - ⏭ 留给 M4 的种子：嵌入式图表工作簿（PowerPoint 内可编辑数据）、动画、尾注、docx 多节插入、大工作簿**写入**流式、跨 run find/replace、数据验证、连接线/组合。
 
-### M4 — 能力深化（规划）
+### M4 — 查找替换 + 能力深化（已交付，v0.5.0）
 
-- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M4 窗口），或显式标记"不做 + 理由"。
-- docx 移动修订与 tracked find/replace、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景与母版编辑。
+- ✅ 三格式共享 find/replace 契约：`{"op":"replace","path":"<scope>","props":{find, replace, regex?, matchCase?, wholeWord?}}`；docx/pptx 对段落拼接文本匹配（跨 run 安全，重写保留首个受影响 run 的格式）；regex 走 .NET Regex + 2 秒匹配预算（超时 → `invalid_args`）；零命中 = ok + `find_no_match` warning；逐 op 回报 `{replacements, locations≤20}`；docx `track:true` 时逐命中生成 w:del+w:ins 修订对（body 作用域）。
+- ✅ 文档级展开 + CLI 糖：replace op 的路径 `"/"` 在命令层（CLI edit 与 MCP office_edit 共用 `ReplaceSugar`，与 `CrossDocDataFrom` 同位）展开为缺省作用域——docx `/body`+全部 `/header[i]`+`/footer[i]`（track 时仅 body）、每个 sheet、每页 `/slide[i]`（含备注）——并把逐作用域结果聚合为文档级 `{replacements, locations}`、坍缩 `find_no_match` warning；CLI 糖 `edit f --find X --replace Y [--regex] [--match-case] [--whole-word]`。
+- ✅ docx：目录 TOC（SdtBlock + TOC 域，标题扫描生成超链接条目，`toc_pages_unknown` 诚实告知页码需 Word 重算）、文本水印（页眉 VML，逐页眉写入、无页眉自动建）、尾注（EndnotesPart）、插入分节符（`add type:sectionBreak`，多节文档逐节页面设置）。
+- ✅ xlsx：批量 2D 写入（锚点式范围推断 / 区域式精确匹配；>50k 单元格写空白 sheet 走 OpenXml SAX 流式，等值律测试钉死两条路径产物一致）、行列插删（公式引用自动重写）/行高列宽/隐藏（`col[C]` 字母寻址）、单元格批注（经单元格寻址的 add/get/remove）。
+- ✅ pptx：嵌入式图表工作簿（新图表默认嵌入 + `c:numRef`/`c:strRef` 引用，PowerPoint「编辑数据」可用；旧图表 `embedData:true` 退化改造）、进入动画（appear/fade/flyIn/wipe 手写 `p:timing` 树，`/slide[i]/animation[k]` 寻址）、经典批注（SlideCommentsPart + 作者去重）。
+- ✅ 发版自动化：`.github/workflows/release.yml` —— push `v*` tag → build -warnaserror → 全量 test → 6 rid 单文件 self-contained publish → `SHA256SUMS` → `gh release create`（说明由 `scripts/release-notes-template.md` 渲染）。
+- ⏭ 留给 M5 的种子：pptx 批注回复、xlsx 现代线程批注、大工作簿**就地写入**流式、插件机制、SmartArt 读取、动画预设扩容（强调/退出/motion path）、数据验证、连接线/组合。
+
+### M5 — 能力深化（规划）
+
+- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M5 窗口），或显式标记"不做 + 理由"。
+- docx 移动修订、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景与母版编辑。
 
 ---
 

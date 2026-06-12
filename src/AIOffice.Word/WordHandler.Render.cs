@@ -78,6 +78,7 @@ public sealed partial class WordHandler
 
         AppendContainer(sb, GetBody(doc, file), "/body", doc, doc.MainDocumentPart);
         AppendFootnoteSection(sb, doc);
+        AppendEndnoteSection(sb, doc);
 
         foreach (var footer in roots.Where(r => r.Type == "footer"))
         {
@@ -135,6 +136,26 @@ public sealed partial class WordHandler
         {
             sb.Append("<li data-aio-path=\"").Append(FootnotePath(id)).Append("\">")
               .Append(Escape(FootnoteText(footnote)))
+              .Append("</li>\n");
+        }
+
+        sb.Append("</ol>\n</section>\n");
+    }
+
+    /// <summary>Endnotes render once, after the body (and footnotes), as an ordered list of notes.</summary>
+    private static void AppendEndnoteSection(StringBuilder sb, WordprocessingDocument doc)
+    {
+        var endnotes = EnumerateEndnotes(doc).ToList();
+        if (endnotes.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("<section class=\"endnotes\">\n<ol>\n");
+        foreach (var (endnote, id) in endnotes)
+        {
+            sb.Append("<li data-aio-path=\"").Append(EndnotePath(id)).Append("\">")
+              .Append(Escape(EndnoteText(endnote)))
               .Append("</li>\n");
         }
 
@@ -374,6 +395,10 @@ public sealed partial class WordHandler
                 case FootnoteReference reference:
                     sb.Append("<sup data-aio-path=\"").Append(FootnotePath((int)(reference.Id?.Value ?? 0)))
                       .Append("\">").Append(reference.Id?.Value ?? 0).Append("</sup>");
+                    break;
+                case EndnoteReference endnoteReference:
+                    sb.Append("<sup data-aio-path=\"").Append(EndnotePath((int)(endnoteReference.Id?.Value ?? 0)))
+                      .Append("\">e").Append(endnoteReference.Id?.Value ?? 0).Append("</sup>");
                     break;
                 case Drawing drawing:
                     AppendImage(sb, drawing, pathForImages, part);

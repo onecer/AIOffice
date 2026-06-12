@@ -109,6 +109,47 @@ public sealed class RoundTripLawTests : ExcelTestBase
     }
 
     /// <summary>
+    /// The note corollary of the round-trip law (M4). MEASURED for ClosedXML
+    /// 0.105.0: with a cell note present, a no-edit open/save keeps the
+    /// comments part (<c>xl/comments1.xml</c>) and its legacy VML drawing
+    /// (<c>xl/drawings/vmldrawing.vml</c>) byte-identical; the changed-part
+    /// set stays exactly the documented one (sheet1.xml).
+    /// </summary>
+    [Fact]
+    public void NoEdit_resave_keeps_note_parts_byte_identical()
+    {
+        var original = BuildRichFixture();
+        var noteEnvelope = EditOps(original, new EditOp
+        {
+            Op = "add",
+            Path = "/Sheet1/B2",
+            Type = "note",
+            Props = new JsonObject { ["text"] = "check this", ["author"] = "Reviewer" },
+        });
+        Assert.True(noteEnvelope.IsOk, noteEnvelope.ToJson());
+
+        var resaved = Path.Combine(Dir, "resaved-note.xlsx");
+        File.Copy(original, resaved);
+        using (var workbook = new XLWorkbook(resaved))
+        {
+            workbook.Save(); // no edits at all
+        }
+
+        var before = ReadParts(original);
+        var after = ReadParts(resaved);
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
+        Assert.Contains(before.Keys, k => k.StartsWith("xl/comments", StringComparison.Ordinal));
+        Assert.Contains(before.Keys, k => k.EndsWith(".vml", StringComparison.Ordinal));
+
+        var changed = before.Keys
+            .Where(name => !before[name].AsSpan().SequenceEqual(after[name]))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(DocumentedChangedParts, changed); // comment/VML parts NOT in the set
+
+        AssertValidatorClean(resaved);
+    }
+
+    /// <summary>
     /// The pivot corollary of the round-trip law. MEASURED for ClosedXML
     /// 0.105.0: with a pivot table present, a no-edit open/save additionally
     /// rewrites <c>pivotCache/pivotCacheDefinition1.xml</c> — and ONLY in the

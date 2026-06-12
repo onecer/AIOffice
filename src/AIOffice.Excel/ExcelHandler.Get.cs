@@ -50,6 +50,8 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet), MetaFor(file, sw)),
             ExcelTargetKind.Cell => Envelope.Ok(CellInfo(target.Sheet, target.Cell!), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
+            ExcelTargetKind.Column => Envelope.Ok(
+                ColumnInfo(target.Sheet, target.ColumnNumber!.Value), MetaFor(file, sw)),
             ExcelTargetKind.Chart => Envelope.Ok(ChartTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.Pivot => Envelope.Ok(PivotTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.ConditionalFormat => Envelope.Ok(
@@ -167,6 +169,7 @@ public sealed partial class ExcelHandler
             bold = cell.Style.Font.Bold ? true : (bool?)null,
             italic = cell.Style.Font.Italic ? true : (bool?)null,
             merged = MergedRangeOf(sheet, cell),
+            note = NoteInfo(cell),
         };
     }
 
@@ -189,7 +192,8 @@ public sealed partial class ExcelHandler
 
     private static object RowInfo(IXLWorksheet sheet, int rowNumber)
     {
-        var lastColumn = sheet.Row(rowNumber).LastCellUsed()?.Address.ColumnNumber ?? 0;
+        var row = sheet.Row(rowNumber);
+        var lastColumn = row.LastCellUsed()?.Address.ColumnNumber ?? 0;
         var values = new List<object?>(lastColumn);
         for (var column = 1; column <= lastColumn; column++)
         {
@@ -198,11 +202,35 @@ public sealed partial class ExcelHandler
 
         return new
         {
-            path = $"/{ExcelPaths.QuoteSheet(sheet.Name)}/row[{rowNumber}]",
+            path = ExcelPaths.RowPath(sheet, rowNumber),
             kind = "row",
             sheet = sheet.Name,
             row = rowNumber,
             values,
+            height = row.Height,
+            hidden = row.IsHidden ? true : (bool?)null,
+        };
+    }
+
+    private static object ColumnInfo(IXLWorksheet sheet, int columnNumber)
+    {
+        var column = sheet.Column(columnNumber);
+        var lastRow = column.LastCellUsed()?.Address.RowNumber ?? 0;
+        var values = new List<object?>(lastRow);
+        for (var row = 1; row <= lastRow; row++)
+        {
+            values.Add(ExcelValues.ToJson(sheet.Cell(row, columnNumber).Value));
+        }
+
+        return new
+        {
+            path = ExcelPaths.ColumnPath(sheet, columnNumber),
+            kind = "col",
+            sheet = sheet.Name,
+            column = ExcelCharts.ColumnLetters(columnNumber),
+            values,
+            width = column.Width,
+            hidden = column.IsHidden ? true : (bool?)null,
         };
     }
 

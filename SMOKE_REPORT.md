@@ -544,3 +544,143 @@ $ AIOFFICE_MAX_FILE_MB=1 read big.docx (2 MB sparse) → file_too_large         
 - docx page setup edits the existing `/section[1..n]`; inserting NEW section breaks → M4 seed.
 - PDF page count is reported for pptx (slides) only; docx/xlsx pagination is decided by the browser at print time and not echoed back.
 - M0 gap 6 (validate envelope shape drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in this very smoke; carry to M4.
+
+---
+
+# AIOffice 0.5.0 (M4) — Integration Smoke Report
+
+Date: 2026-06-12 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+All commands below were actually executed (`dotnet run --project src/AIOffice.Cli --`, temp workspace `/tmp/aioffice-m4-smoke/ws`); outputs are trimmed but real.
+
+## M4.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+0 个警告 0 个错误
+```
+
+No integration drift this round: the parallel M4 feature work (Word toc/watermark/endnotes/sections-break/replace, Excel bulk/rows-cols/notes/replace, Pptx animations/comments/chart-workbook/replace) built and tested green as handed over. Integrator additions: `ReplaceSugar` (shared CLI/MCP document-wide replace expansion + aggregation), the `--find/--replace` CLI sugar, the `"/"` path carve-out for replace ops in `EditOp.ParseBatch`, schema/help updates, and `.github/workflows/release.yml`.
+
+## M4.2 Tests — PASS (871/871 across 7 projects)
+
+```
+$ dotnet test AIOffice.sln
+AIOffice.Core.Tests     112 passed
+AIOffice.Word.Tests     238 passed
+AIOffice.Pptx.Tests     200 passed
+AIOffice.Excel.Tests    216 passed
+AIOffice.Mcp.Tests       50 passed   (+6 ReplaceSugar: per-format "/" expansion, aggregation, tracked body-only, no-match warning collapse, root-path rejected for non-replace ops)
+AIOffice.Preview.Tests   24 passed
+AIOffice.Render.Tests    31 passed
+```
+
+Token budget test still green: the 14-tool MCP surface (now documenting the replace op + 6 new add types) stays ≤ 3500 tokens.
+
+## M4.3 docx smoke — PASS
+
+```
+$ aioffice create report.docx + 6 headings (Overview/Goals/Risks/Mitigations/Timeline/Appendix)
+$ edit --add toc (levels 1-3, before /body/p[1])
+  → {"op":"add","type":"toc","path":"/toc[1]","levels":"1-3","entries":6}
+  → warning toc_pages_unknown (pagination needs Word; honest, not estimated)
+$ get /toc[1] → {"levels":"1-3","entryCount":6,"title":"Contents"}                            ✓ 6 entries
+$ read --view structure → TOC SDT + 9 body paragraphs with canonical paths                    ✓
+$ edit --add watermark text=DRAFT → {"path":"/watermark[1]","headers":1}; validate → 0 issues ✓
+$ edit --add endnote on /body/p[3] → {"path":"/endnote[@id=1]"}                               ✓
+$ edit --add sectionBreak (nextPage) on /body/p[5] → sections:2
+$ set /section[2] orientation=landscape
+  → get /section[1] → "orientation":"portrait"   · get /section[2] → "orientation":"landscape","pageSize":"A4"  ✓ mixed-orientation document
+$ edit report.docx --find 2025 --replace 2026 --track --author Reviewer
+  → {"replacements":3,"locations":["/body/p[3]","/body/p[3]","/body/p[5]"]} (aggregate at data root)
+$ read --view revisions → count:6 — three w:del("2025")+w:ins("2026") pairs, author Reviewer  ✓ tracked replace
+$ edit --ops '[{"op":"accept","path":"/body"}]' → applied:6; read revisions → count:0         ✓ clean
+$ edit --find '20(26)' --replace 'FY$1' --regex
+  → expanded to /body + /header[1] (the watermark created a header): replacements:3           ✓ regex + group substitution
+$ validate → {"valid":true,"count":0}                                                         ✓
+```
+
+## M4.4 xlsx smoke — PASS
+
+```
+$ create metrics.xlsx
+$ edit --ops @bulk-ops.json   — ONE set op: anchor /Sheet1/A1, values 100×4 (header + 99 rows, col D = "=Bn*Cn" formulas)
+  → applied:1 {"applied":["values"]}
+$ get /Sheet1/D5  → {"value":45,"formula":"=B5*C5","cachedValue":45}   (B5=6 · C5=7.5)        ✓ cached eval
+$ get /Sheet1/D100 → {"value":45,"formula":"=B100*C100","cachedValue":45}                     ✓
+$ edit --ops '[{"op":"add","path":"/Sheet1/row[2]","type":"row"}]'
+$ get /Sheet1/D6 → formula "=B6*C6" (was D5 "=B5*C5")                                         ✓ references shifted
+$ set /Sheet1/col[C] width=18 · /Sheet1/col[E] hidden=true
+  → get col[C] → "width":18 · get col[E] → "hidden":true                                      ✓
+$ add note on /Sheet1/B2 (author Reviewer) → get B2 → note:{text,author}                      ✓
+$ replace in range /Sheet1/A1:A20 find=Item replace=SKU
+  → {"replacements":19,"locations":["/Sheet1/A1","/Sheet1/A3",… 19 cell paths]}               ✓ scoped replace
+$ edit metrics.xlsx --find SKU --replace Part --match-case
+  → "/" expanded to every sheet (/Sheet1): aggregate replacements:19                          ✓ sugar
+$ validate → {"valid":true,"errors":0,"warnings":0}                                           ✓
+```
+
+Also observed (script bug, kept honest): the first attempt created the workbook with `--title 'M4 Metrics'`, which names the sheet — every `/Sheet1/...` op then failed with typed `invalid_path` + `candidates:["/'M4 Metrics'"]`, and the document-wide sugar correctly expanded to `/'M4 Metrics'` and returned `replacements:0` + ONE collapsed `find_no_match` warning ("matched nothing in any of the 1 document scope(s)").
+
+## M4.5 pptx smoke — PASS
+
+```
+$ create deck.pptx + slide 2
+$ add chart (bar, 3 categories × 2 series literals) on /slide[1]
+$ get /slide[1]/chart[1] → "dataEditable":true                                                ✓ new charts embed a workbook
+$ python: strip c:externalData + embedded part + rel (simulate an M3-era cached-only chart)
+$ get → "dataEditable":false
+$ edit --ops '[{"op":"set","path":"/slide[1]/chart[1]","props":{"embedData":true}}]'
+$ get → "dataEditable":true, categories ["Jan","Feb","Mar"] intact                            ✓ retrofit
+$ two shapes on slide 2 → add animation fade(0.5s) on shape[@id=3], flyIn(left) on shape[@id=4]
+$ read --view structure → slide[2].animations:
+  [{"path":"/slide[2]/animation[1]","effect":"fade","duration":"0.5s","target":"…shape[@id=3]"},
+   {"path":"/slide[2]/animation[2]","effect":"flyIn","direction":"left","target":"…shape[@id=4]"}]  ✓ in play order
+$ add comment on /slide[1] (author Dana) → "/slide[1]/comment[@id=1]"                         ✓
+$ set /slide[2]/notes "Q3 talking points: emphasise Q3 growth"
+$ edit deck.pptx --find Q3 --replace Q4
+  → expanded to /slide[1] + /slide[2] (notes included by default):
+    {"replacements":3,"locations":["/slide[2]/shape[@id=3]/p[1]","/slide[2]/notes"]}          ✓ deck-wide incl. notes
+$ get /slide[2]/notes → "Q4 talking points: emphasise Q4 growth"                              ✓
+$ unzip -l deck.pptx | grep embeddings → ppt/slides/charts/embeddings/package.bin             ✓ embedded xlsx part present
+$ validate deck.pptx / report.docx / metrics.xlsx → all valid, 0 errors                       ✓
+```
+
+## M4.6 MCP wire — PASS
+
+```
+$ aioffice mcp --workspace /tmp/aioffice-m4-smoke/ws   (JSON-RPC over stdio, python driver)
+initialize → serverInfo {"name":"aioffice","version":"0.5.0"}
+tools/list → 14 tools (unchanged set)                                                          ✓
+tools/call office_edit {"file":"report.docx","ops":[{"op":"replace","path":"/","props":{"find":"FY26","replace":"FY27"}}]}
+  → envelope ok:true, aggregate {"replacements":3,"locations":["/body/p[3]","/body/p[3]","/body/p[5]"]}  ✓ replace over the wire
+```
+
+## M4.7 Manual-check fixtures regenerated (for a human in real Office)
+
+- `word-sample.docx` — + auto-generated **Contents** (TOC, 8 entries, expect Word to fill page numbers on open/F9), **DRAFT watermark** in the header, an **endnote**, and a second **landscape** section (section 1 portrait / section 2 landscape — check the page turn). validate: 0.
+- `excel-sample.xlsx` — + "Bulk" sheet written by ONE bulk op (Region/Units/Price/Revenue + formula column + `=SUM` total, cached 163.9), a **cell note** on B2, **column E hidden**, column D widened. validate: 0.
+- `pptx-showcase.pptx` — slide 4 chart is now **Edit-Data-able** (right-click → Edit Data must open the embedded workbook — please verify in PowerPoint); slide 5 has a **fade** box, a **flyIn-after-previous** box, and a slide **comment** pointing at the chart check. validate: 0.
+
+## M4.8 Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice → 37,792,009 bytes (36.0 MiB; 0.4.0 was 37,737,001 — M4 adds ≈54 KB)
+$ aioffice doctor → version 0.5.0 · 3 handlers ready
+$ TOC loop: create → 2 headings → add toc → get /toc[1] → entryCount:2                        ✓
+$ chart loop: create d.pptx → add bar chart → get → dataEditable:true → validate valid:true   ✓
+$ replace loop: edit r.docx --find One --replace Uno → replacements:2 → validate valid:true   ✓
+```
+
+Release automation landed with this milestone: pushing a `v*` tag runs `.github/workflows/release.yml` (build -warnaserror → full test → publish all 6 rids single-file self-contained → `SHA256SUMS` → `gh release create` with notes rendered from `scripts/release-notes-template.md`). Not exercised end-to-end in this smoke (needs a pushed tag); the steps mirror the manual v0.4.0 commands verbatim.
+
+## M4.9 Honest limits introduced/kept in M4
+
+- **Tracked replace is body-only** (handler contract: headers/footers cannot carry these revision marks here). The document-wide sugar under `--track` therefore expands to `/body` only — header/footer text is silently out of scope for a *tracked* replace; run untracked to cover them.
+- Replace locations are paragraph-level canonical paths, one entry **per match** (capped at 20). Matches inside TOC/SDT content replace correctly but may report the scope path (`/body`) instead of a paragraph path — observed in the binary smoke when "One" also matched its own TOC entry.
+- TOC page numbers are unknown at write time (`toc_pages_unknown` warning); Word computes them on open/F9. TOC styling is minimal (hyperlinked entries, no leader dots).
+- xlsx replace matches **text cells only** (numbers/booleans/dates never match; display text is a formatting concern); formula text requires opting in with `inFormulas:true`, and a replacement that destroys the leading `=` turns the cell into literal text.
+- pptx animations are **entrance presets only** (appear/fade/flyIn/wipe); emphasis/exit/motion-paths remain deep water (M5 seed: preset expansion). Comments are **legacy** SlideCommentsPart (PowerPoint shows them fine); modern p188 threaded comments and replies → M5 seeds.
+- The document-wide `"/"` scope is a replace-only carve-out in `EditOp.ParseBatch`; `"/"` still does not resolve for get/set ops (DocPath requires ≥1 segment — the office_get schema's "/" mention predates this and remains aspirational).
+- xlsx in-place streaming **writes** for big existing sheets still load the ClosedXML DOM (M5 seed); only bulk writes into blank sheets stream.
+- M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in M4.5; carry to M5.
