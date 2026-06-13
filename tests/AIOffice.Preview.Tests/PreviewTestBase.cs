@@ -47,8 +47,23 @@ public abstract class PreviewTestBase : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    protected PreviewServer StartServer(string file, int port = 0) =>
-        PreviewServer.Start(file, Workspace, port, LockDir);
+    protected PreviewServer StartServer(string file, int port = 0)
+    {
+        var server = PreviewServer.Start(file, Workspace, port, LockDir);
+
+        // Wait until the listener actually answers a port probe before handing the
+        // server back. On Windows the HttpListener (http.sys) registers its prefix
+        // slightly after Start() returns, so an immediate Close/probe can race and
+        // see the server as not-running; poll for readiness so every preview socket
+        // test is deterministic on all platforms.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!PreviewLock.IsPortAlive(server.Port) && DateTime.UtcNow < deadline)
+        {
+            System.Threading.Thread.Sleep(25);
+        }
+
+        return server;
+    }
 
     protected CommandContext Ctx(string file, params (string Key, JsonNode? Value)[] args)
     {
