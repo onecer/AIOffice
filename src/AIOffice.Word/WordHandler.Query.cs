@@ -21,6 +21,24 @@ public sealed partial class WordHandler
         using (doc)
         using (ms)
         {
+            // Captions use a two-bracket virtual path (/caption[@label=Figure][i])
+            // that sits outside the core path grammar, so intercept before parsing.
+            if (pathArg.StartsWith("/caption[", StringComparison.Ordinal))
+            {
+                var (captionPath, captionProps) = GetCaptionProperties(doc, pathArg);
+                return Envelope.Ok(
+                    new { path = captionPath, type = "caption", properties = captionProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
+            if (pathArg.StartsWith("/crossRef[", StringComparison.Ordinal))
+            {
+                var (crossRefPath, crossRefProps) = GetCrossRefProperties(doc, pathArg);
+                return Envelope.Ok(
+                    new { path = crossRefPath, type = "crossRef", properties = crossRefProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
             var docPath = DocPath.Parse(pathArg);
             var meta = MetaFor(file, Rev.OfBytes(bytes));
 

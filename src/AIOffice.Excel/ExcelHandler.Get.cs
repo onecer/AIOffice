@@ -99,6 +99,7 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Comment => Envelope.Ok(CommentTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.Table => Envelope.Ok(
                 ExcelTables.Describe(target.Sheet, ExcelTables.Find(target)), MetaFor(file, sw)),
+            ExcelTargetKind.Slicer => Envelope.Ok(SlicerTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -152,6 +153,38 @@ public sealed partial class ExcelHandler
         }
 
         return ExcelPivots.Describe(target.Sheet, pivot, sources);
+    }
+
+    /// <summary>One slicer, read back from the raw package (ClosedXML cannot see slicers).</summary>
+    private static object SlicerTargetInfo(string file, ExcelTarget target)
+    {
+        List<SlicerInfo> slicers;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            slicers = ExcelSlicers.Read(document)
+                .Where(s => string.Equals(s.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var info = target.SlicerName is { } wantedName
+            ? slicers.FirstOrDefault(s => string.Equals(s.Name, wantedName, StringComparison.OrdinalIgnoreCase))
+            : slicers.FirstOrDefault(s => s.Index == target.SlicerIndex!.Value);
+        if (info is null)
+        {
+            var what = target.SlicerName is { } n ? $"slicer[@name={n}]" : $"slicer[{target.SlicerIndex}]";
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No {what} on sheet '{target.Sheet.Name}' ({slicers.Count} slicer(s) exist).",
+                slicers.Count > 0
+                    ? "Slicer indices are 1-based per sheet; pick one of the candidates."
+                    : "This sheet has no slicers; add one with edit op {op:add, type:slicer, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + "/table[@name=Sales], props:{column:\"Region\"}}.",
+                candidates: slicers.Count > 0
+                    ? [.. slicers.Select(s => s.Path)]
+                    : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return ExcelSlicers.Describe(info);
     }
 
     /// <summary>One chart, read back from the raw package (ClosedXML cannot see charts).</summary>

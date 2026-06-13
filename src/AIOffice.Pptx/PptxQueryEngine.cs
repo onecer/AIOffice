@@ -12,7 +12,7 @@ internal static class PptxQueryEngine
 {
     private static readonly IReadOnlyList<string> QueryElements =
         ["slide", "shape", "table", "tc", "smartart", "master", "layout", "*"];
-    private static readonly IReadOnlyList<string> ShapeAttributes = ["id", "name", "fill", "text", "kind", "placeholder"];
+    private static readonly IReadOnlyList<string> ShapeAttributes = ["id", "name", "fill", "text", "kind", "placeholder", "hyperlink"];
     private static readonly IReadOnlyList<string> LayoutAttributes = ["name", "type"];
 
     public static List<object> Query(PresentationPart presentation, Selector selector, PptxAddress? scope = null)
@@ -68,7 +68,8 @@ internal static class PptxQueryEngine
 
             if (selector.Element is "shape" or "*")
             {
-                foreach (var shape in shapes.Where(s => MatchesShape(s, selector)))
+                string? ResolveLink(ShapeView s) => PptxHyperlinks.Resolve(presentation, slidePart, s.Element);
+                foreach (var shape in shapes.Where(s => MatchesShape(s, selector, ResolveLink)))
                 {
                     results.Add(new
                     {
@@ -78,6 +79,7 @@ internal static class PptxQueryEngine
                         Slide = slideIndex,
                         Name = shape.Name,
                         Text = Snippet(PptxDoc.ShapeText(shape.Element)),
+                        Hyperlink = ResolveLink(shape),
                     });
                 }
             }
@@ -406,7 +408,7 @@ internal static class PptxQueryEngine
         return true;
     }
 
-    private static bool MatchesShape(ShapeView shape, Selector selector)
+    private static bool MatchesShape(ShapeView shape, Selector selector, Func<ShapeView, string?>? resolveLink = null)
     {
         var text = PptxDoc.ShapeText(shape.Element);
         foreach (var predicate in selector.Predicates)
@@ -422,7 +424,7 @@ internal static class PptxQueryEngine
                     break;
 
                 case AttributePredicate attribute:
-                    if (!MatchesAttribute(shape, text, attribute))
+                    if (!MatchesAttribute(shape, text, attribute, resolveLink))
                     {
                         return false;
                     }
@@ -434,7 +436,7 @@ internal static class PptxQueryEngine
         return true;
     }
 
-    private static bool MatchesAttribute(ShapeView shape, string text, AttributePredicate predicate)
+    private static bool MatchesAttribute(ShapeView shape, string text, AttributePredicate predicate, Func<ShapeView, string?>? resolveLink)
     {
         switch (predicate.Attribute)
         {
@@ -448,6 +450,8 @@ internal static class PptxQueryEngine
                 return CompareText(shape.Kind, predicate);
             case "placeholder":
                 return CompareText(PptxDoc.PlaceholderType(shape.Element) ?? string.Empty, predicate);
+            case "hyperlink":
+                return MatchesHyperlink(resolveLink?.Invoke(shape), predicate);
             case "fill":
                 var fill = PptxDoc.FillHex(shape.Element);
                 var wanted = predicate.Value.TrimStart('#').ToUpperInvariant();
@@ -462,9 +466,29 @@ internal static class PptxQueryEngine
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Shapes have no queryable attribute '{predicate.Attribute}'.",
-                    "Queryable shape attributes: id, name, fill, text, kind, placeholder.",
+                    "Queryable shape attributes: id, name, fill, text, kind, placeholder, hyperlink.",
                     candidates: ShapeAttributes);
         }
+    }
+
+    /// <summary>
+    /// Matches the shape's resolved hyperlink form. The sentinel value <c>*</c>
+    /// means "has any hyperlink" (and <c>!=*</c> means "has none"); otherwise the
+    /// canonical form (url / #slide:N / #first…) is compared with =, != or *=.
+    /// </summary>
+    private static bool MatchesHyperlink(string? link, AttributePredicate predicate)
+    {
+        if (predicate.Value == "*")
+        {
+            return predicate.Op switch
+            {
+                SelectorOperator.Equals => link is not null,
+                SelectorOperator.NotEquals => link is null,
+                _ => throw UnsupportedOperator(predicate, "hyperlink=* / hyperlink!=* test presence"),
+            };
+        }
+
+        return CompareText(link ?? string.Empty, predicate);
     }
 
     private static bool CompareNumeric(uint actual, AttributePredicate predicate)
@@ -588,6 +612,7 @@ internal static class PptxQueryEngine
             H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
             Fill = PptxDoc.FillHex(view.Element),
             LineColor = PptxDoc.LineHex(view.Element),
+            Hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
             Chart = PptxCharts.Summary(slidePart, view.Element),
         };

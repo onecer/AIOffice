@@ -16,6 +16,7 @@ paths that `get` and `edit` accept unchanged.
     /style[@id=Callout]         one style definition by id (set/get/remove)
     /section[1]                 page setup + columns (set/get)
     /body/p[3]/omath[1]         M6: an inline equation in a paragraph (get/remove)
+    /caption[@label=Figure][1]  M8: a Figure/Table/Equation caption (1-based per label; get)
 
 ## xlsx
 
@@ -31,6 +32,8 @@ paths that `get` and `edit` accept unchanged.
     /Pivot/pivot[@name=SalesPivot]  same pivot by name (canonical form in results)
     /Sheet1/conditionalFormat[1]    1st conditional-format rule on the sheet
     /Sheet1/image[1]            1st anchored picture on the sheet
+    /Sheet1/slicer[1]           M8: 1st slicer on the sheet (table-column / pivot-field)
+    /Sheet1/slicer[@name=X]     M8: the same slicer by name (canonical form in results)
     /'Q3 Data'/B2               sheet names with spaces use single quotes
                                 (escape a quote by doubling it: 'O''Brien')
 

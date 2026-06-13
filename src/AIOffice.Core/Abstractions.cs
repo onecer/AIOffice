@@ -255,6 +255,116 @@ public interface IAuditor
     int Fix(CommandContext ctx, IReadOnlyList<string> findingIds);
 }
 
+/// <summary>
+/// One semantic difference between a baseline document and the current one,
+/// surfaced by <c>aioffice diff</c>. <see cref="Path"/> is the canonical path
+/// in the CURRENT document (or the baseline path for a <c>removed</c> change,
+/// which no longer exists in the current one). <see cref="Before"/>/<see cref="After"/>
+/// carry concise human-readable values for a <c>modified</c> change.
+/// </summary>
+public sealed record DiffChange
+{
+    /// <summary>added | removed | modified | moved.</summary>
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    /// <summary>Canonical path in the current document (baseline path for <c>removed</c>).</summary>
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    /// <summary>The baseline value for a <c>modified</c> change (e.g. old text / "Normal").</summary>
+    [JsonPropertyName("before")]
+    public string? Before { get; init; }
+
+    /// <summary>The current value for a <c>modified</c> change (e.g. new text / "Heading1").</summary>
+    [JsonPropertyName("after")]
+    public string? After { get; init; }
+
+    /// <summary>A short note disambiguating the change (e.g. "style", "text", "moved from /body/p[5]").</summary>
+    [JsonPropertyName("detail")]
+    public string? Detail { get; init; }
+}
+
+/// <summary>Per-kind tally over a <see cref="DiffResult"/>.</summary>
+public sealed record DiffSummary(
+    [property: JsonPropertyName("added")] int Added,
+    [property: JsonPropertyName("removed")] int Removed,
+    [property: JsonPropertyName("modified")] int Modified,
+    [property: JsonPropertyName("moved")] int Moved);
+
+/// <summary>The result of a diff pass: every change plus a per-kind tally.</summary>
+public sealed record DiffResult
+{
+    [JsonPropertyName("changes")]
+    public required IReadOnlyList<DiffChange> Changes { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required DiffSummary Summary { get; init; }
+
+    /// <summary>
+    /// Non-fatal diff warnings (e.g. <c>diff_truncated</c> when the per-pass
+    /// change cap was hit on a very large diff). Null when there are none; the
+    /// verb layer copies these into the envelope's <c>meta.warnings</c>.
+    /// </summary>
+    [JsonPropertyName("warnings")]
+    public IReadOnlyList<Warning>? Warnings { get; init; }
+
+    /// <summary>An empty result (identical documents): no changes, all-zero summary.</summary>
+    public static DiffResult Empty { get; } = new()
+    {
+        Changes = [],
+        Summary = new DiffSummary(0, 0, 0, 0),
+    };
+
+    /// <summary>
+    /// Sorts the changes by (Path, Kind) with an ordinal comparer and tallies the
+    /// summary, so the same two documents diff identically on every platform.
+    /// Optional <paramref name="warnings"/> ride along to the envelope meta.
+    /// </summary>
+    public static DiffResult FromChanges(
+        IEnumerable<DiffChange> changes, IReadOnlyList<Warning>? warnings = null)
+    {
+        var sorted = changes
+            .OrderBy(c => c.Path, StringComparer.Ordinal)
+            .ThenBy(c => c.Kind, StringComparer.Ordinal)
+            .ThenBy(c => c.Detail ?? string.Empty, StringComparer.Ordinal)
+            .ToList();
+
+        return new DiffResult
+        {
+            Changes = sorted,
+            Summary = new DiffSummary(
+                Added: sorted.Count(c => c.Kind == "added"),
+                Removed: sorted.Count(c => c.Kind == "removed"),
+                Modified: sorted.Count(c => c.Kind == "modified"),
+                Moved: sorted.Count(c => c.Kind == "moved")),
+            Warnings = warnings is { Count: > 0 } ? warnings : null,
+        };
+    }
+}
+
+/// <summary>The detail level of a diff projection.</summary>
+public static class DiffView
+{
+    public const string Summary = "summary";
+
+    public const string Detailed = "detailed";
+
+    public static readonly IReadOnlyList<string> All = [Summary, Detailed];
+}
+
+/// <summary>
+/// The M8 diff surface: a handler semantically compares the current document
+/// (<see cref="CommandContext.File"/>) against a same-format baseline and
+/// returns the ordered change list. Both documents must be the same kind; a
+/// format mismatch is <c>invalid_args</c> naming the mismatch.
+/// </summary>
+public interface IDiffer
+{
+    /// <summary>Diffs <paramref name="baselineFile"/> (the OLD document) against <c>ctx.File</c> (the NEW one).</summary>
+    DiffResult Diff(CommandContext ctx, string baselineFile);
+}
+
 /// <summary>Maps file extensions to format handlers.</summary>
 public sealed class HandlerRegistry
 {

@@ -1169,3 +1169,194 @@ externalization of the code list kept it in budget). The 3500 ceiling was theref
   noting the picture sits visually above the text shape. Info-level findings are signal, not failure.
 - M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**,
   observed again in M7.3/M7.6; carry to M8.
+
+---
+
+# M8 (v0.9.0) — diff & review, captions/cross-references, slicers, shape hyperlinks
+
+All commands below were run through the real CLI (`dotnet run --project src/AIOffice.Cli --`,
+then the published binary) against a fresh temp workspace. Outputs are verbatim; failures stay FAIL.
+
+## M8.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror   → 0 warnings, 0 errors (8 projects + 7 test projects)
+```
+
+## M8.2 Tests — PASS (1449/1449 across 7 projects)
+
+```
+Core 124 · Word 448 · Excel 363 · Pptx 396 · MCP 63 · Preview 24 · Render 31   = 1449, 0 failures
+```
+
+## M8.3 docx two-file diff (detailed) — PASS
+
+base.docx = 3 paras (p1 Heading1). new.docx = copy, then: change p2 text + append a para + restyle p1 → Heading2.
+
+```
+$ aioffice diff new.docx base.docx --json
+{ "ok": true, "data": {
+  "changes": [
+    { "kind":"modified","path":"/body/p[1]","before":"Heading1","after":"Heading2","detail":"style" },
+    { "kind":"modified","path":"/body/p[2]","before":"Second paragraph.","after":"Second paragraph EDITED.","detail":"text" },
+    { "kind":"added","path":"/body/p[4]","detail":"paragraph" }
+  ],
+  "summary": { "added":1,"removed":0,"modified":2,"moved":0 },
+  "baseline": "base.docx", "view": "detailed" } }
+```
+
+1 modified text + 1 added + 1 style modified, sorted by (path, kind), exit 0. Deterministic across runs.
+
+## M8.4 diff --view summary + identical files — PASS
+
+```
+$ aioffice diff new.docx base.docx --view summary
+  changes: [{kind:modified,path:/body/p[1]},{kind:modified,path:/body/p[2]},{kind:added,path:/body/p[4]}]  (before/after trimmed)
+  summary: {added:1,removed:0,modified:2,moved:0}
+
+$ aioffice diff identical.docx base.docx   (byte-copy of base)
+  ok:true · changes:[] · summary:{0,0,0,0} · exit 0
+```
+
+## M8.5 snapshot diff + bad index → candidates — PASS
+
+report.docx edited twice (each edit auto-snapshots the pre-image): snapshot 1 = before edit1, snapshot 2 = before edit2.
+
+```
+$ aioffice snapshot list report.docx   → count:2  numbers:[1,2]
+$ aioffice diff report.docx --snapshot 2 --json
+  ok:true · baseline:"snapshot 2"
+  changes: [{kind:modified,path:/body/p[1],before:"Original report line",after:"CHANGED report line",detail:text}]
+
+$ aioffice diff report.docx --snapshot 99   → invalid_args · candidates: ["1","2"]
+```
+
+## M8.6 docx captions + cross-references — PASS
+
+```
+$ aioffice edit cap.docx --ops '[{op:add,path:/body/p[1],type:caption,props:{label:Figure,text:"Quarterly trend",position:after}}]'  → ok
+$ aioffice edit cap.docx --ops '[{op:add,path:/body/p[1],type:crossRef,props:{to:"/caption[@label=Figure][1]",show:labelAndNumber}}]' → ok
+$ aioffice get cap.docx '/caption[@label=Figure][1]' --json
+  → { type:"caption", properties:{ label:"Figure", number:1, text:"Quarterly trend", bookmark:"_Ref100000000", anchorPath:"/body/p[2]" } }
+$ aioffice read cap.docx --view structure   → lists the caption
+$ aioffice validate cap.docx   → valid:true, count:0
+```
+
+(Integrator fix: the CLI `get` verb pre-parsed the path through `DocPath.Parse`, which rejected the
+two-bracket virtual `/caption[@label=…][i]` form BEFORE the handler's own interception — so `get` on a
+caption was `invalid_path` on the CLI while `office_get` worked over MCP. Fixed `FileVerbs.Get` to skip
+the fail-fast parse for `/caption[`/`/crossRef[` paths, mirroring `office_get` which never pre-parses.
+Caught only by this smoke step — a real CLI↔MCP parity bug.)
+
+## M8.7 xlsx two-workbook diff (changed cell + added sheet) — PASS
+
+```
+$ aioffice diff wb-new.xlsx wb-base.xlsx --json
+  changes: [{kind:modified,path:/Sheet1/B2,before:"100",after:"250"}, {kind:added,path:/Summary,detail:sheet}]
+  summary: {added:1,removed:0,modified:1,moved:0}
+```
+
+## M8.8 xlsx slicer on a table → validate 0 — PASS
+
+```
+$ aioffice edit dash.xlsx --ops '[…seed A1:B3, add type:table name=Sales…]'  → ok
+$ aioffice edit dash.xlsx --ops '[{op:add,path:"/Sheet1/table[@name=Sales]",type:slicer,props:{column:"Region",x:"E2"}}]' → ok
+$ aioffice get dash.xlsx '/Sheet1/slicer[1]' --json
+  → { kind:"slicer", sheet:"Sheet1", name:"Slicer_Region", source:"table", sourceName:"Sales", column:"Region", caption:"Region" }
+$ aioffice validate dash.xlsx   → valid:true, errors:0   (slicer parts authored on raw OpenXml validate clean)
+```
+
+## M8.9 pptx diff (reordered slide + edited shape) — PASS
+
+3-slide deck; slide 1 (carrying a text box) moved to position 3, then its shape text edited.
+
+```
+$ aioffice diff deck-new.pptx deck-base.pptx --json
+  changes: [
+    {kind:moved,path:/slide[3],detail:"slide reordered 1 -> 3"},
+    {kind:modified,path:"/slide[3]/shape[@id=2]",before:"Alpha",after:"Box EDITED",detail:text}
+  ]
+  summary: {added:0,removed:0,modified:1,moved:1}
+```
+
+## M8.10 pptx shape hyperlink (jump-to-slide + url) → get + validate 0 — PASS
+
+```
+$ aioffice edit links.pptx --ops '[{op:set,path:"/slide[1]/shape[@id=3]",props:{hyperlink:"#slide:2"}},{op:set,path:"/slide[1]/shape[@id=4]",props:{hyperlink:"https://example.com"}}]' → ok
+$ aioffice get links.pptx '/slide[1]/shape[@id=3]'   → properties.hyperlink == "#slide:2"     (canonical jump form)
+$ aioffice get links.pptx '/slide[1]/shape[@id=4]'   → properties.hyperlink == "https://example.com"
+$ aioffice validate links.pptx   → valid:true, errors:0
+```
+
+## M8.11 Guard rails — PASS
+
+```
+$ aioffice diff a.docx b.xlsx                 → invalid_args "Cannot diff a .docx against a '.xlsx' file."
+$ aioffice diff new.docx base.docx --snapshot 1  → invalid_args "diff takes EITHER a baseline file OR --snapshot N, not both."
+$ aioffice diff new.docx                       → invalid_args (no baseline)
+$ aioffice diff new.docx base.docx --view fancy  → invalid_args · candidates: ["summary","detailed"]
+```
+
+## M8.12 New addressing through the real ParseBatch gate — PASS
+
+Not just unit tests — through `EditOp.ParseBatch` → `DocPath.Parse` via the real CLI `edit --ops`:
+
+```
+caption  via --ops  → ok    crossRef via --ops (to "/caption[@label=Table][1]") → ok
+slicer   get /Sheet1/slicer[1] via CLI gate → ok    shape hyperlink "#last" via --ops → ok
+```
+
+## M8.13 MCP over the wire — PASS (tools/list == 16, office_diff two-file + snapshot)
+
+```
+$ initialize → serverInfo.name "aioffice"
+$ tools/list → 16 tools, office_diff present
+$ office_diff {file:"new.docx", other:"base.docx"}      → ok:true · summary {added:1,modified:2} · baseline "base.docx"
+$ office_diff {file:"report.docx", snapshot:2}          → ok:true · baseline "snapshot 2" · the one change
+$ office_diff {file:"base.docx", other:"book.xlsx"}     → isError:true · code invalid_args
+$ office_diff {file:"new.docx"}  (no baseline)          → code invalid_args
+```
+
+## M8.14 schema / help / version — PASS
+
+```
+$ aioffice schema diff   → name:"diff", mcpTool:"office_diff", usage "aioffice diff <file> [<otherFile>] [--snapshot N] [--view summary|detailed]"
+$ aioffice help diff     → the diff topic (two modes + result shape + snapshot-diff workflow) from embedded HelpTopics/diff.md
+$ aioffice schema        → 16 verbs incl. diff; aioffice doctor → version "0.9.0", unaffected
+```
+
+## M8.15 Token budget — under ceiling, NOT raised
+
+The MCP tool surface (16 tools incl. `office_diff`) stays under the 3500-token budget
+(`TokenBudgetTests` green; terse `office_diff` description + `office_help {topic:"diff"}` externalization
+of the diff semantics kept it in budget). The 3500 ceiling was therefore **kept**, not raised.
+
+## M8.16 Published binary (dist/osx-arm64) — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+  → dist/osx-arm64/aioffice = 38,238,969 bytes (~36.5 MB, single self-contained file, no runtime dependency)
+$ ./dist/osx-arm64/aioffice doctor   → version "0.9.0"; handlers docx/xlsx/pptx all "ready"
+  two-file diff (binary): new.docx vs base.docx → ok:true, summary {modified:1}, baseline "base.docx"
+  snapshot diff (binary): rep.docx --snapshot 2 → ok:true, baseline "snapshot 2", the one change
+  MCP (binary stdio): tools/list == 16, office_diff over the wire → ok:true
+```
+
+## M8 Honest notes / known gaps
+
+- **`diff` changes are data, never errors.** Like `validate`/`audit`, a successful diff is `ok:true` / exit
+  0 no matter how large the change set. The only non-zero path is `invalid_args` (no/both baselines, format
+  mismatch, bad `--view`, missing snapshot index)/`file_not_found`/`sandbox_denied`/`format_corrupt`.
+- **Diff order is deterministic by construction.** `DiffResult.FromChanges` sorts by `(path, kind)` ordinal,
+  then `detail`, so the same two documents diff byte-identically on every platform and every run — verified
+  by the dedicated determinism test in each format's `DiffTests`. No `Environment.NewLine`, byte-size or
+  iteration-order assertions in the new tests (CI-hygiene grep clean).
+- **Snapshot diff never touches the file or its ring.** `--snapshot N` copies the snapshot bytes to a
+  throwaway temp baseline (same extension, inside the workspace so it passes the sandbox), diffs against it,
+  and deletes the temp — `SnapshotStore.Restore` (which would overwrite the original) is deliberately NOT used.
+- **CLI↔MCP parity fix (caption get).** The CLI `get` verb's fail-fast `DocPath.Parse` rejected the virtual
+  `/caption[@label=…][i]` path before the handler could intercept it; `office_get` over MCP never pre-parses,
+  so the two surfaces diverged. Fixed in `FileVerbs.Get` (skip the pre-parse for `/caption[`/`/crossRef[`).
+  Found by smoke step M8.6, not by any unit test.
+- M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**,
+  observed again in M8.8 (xlsx `errors:0`) vs M8.6 (docx `count:0`); carry to M9.

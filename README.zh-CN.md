@@ -15,7 +15,8 @@
 aioffice create report.docx --title "Q3 报告"
 aioffice edit   report.docx --set '/body/p[1]' text="营收增长 12%"
 aioffice read   report.docx --view outline
-aioffice mcp    # 同样的 15 项能力，以 MCP 工具形式走 stdio
+aioffice diff   report.docx old.docx        # 语义对比：一份已排序的变更清单
+aioffice mcp    # 同样的 16 项能力，以 MCP 工具形式走 stdio
 ```
 
 ## 眼见为实
@@ -165,7 +166,7 @@ PNG 入库 `assets/demo/` 前仅做了等比缩放（≤900 px 宽，sips/Pillow
 | **人在环中的实时预览** | `preview open` 在 localhost 起一个实时视图；渲染节点带 `data-aio-path`，人类**点一下**，`preview selection` 就把规范路径还给 agent |
 | **默认沙箱** | 所有文件参数在工作区白名单内解析（`--workspace`，含符号链接逃逸检查）；越界即 `sandbox_denied`，退出码 4 |
 | **可自省的命令面** | `aioffice schema` 返回整个命令面的机器可读 JSON——agent 读规范，而不是幻觉规范 |
-| **CLI = MCP 同一套心智模型** | 15 个 CLI 动词与 15 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
+| **CLI = MCP 同一套心智模型** | 16 个 CLI 动词与 16 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
 
 ### "会教学的错误" —— 真实输出
 
@@ -335,10 +336,44 @@ $ aioffice validate report.docx
 
 同一个动词、同一套 findings、同一份 `--fix` 语义也覆盖 **.xlsx**（`#DIV/0!` 等公式错误、合并数据单元格、缺 alt 文本/标题）与 **.pptx**（图片 alt 文本、幻灯片标题、画布外形状、过小字号、阅读顺序）。用 `--category accessibility|quality|all` 与 `--severity error|warning|info` 限定范围；完整 code 清单与哪些可自动修复见 `aioffice help audit`。走 MCP 即 `office_audit {file, category?, severity?, fix?}`——第 15 个工具。
 
+## 对比与审阅
+
+`aioffice diff` **语义**对比文档与一份基线，返回**已排序、确定性**的变更清单——`added` / `removed` / `modified`（带 `before`/`after`）/ `moved`。变更是**数据**：哪怕两份文档差异巨大也 exit 0。基线既可以是**另一份同格式文件**，也可以是文档**自身的某个编辑前快照**。
+
+```console
+# 两份文件 —— 这版草稿相比上一版改了什么
+$ aioffice diff new.docx old.docx
+{
+  "ok": true,
+  "data": {
+    "changes": [
+      { "kind": "modified", "path": "/body/p[1]",
+        "before": "Heading1", "after": "Heading2", "detail": "style" },
+      { "kind": "modified", "path": "/body/p[2]",
+        "before": "Second paragraph.", "after": "Second paragraph EDITED.", "detail": "text" },
+      { "kind": "added", "path": "/body/p[4]", "detail": "paragraph" }
+    ],
+    "summary": { "added": 1, "removed": 0, "modified": 2, "moved": 0 },
+    "baseline": "old.docx",
+    "view": "detailed"
+  }
+}
+
+# 对比快照 —— "我刚才到底改了什么"（每次编辑都会先自动快照）
+$ aioffice edit report.docx --set '/body/p[2]' text='Revised'
+$ aioffice diff report.docx --snapshot 1
+#   → 那次编辑造成的唯一变更，带 before/after，确定性
+
+# 简评模式 —— 仅计数 + 每条变更一行 path+kind
+$ aioffice diff metrics.xlsx baseline.xlsx --view summary
+```
+
+变更清单始终按 `(path, kind)` 排序，因此同样两份文档在每个平台、每次运行 diff 结果完全一致。跨格式基线（`.docx` 对 `.xlsx`）返回 `invalid_args` 并指明不匹配。走 MCP 即 `office_diff {file, other? | snapshot?, view?}`——第 16 个工具。
+
 ## MCP（接入 Claude 等 agent）
 
 ```bash
-aioffice mcp     # stdio MCP 服务器 —— 15 个工具，与 CLI 动词 1:1
+aioffice mcp     # stdio MCP 服务器 —— 16 个工具，与 CLI 动词 1:1
 ```
 
 Claude Desktop / Claude Code 配置：
@@ -356,18 +391,18 @@ Claude Desktop / Claude Code 配置：
 
 | MCP 工具 | CLI 动词 | MCP 工具 | CLI 动词 |
 |---|---|---|---|
-| `office_create` | create | `office_validate` | validate |
-| `office_read` | read | `office_template` | template |
-| `office_query` | query | `file_snapshot` | snapshot |
-| `office_get` | get | `office_status` | doctor |
-| `office_edit` | edit | `office_help` | help |
-| `office_render` | render | `office_schema` | schema |
-| `office_audit` | audit | `preview_open` | preview open |
-| `preview_selection` | preview selection | | |
+| `office_create` | create | `office_template` | template |
+| `office_read` | read | `file_snapshot` | snapshot |
+| `office_query` | query | `office_status` | doctor |
+| `office_get` | get | `office_help` | help |
+| `office_edit` | edit | `office_schema` | schema |
+| `office_render` | render | `preview_open` | preview open |
+| `office_validate` | validate | `preview_selection` | preview selection |
+| `office_audit` | audit | `office_diff` | diff |
 
-`preview_open` / `preview_selection`（实时预览 + 人工点选回读）已于 M1（v0.2.0）注册；`office_audit`（无障碍 + 质量 lint）是第 15 个工具，M7（v0.8.0）加入。全部工具 schema 的 token 预算上限 3,500——由测试强制，加入 `office_audit` 后仍在预算内。
+`preview_open` / `preview_selection`（实时预览 + 人工点选回读）已于 M1（v0.2.0）注册；`office_audit`（无障碍 + 质量 lint）是第 15 个工具，M7（v0.8.0）加入；`office_diff`（语义对比）是第 16 个工具，M8（v0.9.0）加入。全部工具 schema 的 token 预算上限 3,500——由测试强制，加入 `office_diff` 后仍在预算内。
 
-## 命令面（v0.8.0）
+## 命令面（v0.9.0）
 
 | 动词 | 说明 |
 |---|---|
@@ -379,27 +414,28 @@ Claude Desktop / Claude Code 配置：
 | `render <file> [--to html\|svg\|text\|png\|pdf] [--scope]` | "看"的那一步——docx/xlsx 出 html，pptx 逐页出 svg，**png/pdf** 经系统浏览器输出（pptx pdf：整副 deck，一页一张幻灯片） |
 | `validate <file>` | OOXML 校验 + lint，带修复建议 |
 | `audit <file> [--category accessibility\|quality\|all] [--severity error\|warning\|info] [--fix]` | **无障碍 + 质量 lint**——findings 是数据（`ok:true`，exit 0）；`--fix` 只做安全自动修复（alt 文本、表头行、文档/幻灯片标题、孤儿书签）并返回 `{fixed, remaining}` |
+| `diff <file> [<other>] [--snapshot N] [--view summary\|detailed]` | **语义对比**——对比同格式文件*或*文档自身的某个快照，返回已排序、确定性的 `{changes:[added/removed/modified/moved], summary, baseline}`（变更是数据，exit 0）；`--view summary` 裁剪为计数 + path+kind |
 | `template <file> --data <json\|@file>` | `{{key}}` 模板合并（跨 run 拆分安全） |
 | `snapshot <list\|restore> <file> [n]` | 编辑前快照环（20 份） |
 | `preview <open\|selection\|close> <file> [--port N]` | localhost 实时预览；人点选 → `selection` 返回规范路径 |
 | `doctor` | 环境 / 运行时 / 处理器诊断 |
 | `schema [verb]` | 整个命令面的机器可读 JSON |
-| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** |
+| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** · **diff** |
 | `mcp` | stdio MCP 服务器 |
 | `version` | 版本信息 |
 
 全局参数：`--json`（非 TTY 默认）· `--pretty` · `--workspace <dir>`（沙箱根，默认 cwd，亦可 `AIOFFICE_WORKSPACE`）· `--quiet`。
 退出码：`0` 成功 · `2` 用户错误 · `3` 内部/格式错误 · `4` sandbox_denied · `5` unsupported_feature。
 
-**寻址语法**（1 起始）：`/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/`（pptx 幻灯片尺寸 + 分节）· **M7**：`/properties`（文档 core + custom 属性）· `/sdt[@tag=status]`（docx 内容控件）· `/style[@name=Currency-Red]`（xlsx 命名单元格样式）。
+**寻址语法**（1 起始）：`/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/`（pptx 幻灯片尺寸 + 分节）· **M7**：`/properties`（文档 core + custom 属性）· `/sdt[@tag=status]`（docx 内容控件）· `/style[@name=Currency-Red]`（xlsx 命名单元格样式）· **M8**：`/caption[@label=Figure][1]`（docx 题注）· `/Sheet1/slicer[1]`（xlsx 切片器）。
 
-## 当前能力（M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7）
+## 当前能力（M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8）
 
-| 格式 | M0（v0.1.0） | + M1（v0.2.0） | + M2（v0.3.0） | + M3（v0.4.0） | + M4（v0.5.0） | + M5（v0.6.0） | + M6（v0.7.0） | + M7（v0.8.0） |
-|---|---|---|---|---|---|---|---|---|
-| **.docx** | 创建 · 段落/标题/样式 · 表格 · 文本与格式编辑（加粗/斜体/颜色/对齐/字号）· query/get · outline/text/stats/structure 视图 · HTML 渲染 · `{{key}}` 模板 · 校验 | **页眉/页脚**（创建 + 编辑，`/header[1]/p[1]`）· PNG 渲染 · 实时预览 | **修订**（`--track --author`，`read --view revisions`，按 `/revision[@id=N]` 或范围 accept/reject）· **批注**（增/读/删，`/comment[@id=N]`）· **自定义样式**（`/styles` add，`/style[@id=X]` set/get/remove）· **图片**（PNG/JPEG，src 必经沙箱，缺省守纵横比） | **列表**（编号/项目符号，多级嵌套与重新编号；text 视图带 `1.`/`•` 标记，HTML 渲染输出真 `<ol>/<ul>`）· **超链接**（外链 + 书签锚点）· **书签** · **脚注** · **页面设置**（`/section[1]`：纸张/方向/边距）· **格式修订 accept/reject**（w:rPrChange/w:pPrChange）· **批注线程回复**（在 `/comment[@id=N]` 上 `add type:reply`） | **目录 TOC**（`add type:toc`，levels/title/position；`/toc[1]` get 回报 entryCount）· **文本水印**（`add type:watermark`，写入每个页眉，无页眉自动建）· **尾注**（`/endnote[@id=N]`）· **分节符**（`add type:sectionBreak`，逐节独立页面设置——同一文件横竖混排）· **查找替换**（跨 run 匹配；`--track` 时逐命中生成 w:del+w:ins 修订对） | **markdown 桥**（`create --from notes.md` 导入 GFM——标题/列表/表格/链接/代码；`read --view markdown` 导出回去，结构 round-trip）· **深表格**（`mergeRight`/`mergeDown`、边框 all/outer/none、底纹、`headerRow` 跨页重复、`columnWidths`、valign；HTML 渲染出真 colspan/rowspan）· **域**（PAGE/NUMPAGES/DATE/TITLE + `leadingText`——「Page X of Y」页脚）· **首页/奇偶页眉页脚变体**（`/header[firstPage]`，自动接线 `w:titlePg`/`w:evenAndOddHeaders`） | **公式**（`add type:equation`——LaTeX → 真 Office Math；行内 `/body/p[i]/omath[j]` 或显示块；text 视图出 `$…$`/`$$…$$`；未知命令降级 + `equation_partial` 警告；原始 LaTeX 存档可忠实回读）· **右到左/双向**（段落 `w:bidi` / run `w:rtl` / 表格 `w:bidiVisual` 的 `rtl` prop）· **多栏分节**（`/section[1]` 的 `columns`/`columnGap` + `add type:columnBreak`） | **审计**（`audit report.docx [--fix]`——无 alt 文本、标题跳级、表头行缺失、低对比度、无文档标题、空/坏标题、坏链接、孤儿书签；alt/表头/标题/书签可安全自动修复）· **文档属性**（`set /properties` core + 类型化 custom；`read --view properties`）· **内容控件**（`add type:contentControl` text/dropdown/date/checkbox；`/sdt[@tag=X]`；`read --view fields`）· **图片 alt 文本**（`set {alt}`） |
-| **.xlsx** | 创建 · 类型化写入（数字/布尔/字符串/日期）· **公式求值并缓存结果** + 诚实警告 · 数字格式 · 合并单元格 · 表格/工作表 · 区域读取 · 按值/公式查询 · HTML 渲染 · 模板 · 校验 | **图表**（bar/line/pie，`add type:chart`）· PNG 渲染 · 实时预览 | **数据透视表**（rows/columns/filters + sum/average/count/min/max，`pivot[@name=X]` 寻址）· **条件格式**（cellIs/colorScale/dataBar/containsText）· **图片**（anchor 锚定，PNG/JPEG） | **大工作簿流式读取**（SAX 扫原始 XML——`read --view stats/text` 与单元格/区域 `get` 不加载 DOM；41 MB / 33 万行约 2 秒出 stats）· **散点图与面积图** · **命名区域**（`/name[@name=X]`，公式可用——`=SUM(SalesData)` 真求值）· **冻结窗格** · **自动筛选** · **打印设置**（方向/纸张/fitTo/打印区域） | **批量 2D 写入**（锚点式 `set /Sheet1/A2 values:[[…]]` 或精确区域式；公式随写随求值；>50k 单元格写空白 sheet 走 SAX 流式）· **行列操作**（插删自动重写公式引用、行高列宽、隐藏、`col[C]` 字母寻址）· **单元格批注**（增/读/删 + 作者）· **查找替换**（文本单元格；`inFormulas:true` 才进公式文本） | **csv 桥**（`create --from orders.csv`：RFC 4180、分隔符嗅探、类型化单元格——`007` 保持文本，>50k 单元格走流式；`read --view csv [--sheet] [--range]` 反向导出）· **数据验证**（list 下拉，字面值或引用区域；wholeNumber/decimal/date/textLength 规则 + 算子；错误样式）· **迷你图**（line/column/winLoss，颜色、markers）· **线程批注**（真 `xl/threadedComments` + 按 `/Sheet1/comment[@id=GUID]` 回复，旧客户端 note 退化）· **单元格超链接**（`https://…` 外链 + `#Sheet!A1` 内链，tooltip） | **就地流式写入**（`stream:true` 或任意 >20 MB 文件经 SAX writer 原地改写工作簿——50 MB+ 大表里写深单元格、批量写区域秒级完成；结果标 `streamed:true`）· **Excel 表 / ListObject**（`add type:table` 套区域——命名、内置样式、汇总行 sum/avg/…、结构化引用 `=SUM(Sales[Amount])` 求值；`/Sheet1/table[@name=X]`）· **大纲分组**（`add type:group` 套 `row[a]:row[b]` / `col[a]:col[b]` 跨段、`collapsed`、嵌套级别） | **审计**（`audit metrics.xlsx [--fix]`——公式错误 `#DIV/0!`/`#REF!`、合并数据单元格、图片无 alt、无文档标题；alt/标题可安全自动修复）· **命名单元格样式**（`add type:cellStyle` numberFormat/bold/fill/color/border 一次定义，`set {cellStyle:"X"}` 套区域，`read --view styles`，`/style[@name=X]`）· **文档属性**（`set /properties`；`read --view properties`）· **图片 alt 文本** |
-| **.pptx** | 创建（validator 零错误，PowerPoint/Keynote 可直接打开）· 增/删/重排幻灯片 · 定位文本形状（cm/EMU）· 稳定 shape id 的 query/get · **逐页 SVG 渲染** · 模板 · 校验 | 形状**填充/字体/颜色/对齐属性** · **母版/版式只读寻址** · 逐页 PNG 渲染 · 实时预览 | **幻灯片背景**（真 `p:bg` 纯色填充）· **演讲者备注**（`/slide[i]/notes` set/add/remove/get）· **图片**（PNG/JPEG，稳定 `shape[@id=N]` 路径） | **原生图表**（bar/line/pie，字面量数据缓存，`/slide[i]/chart[k]`）· **跨文档 `dataFrom`**（图表系列直接取自工作簿）· **切换动画**（fade/push/wipe + 时长）· **预设几何形状**（椭圆/三角/菱形/箭头/圆角矩形 + line 连接线，支持翻转）· **z 序**（`move` 到 front/back/forward/backward） | **可编辑图表数据**（新建图表嵌入真实工作簿——PowerPoint 右键「编辑数据」直接可用；旧图表 `set {embedData:true}` 一键改造）· **进入动画**（appear/fade/flyIn/wipe，方向与 click/with/after 触发，`/slide[i]/animation[k]`）· **幻灯片批注**（`add type:comment`，`/slide[i]/comment[@id=N]`）· **查找替换**（slide 作用域含演讲者备注） | **原生表格**（`add type:table` rows×cols、`headerRow`、light/medium/dark 三档样式、单元格 `mergeRight`/`mergeDown`、`/slide[i]/table[k]/tr[r]/tc[c]` 寻址、SVG 画出真网格）· **强调与退出动画**（pulse/grow/spin/colorPulse · fadeOut/flyOut/wipeOut，structure 视图按播放顺序列出）· **批注回复**（`add type:reply`——p15 线程，PowerPoint 2013+ 显示）· **SmartArt 读取**（`/slide[i]/smartart[k]` 嵌套节点树；编辑保持类型化 `unsupported_feature`） | **母版与版式编辑**（`set /master[m]` 背景 + 主题强调色、`add type:layout` 克隆版式、编辑母版/版式形状、克隆版式经 `add type:slide props:{layout:N}` 套用）· **幻灯片分节**（`/` 上 `add type:section`，`afterSlide` 区间；`read --view outline` 按节分组；抗重排）· **幻灯片尺寸/宽高比**（`set / {slideSize:"4:3"}` 或显式 `width`/`height`）· **动画时间轴重排**（`move /slide[i]/animation[2] before …`） | **审计**（`audit deck.pptx [--fix]`——图片无 alt、幻灯片无标题、画布外形状、过小字号（<12pt 警告 / <8pt 错误）、阅读顺序；alt/标题可安全自动修复）· **显式 alt 文本/标题**（shape `set {altText}`/`{altTitle}`；SVG 渲染出 `<title>`）· **文档属性**（`set /properties`） |
+| 格式 | M0（v0.1.0） | + M1（v0.2.0） | + M2（v0.3.0） | + M3（v0.4.0） | + M4（v0.5.0） | + M5（v0.6.0） | + M6（v0.7.0） | + M7（v0.8.0） | + M8（v0.9.0） |
+|---|---|---|---|---|---|---|---|---|---|
+| **.docx** | 创建 · 段落/标题/样式 · 表格 · 文本与格式编辑（加粗/斜体/颜色/对齐/字号）· query/get · outline/text/stats/structure 视图 · HTML 渲染 · `{{key}}` 模板 · 校验 | **页眉/页脚**（创建 + 编辑，`/header[1]/p[1]`）· PNG 渲染 · 实时预览 | **修订**（`--track --author`，`read --view revisions`，按 `/revision[@id=N]` 或范围 accept/reject）· **批注**（增/读/删，`/comment[@id=N]`）· **自定义样式**（`/styles` add，`/style[@id=X]` set/get/remove）· **图片**（PNG/JPEG，src 必经沙箱，缺省守纵横比） | **列表**（编号/项目符号，多级嵌套与重新编号；text 视图带 `1.`/`•` 标记，HTML 渲染输出真 `<ol>/<ul>`）· **超链接**（外链 + 书签锚点）· **书签** · **脚注** · **页面设置**（`/section[1]`：纸张/方向/边距）· **格式修订 accept/reject**（w:rPrChange/w:pPrChange）· **批注线程回复**（在 `/comment[@id=N]` 上 `add type:reply`） | **目录 TOC**（`add type:toc`，levels/title/position；`/toc[1]` get 回报 entryCount）· **文本水印**（`add type:watermark`，写入每个页眉，无页眉自动建）· **尾注**（`/endnote[@id=N]`）· **分节符**（`add type:sectionBreak`，逐节独立页面设置——同一文件横竖混排）· **查找替换**（跨 run 匹配；`--track` 时逐命中生成 w:del+w:ins 修订对） | **markdown 桥**（`create --from notes.md` 导入 GFM——标题/列表/表格/链接/代码；`read --view markdown` 导出回去，结构 round-trip）· **深表格**（`mergeRight`/`mergeDown`、边框 all/outer/none、底纹、`headerRow` 跨页重复、`columnWidths`、valign；HTML 渲染出真 colspan/rowspan）· **域**（PAGE/NUMPAGES/DATE/TITLE + `leadingText`——「Page X of Y」页脚）· **首页/奇偶页眉页脚变体**（`/header[firstPage]`，自动接线 `w:titlePg`/`w:evenAndOddHeaders`） | **公式**（`add type:equation`——LaTeX → 真 Office Math；行内 `/body/p[i]/omath[j]` 或显示块；text 视图出 `$…$`/`$$…$$`；未知命令降级 + `equation_partial` 警告；原始 LaTeX 存档可忠实回读）· **右到左/双向**（段落 `w:bidi` / run `w:rtl` / 表格 `w:bidiVisual` 的 `rtl` prop）· **多栏分节**（`/section[1]` 的 `columns`/`columnGap` + `add type:columnBreak`） | **审计**（`audit report.docx [--fix]`——无 alt 文本、标题跳级、表头行缺失、低对比度、无文档标题、空/坏标题、坏链接、孤儿书签；alt/表头/标题/书签可安全自动修复）· **文档属性**（`set /properties` core + 类型化 custom；`read --view properties`）· **内容控件**（`add type:contentControl` text/dropdown/date/checkbox；`/sdt[@tag=X]`；`read --view fields`）· **图片 alt 文本**（`set {alt}`） | **diff**（`diff new.docx old.docx`——段落/表格/页眉页脚/属性变更归为 added/removed/modified/moved，确定性）· **题注**（`add type:caption` Figure/Table/Equation + SEQ；`/caption[@label=Figure][i]`）· **交叉引用**（`add type:crossRef` REF/PAGEREF；`labelAndNumber`/`numberOnly`/`text`/`page`） |
+| **.xlsx** | 创建 · 类型化写入（数字/布尔/字符串/日期）· **公式求值并缓存结果** + 诚实警告 · 数字格式 · 合并单元格 · 表格/工作表 · 区域读取 · 按值/公式查询 · HTML 渲染 · 模板 · 校验 | **图表**（bar/line/pie，`add type:chart`）· PNG 渲染 · 实时预览 | **数据透视表**（rows/columns/filters + sum/average/count/min/max，`pivot[@name=X]` 寻址）· **条件格式**（cellIs/colorScale/dataBar/containsText）· **图片**（anchor 锚定，PNG/JPEG） | **大工作簿流式读取**（SAX 扫原始 XML——`read --view stats/text` 与单元格/区域 `get` 不加载 DOM；41 MB / 33 万行约 2 秒出 stats）· **散点图与面积图** · **命名区域**（`/name[@name=X]`，公式可用——`=SUM(SalesData)` 真求值）· **冻结窗格** · **自动筛选** · **打印设置**（方向/纸张/fitTo/打印区域） | **批量 2D 写入**（锚点式 `set /Sheet1/A2 values:[[…]]` 或精确区域式；公式随写随求值；>50k 单元格写空白 sheet 走 SAX 流式）· **行列操作**（插删自动重写公式引用、行高列宽、隐藏、`col[C]` 字母寻址）· **单元格批注**（增/读/删 + 作者）· **查找替换**（文本单元格；`inFormulas:true` 才进公式文本） | **csv 桥**（`create --from orders.csv`：RFC 4180、分隔符嗅探、类型化单元格——`007` 保持文本，>50k 单元格走流式；`read --view csv [--sheet] [--range]` 反向导出）· **数据验证**（list 下拉，字面值或引用区域；wholeNumber/decimal/date/textLength 规则 + 算子；错误样式）· **迷你图**（line/column/winLoss，颜色、markers）· **线程批注**（真 `xl/threadedComments` + 按 `/Sheet1/comment[@id=GUID]` 回复，旧客户端 note 退化）· **单元格超链接**（`https://…` 外链 + `#Sheet!A1` 内链，tooltip） | **就地流式写入**（`stream:true` 或任意 >20 MB 文件经 SAX writer 原地改写工作簿——50 MB+ 大表里写深单元格、批量写区域秒级完成；结果标 `streamed:true`）· **Excel 表 / ListObject**（`add type:table` 套区域——命名、内置样式、汇总行 sum/avg/…、结构化引用 `=SUM(Sales[Amount])` 求值；`/Sheet1/table[@name=X]`）· **大纲分组**（`add type:group` 套 `row[a]:row[b]` / `col[a]:col[b]` 跨段、`collapsed`、嵌套级别） | **审计**（`audit metrics.xlsx [--fix]`——公式错误 `#DIV/0!`/`#REF!`、合并数据单元格、图片无 alt、无文档标题；alt/标题可安全自动修复）· **命名单元格样式**（`add type:cellStyle` numberFormat/bold/fill/color/border 一次定义，`set {cellStyle:"X"}` 套区域，`read --view styles`，`/style[@name=X]`）· **文档属性**（`set /properties`；`read --view properties`）· **图片 alt 文本** | **diff**（`diff new.xlsx old.xlsx`——单元格改动、增删工作表、命名区域、表格归为 modified/added/removed）· **切片器**（`add type:slicer` 套表列或透视字段，原始 OpenXml 自研；`/Sheet1/slicer[i]`，`get`/`remove`/structure） |
+| **.pptx** | 创建（validator 零错误，PowerPoint/Keynote 可直接打开）· 增/删/重排幻灯片 · 定位文本形状（cm/EMU）· 稳定 shape id 的 query/get · **逐页 SVG 渲染** · 模板 · 校验 | 形状**填充/字体/颜色/对齐属性** · **母版/版式只读寻址** · 逐页 PNG 渲染 · 实时预览 | **幻灯片背景**（真 `p:bg` 纯色填充）· **演讲者备注**（`/slide[i]/notes` set/add/remove/get）· **图片**（PNG/JPEG，稳定 `shape[@id=N]` 路径） | **原生图表**（bar/line/pie，字面量数据缓存，`/slide[i]/chart[k]`）· **跨文档 `dataFrom`**（图表系列直接取自工作簿）· **切换动画**（fade/push/wipe + 时长）· **预设几何形状**（椭圆/三角/菱形/箭头/圆角矩形 + line 连接线，支持翻转）· **z 序**（`move` 到 front/back/forward/backward） | **可编辑图表数据**（新建图表嵌入真实工作簿——PowerPoint 右键「编辑数据」直接可用；旧图表 `set {embedData:true}` 一键改造）· **进入动画**（appear/fade/flyIn/wipe，方向与 click/with/after 触发，`/slide[i]/animation[k]`）· **幻灯片批注**（`add type:comment`，`/slide[i]/comment[@id=N]`）· **查找替换**（slide 作用域含演讲者备注） | **原生表格**（`add type:table` rows×cols、`headerRow`、light/medium/dark 三档样式、单元格 `mergeRight`/`mergeDown`、`/slide[i]/table[k]/tr[r]/tc[c]` 寻址、SVG 画出真网格）· **强调与退出动画**（pulse/grow/spin/colorPulse · fadeOut/flyOut/wipeOut，structure 视图按播放顺序列出）· **批注回复**（`add type:reply`——p15 线程，PowerPoint 2013+ 显示）· **SmartArt 读取**（`/slide[i]/smartart[k]` 嵌套节点树；编辑保持类型化 `unsupported_feature`） | **母版与版式编辑**（`set /master[m]` 背景 + 主题强调色、`add type:layout` 克隆版式、编辑母版/版式形状、克隆版式经 `add type:slide props:{layout:N}` 套用）· **幻灯片分节**（`/` 上 `add type:section`，`afterSlide` 区间；`read --view outline` 按节分组；抗重排）· **幻灯片尺寸/宽高比**（`set / {slideSize:"4:3"}` 或显式 `width`/`height`）· **动画时间轴重排**（`move /slide[i]/animation[2] before …`） | **审计**（`audit deck.pptx [--fix]`——图片无 alt、幻灯片无标题、画布外形状、过小字号（<12pt 警告 / <8pt 错误）、阅读顺序；alt/标题可安全自动修复）· **显式 alt 文本/标题**（shape `set {altText}`/`{altTitle}`；SVG 渲染出 `<title>`）· **文档属性**（`set /properties`） | **diff**（`diff new.pptx old.pptx`——重排幻灯片归为 moved，编辑形状/尺寸/分节/背景归为 modified）· **形状超链接/动作**（`set {hyperlink}` 外链 url / `#slide:N` 跳转 / `#first…#end` 放映动作、`{linkText}`；`get` 回读规范形式） |
 
 M3 跨格式新增（功能第一）：
 
@@ -419,8 +455,8 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 
 ```
                  ┌─────────────────────────────────────────────┐
-   agent/human → │  src/AIOffice.Cli   （aioffice，15 动词）    │
-   MCP client  → │  src/AIOffice.Mcp   （stdio，15 工具，1:1）  │
+   agent/human → │  src/AIOffice.Cli   （aioffice，16 动词）    │
+   MCP client  → │  src/AIOffice.Mcp   （stdio，16 工具，1:1）  │
                  ├─────────────────────────────────────────────┤
                  │  src/AIOffice.Render （经浏览器出 png/pdf）  │
                  │  src/AIOffice.Preview  （实时点选预览）      │
@@ -444,7 +480,7 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 
 本项目的起点之一，是研究过一个**零自动化测试**却日更发布的优秀 office CLI——AIOffice 选择完全相反的立场：
 
-- **1366 个测试**横跨 7 个项目（Core 124 · Word 424 · Excel 335 · Pptx 365 · MCP 63 · Preview 24 · Render 31），每次提交全绿。
+- **1449 个测试**横跨 7 个项目（Core 124 · Word 448 · Excel 363 · Pptx 396 · MCP 63 · Preview 24 · Render 31），每次提交全绿。
 - **往返定律**：打开 → 不编辑直接保存，所有 zip part 必须字节级一致；已文档化的例外被逐一精确断言。
 - **独立裁判**：每个变更测试后 OpenXmlValidator 必须报 0 错误——工具不给自己的作业打分。
 - **CI 矩阵**：macOS 14 + Windows，warnings-as-errors 构建、金样脚本、单文件发布并冒烟。
@@ -461,7 +497,8 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 - **M5（已交付，v0.6.0）** —— **markdown/csv 桥**：`create --from`（`.md` → `.docx` 经 Markdig，`.csv` → `.xlsx` 类型化导入）+ `read --view markdown|csv` 导出 round-trip · docx **深表格**（合并/边框/底纹/columnWidths/headerRow）/**域**（PAGE/NUMPAGES/DATE/TITLE）/**首页与奇偶页眉页脚变体** · xlsx **数据验证**（下拉 + 规则）/**迷你图**/**线程批注 + 回复**/**单元格超链接** · pptx **原生表格**（合并 + 样式）/**强调与退出动画**/**批注回复**/**SmartArt 读取** · `IFormatHandler.CreateFrom` 导入钩子（增量式，默认 `unsupported_feature`）。
 - **M6（已交付，v0.7.0）** —— **深水区攻坚**：docx **公式**（手写 LaTeX → Office Math 转换器，行内/显示、矩阵、部分降级警告、原始 LaTeX 存档可忠实回读）/**右到左与双向**（段/run/表）/**多栏分节**（含分栏符）· xlsx **就地流式写入**（经 SAX writer 原地改写 50 MB+ 大工作簿）/**Excel 表**（ListObject + 汇总 + 结构化引用）/**大纲分组**（行/列跨段）· pptx **母版与版式编辑**（背景、主题强调色、克隆版式）/**幻灯片分节**/**幻灯片尺寸与宽高比**/**动画时间轴重排** · 新增寻址形式 `/`（演示文稿根）、`/body/p[i]/omath[j]`、`/section[i]`、`row[a]:row[b]` 跨段、可编辑 `/master[1]/layout[i]`。
 - **M7（已交付，v0.8.0）** —— **交付前先审计**：三格式共享 `audit` 动词 + `office_audit` MCP 工具（第 15 个工具）—— 无障碍 + 质量 lint，findings 是数据（`ok:true`，exit 0），`--fix` 只做安全自动修复（占位 alt 文本、表头行、文档/幻灯片标题、孤儿书签）并返回 `{fixed, remaining}` · docx **文档属性**（core + 类型化 custom）/**内容控件**（text/dropdown/date/checkbox，`read --view fields`）/图片 alt 文本 · xlsx **命名单元格样式**（`add type:cellStyle`，`read --view styles`）/文档属性/公式错误 + 合并数据单元格 + alt 文本审计 · pptx alt-text/标题/阅读顺序审计 + 显式 `altText`/`altTitle`/文档属性 · 新增寻址形式 `/properties`、`/sdt[@tag=X]`、`/style[@name=X]`；`office_read` view 枚举新增 `properties`/`fields`/`styles`。
-- **M8（种子）** —— pptx/xlsx 公式（幻灯片与单元格内的 OMML，复用 `AIOffice.Word.Equations` 转换器）· 语义 diff 动词 · 跨格式转换（docx ↔ pptx）· OLE 对象 · 插件机制（外部格式 handler）· 动画预设++（完整强调/退出全集、效果链、motion path）· 现代 xlsx 批注打磨 · xlsx/pptx RTL。
+- **M8（已交付，v0.9.0）** —— **对比与审阅**：三格式共享 `diff` 动词 + `office_diff` MCP 工具（第 16 个工具）—— 语义对比文档与基线（另一同格式文件 `other` *或*文档自身的某个编辑前快照 `--snapshot N`），返回已排序、确定性的 `{changes:[added/removed/modified/moved], summary, baseline}`（变更是数据，exit 0；LCS/内容哈希区分 moved；`--view summary` 裁剪为 path+kind）· docx **题注**（Figure/Table/Equation + SEQ）/**交叉引用**（REF/PAGEREF，`labelAndNumber`/`numberOnly`/`text`/`page`）· xlsx **切片器**（表列 / 透视字段，原始 OpenXml 自研）· pptx **形状超链接/动作**（url / `#slide:N` 跳转 / `#first…#end` 放映动作 / `linkText`）· 新增寻址形式 `/caption[@label=Figure][i]`、`/Sheet1/slicer[i]`。
+- **M9（种子）** —— pptx/xlsx 公式（幻灯片与单元格内的 OMML，复用 `AIOffice.Word.Equations` 转换器）· 跨格式转换（docx ↔ pptx）· OLE 对象 · 插件机制（外部格式 handler）· 1.0 加固 · 动画预设++（完整强调/退出全集、效果链、motion path）· 现代 xlsx 批注打磨 · xlsx/pptx RTL。
 
 ## 设计声明
 

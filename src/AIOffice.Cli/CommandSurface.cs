@@ -97,7 +97,7 @@ public static class CommandSurface
                 new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject, path, type?, props?, position?}]."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
-                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline."),
+                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx)."),
                 new("remove", "<path>", "Sugar: remove the node at <path>.", Repeatable: true),
                 new("find", "<text>", "Sugar: document-wide find/replace (docx body+headers+footers, every sheet, every slide incl. notes); aggregate {replacements, locations} in the result."),
                 new("replace", "<text>", "Replacement text for --find (default: empty = delete matches); in --regex mode $1 etc. substitute groups."),
@@ -150,6 +150,19 @@ public static class CommandSurface
                 new("fix", null, "Apply only the safe, non-destructive autofixes (placeholder alt text, mark a table header row, set a doc/slide title, drop an orphan bookmark). Reports {fixed:N, remaining:[…]}. See 'aioffice help audit' for the codes and which are autofixable."),
             ],
             "office_audit"),
+
+        new("diff",
+            "Semantically compare a document against a baseline (another file, or one of its own snapshots): a sorted, deterministic change list.",
+            "aioffice diff <file> [<otherFile>] [--snapshot N] [--view summary|detailed]",
+            [
+                new("file", true, "The current/new document."),
+                new("otherFile", false, "Baseline: the OLD document to compare against (same format). Mutually exclusive with --snapshot."),
+            ],
+            [
+                new("snapshot", "N", "Baseline: snapshot N of <file> from its automatic pre-edit ring (restored to a temp file). Mutually exclusive with otherFile."),
+                new("view", "summary|detailed", "detailed (default) carries full before/after per change; summary trims to counts + one terse path+kind line per change."),
+            ],
+            "office_diff"),
 
         new("snapshot",
             "List or restore the automatic pre-edit snapshot ring (keeps the last 20 per file).",
@@ -259,16 +272,16 @@ public static class GrammarPointers
     public static readonly object Addressing = new
     {
         summary = "Slash-separated 1-based paths. docx: /body/p[3], /body/table[1]/tr[2]/tc[1], /header[1]/p[1], " +
-                  "/revision[@id=3], /comment[@id=1], /style[@id=Callout]. " +
+                  "/revision[@id=3], /comment[@id=1], /style[@id=Callout], /caption[@label=Figure][1]. " +
                   "xlsx: /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /'Q3 Data'/B2, /Pivot/pivot[@name=SalesPivot], " +
-                  "/Sheet1/conditionalFormat[1], /Sheet1/image[1]. " +
+                  "/Sheet1/conditionalFormat[1], /Sheet1/image[1], /Sheet1/slicer[1]. " +
                   "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1], /slide[2]/notes.",
         helpTopic = "addressing",
         examples = new[]
         {
             "/body/p[3]", "/revision[@id=3]", "/comment[@id=1]", "/style[@id=Callout]",
-            "/Sheet1/A1:C10", "/Pivot/pivot[@name=SalesPivot]", "/Sheet1/conditionalFormat[1]",
-            "/slide[2]/shape[3]", "/slide[2]/notes",
+            "/caption[@label=Figure][1]", "/Sheet1/A1:C10", "/Pivot/pivot[@name=SalesPivot]",
+            "/Sheet1/conditionalFormat[1]", "/Sheet1/slicer[1]", "/slide[2]/shape[3]", "/slide[2]/notes",
         },
     };
 

@@ -228,6 +228,27 @@ carry a stable `id` (`code#path`) so `--fix` can target specific ones; default
 | quality_empty_placeholder | warning    | yes — removes the empty placeholder      |
 | quality_duplicate_id   | error         | no  — give each shape a unique id        |
 
+## shape hyperlinks & actions (M8)
+
+A shape's click action lives on its `set` props. Set `hyperlink` to one of:
+
+| target form              | effect                                                       |
+|--------------------------|--------------------------------------------------------------|
+| `https://…`              | open an external URL                                         |
+| `#slide:4`               | jump to slide 4                                              |
+| `#first` · `#last`       | jump to the first / last slide                              |
+| `#next` · `#prev`        | go to the next / previous slide                             |
+| `#end`                   | end the show                                                |
+| `""` (empty)             | clear the shape's click action                              |
+
+    {op:"set", path:"/slide[1]/shape[@id=5]", props:{hyperlink:"https://example.com"}}
+    {op:"set", path:"/slide[1]/shape[@id=5]", props:{hyperlink:"#slide:4"}}   # jump-to-slide
+    {op:"set", path:"/slide[1]/shape[@id=5]", props:{hyperlink:"#next"}}      # show action
+
+`linkText` wraps the shape's text runs in a text hyperlink (same target
+grammar). `get /slide[1]/shape[@id=5]` reports the canonical hyperlink form
+(`url` / `#slide:N` / `#first…`) back.
+
 ## Rendering
 
 `aioffice render deck.pptx --to svg --scope /slide[2] -o slide2.svg` renders

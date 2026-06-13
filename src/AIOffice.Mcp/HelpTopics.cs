@@ -24,6 +24,7 @@ public static class HelpTopics
                 - envelope        the {ok,data,error,meta} result shape
                 - errors          all error codes and how to recover
                 - audit           accessibility + quality lint codes + --fix semantics (M7)
+                - diff            semantic compare two files / a snapshot: change kinds + the workflow (M8)
                 - bridges         markdown↔docx and csv↔xlsx import/export (M5)
                 - equations       docx LaTeX → Office Math: the supported subset (M6)
                 - rtl             right-to-left paragraph/run/table (M6)
@@ -35,6 +36,7 @@ public static class HelpTopics
                 - docx/comment    comments + threaded replies: add/read/remove
                 - docx/style      style definitions: add/set/remove, apply
                 - docx/image      inline pictures: add type "image"
+                - docx/caption    Figure/Table/Equation captions + cross-references (M8)
                 - docx/list       numbered/bulleted/nested list items (M3)
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins + columns (M3/M6)
@@ -47,9 +49,10 @@ public static class HelpTopics
                 - xlsx/comment    threaded comments + replies (M5)
                 - xlsx/pivot      pivot tables: add type "pivot"
                 - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
+                - xlsx/slicer     table-column / pivot-field slicers (M8)
                 - xlsx/image      anchored pictures: add type "image"
                 - xlsx/sheet      freeze/autoFilter/print setup, names, streaming read+write (M3/M6)
-                - pptx/shape      shape element: settable props incl. preset geometry/z-order
+                - pptx/shape      shape element: settable props incl. preset geometry/z-order, hyperlink/action (M8)
                 - pptx/table      native tables: merges, looks, columnWidths (M5)
                 - pptx/animation  entrance/emphasis/exit effects + timeline reorder (M4/M5/M6)
                 - pptx/comment    slide comments + threaded replies (M5)
@@ -81,6 +84,55 @@ public static class HelpTopics
                   (first heading > file name > placeholder), drop an orphan bookmark. Everything else is report-only.
                 """,
                 ["errors", "edit-ops"]),
+
+            ["diff"] = (
+                """
+                ## diff (M8) — office_diff {file, other? | snapshot?, view?}  (CLI: aioffice diff <file> [<other>] [--snapshot N] [--view …])
+                Semantically compares the CURRENT document (file) against a baseline and returns a SORTED, platform-stable
+                change list. Changes are DATA: ok:true / exit 0 even for a big diff (like office_validate/office_audit).
+                Baseline = exactly one of:
+                  other     another SAME-format file (the OLD document); a format mismatch is invalid_args naming it.
+                  snapshot  snapshot N of file's own auto pre-edit ring (restored to a throwaway temp baseline); a missing
+                            index is invalid_args naming the available numbers. file_snapshot {action:"list"} shows the ring.
+                Result: {changes:[{kind, path, before?, after?, detail?}], summary:{added,removed,modified,moved}, baseline, view}.
+                  kind     added | removed | modified | moved.  path = canonical path in the CURRENT file (the BASELINE path for removed).
+                  modified before/after carry concise old/new values (text, "Normal"->"Heading1", a cell value, …); detail names what changed.
+                  moved    detail = "moved from <old path>" (matched content, new position — distinguished via LCS/content-hash).
+                view: detailed (default) keeps full before/after; summary trims each change to {kind, path} (counts still in summary).
+                Order is canonical: sorted by (path, kind) ordinal, so the same two documents diff identically on every platform.
+                Snapshot-diff workflow: edit a file (auto-snapshots the pre-image) -> office_diff {file, snapshot:1} shows exactly
+                what that edit changed; great for a "what did I just do" review before committing.
+                """,
+                ["edit-ops", "errors"]),
+
+            ["docx/caption"] = (
+                """
+                ## docx captions + cross-references (M8)
+                caption:  {"op":"add","path":"/body/p[3]","type":"caption","props":{"label":"Figure","text":"Quarterly trend","position":"after"}}
+                          label = Figure | Table | Equation (each has its own SEQ counter). position before|after the anchor block (default after).
+                          A Caption-styled paragraph: "Figure " + a SEQ field + ": text", wrapped in a bookmark. Address it /caption[@label=Figure][1]
+                          (1-based per label). The number is CACHED — Word renumbers all captions on open or field refresh (F9); a
+                          caption_numbers_cached warning says so.
+                crossRef: {"op":"add","path":"/body/p[5]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]","show":"labelAndNumber"}}
+                          appends a REF field at the paragraph pointing at the caption's bookmark, with cached display text ("Figure 1").
+                          show = labelAndNumber (default) | numberOnly | text | page (page uses PAGEREF). leadingText prefixes literal text.
+                get /caption[@label=Figure][1] returns label/number/text; read {view:"structure"} lists captions.
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["xlsx/slicer"] = (
+                """
+                ## xlsx slicers (M8) — add type "slicer" (a dashboard filter on a table column or a pivot field)
+                table-column: {"op":"add","path":"/Sheet1/table[@name=Sales]","type":"slicer","props":{"column":"Region",
+                              "caption"?,"x"?:"H2","widthCells"?,"heightCells"?}}
+                pivot-field:  {"op":"add","path":"/Sheet1/pivot[1]","type":"slicer","props":{"field":"Region","caption"?,"x"?,…}}
+                column/field is matched case-insensitively; a wrong name is invalid_args with the available names as candidates.
+                x is the top-left anchor cell (default: two columns right of the used range); box defaults to 2x7 cells.
+                Authored on raw OpenXml (ClosedXML can't create slicer parts) — validates clean. Address slicers /Sheet1/slicer[i]
+                (1-based per sheet) or /Sheet1/slicer[@name=X]. get reports kind(table|pivot)/column/caption; read {view:"structure"}
+                lists per-sheet slicers. remove by either path.
+                """,
+                ["xlsx/table", "xlsx/pivot"]),
 
             ["bridges"] = (
                 """
@@ -248,7 +300,9 @@ public static class HelpTopics
                        /master[1]   /master[1]/layout[2]   /master[1]/shape[1]   (M6: editable — background, accents, shapes, cloned layouts)
                        /section[i] (slide section)   /slide[i]/animation[k] (timeline)
                 docx M6:  /body/p[i]/omath[j] (inline equation)   /section[i] (page setup + columns)
+                docx M8:  /caption[@label=Figure][1] (caption, 1-based per label; label Figure|Table|Equation)
                 xlsx M6:  /Sheet1/table[@name=X] (Excel Table)   /Sheet1/row[a]:row[b], /Sheet1/col[a]:col[b] (outline group spans)
+                xlsx M8:  /Sheet1/slicer[i] or /Sheet1/slicer[@name=X] (table-column / pivot-field slicer)
                 "/" alone is the document root: pptx slide size + sections, and document-level office_get.
                 office_query returns canonical paths; office_get / office_edit accept them verbatim.
                 Positional indices DRIFT after inserts/removes — re-run office_query instead of reusing old indices.
@@ -456,6 +510,9 @@ public static class HelpTopics
                 bold / italic "true" | "false"
                 shape (M3)    preset geometry on add: rect|roundRect|ellipse|triangle|diamond|arrow|line ("line" builds a connector; fill = stroke)
                 flipH / flipV (M3) "true" mirrors the geometry
+                hyperlink (M8) the shape's click action: a url ("https://…"), a slide jump ("#slide:4"), or a show action
+                              ("#first" | "#last" | "#next" | "#prev" | "#end"); "" clears it. get reports the canonical form back.
+                linkText (M8) wraps the shape's runs in a text hyperlink (same target grammar as hyperlink).
                 z-order (M3): {"op":"move","path":"/slide[1]/shape[@id=5]","position":"front|back|forward|backward"} (front = painted last/topmost)
                 add slides with type "slide" on path "/"; render→look→fix: office_render {to:"svg", scope:"/slide[N]"} after each visual change.
                 """,

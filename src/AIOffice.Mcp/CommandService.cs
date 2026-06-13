@@ -137,6 +137,52 @@ public sealed class CommandService
         return AuditVerb.Run(auditor, Context(resolved, a), opts);
     });
 
+    public Envelope Diff(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the current document to diff.");
+        var resolved = Workspace.Resolve(file, mustExist: true);
+        var handler = Handlers.Resolve(resolved);
+        var view = DiffVerb.NormalizeView(OptionalString(a, "view"));
+
+        // Exactly one baseline: another file (other) OR a snapshot index.
+        var other = OptionalString(a, "other");
+        var snapshot = OptionalInt(a, "snapshot");
+
+        if (other is null && snapshot is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "diff needs a baseline: pass 'other' (another same-format file) or 'snapshot' (a snapshot number).",
+                "Two files: office_diff {file, other}. Against a snapshot: office_diff {file, snapshot:1}.");
+        }
+
+        if (other is not null && snapshot is not null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "diff takes EITHER 'other' OR 'snapshot', not both.",
+                "Drop one: 'other' diffs against that file; 'snapshot' diffs against the file's own snapshot ring.");
+        }
+
+        var ctx = Context(resolved, a);
+
+        if (snapshot is { } n)
+        {
+            if (n <= 0)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"'snapshot' must be a positive snapshot number, got {n}.",
+                    "Call file_snapshot {file, action:\"list\"} to see the available snapshot numbers.");
+            }
+
+            return DiffVerb.RunSnapshot(handler, ctx, _snapshots, n, view);
+        }
+
+        var baseline = Workspace.Resolve(other!, mustExist: true);
+        return DiffVerb.RunTwoFile(handler, ctx, baseline, other!, view);
+    });
+
     public Envelope Edit(JsonObject args) => Run(args, a =>
     {
         var file = RequireString(a, "file", "Pass the document to edit.");

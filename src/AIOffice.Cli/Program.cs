@@ -14,7 +14,7 @@ internal static class Program
 {
     private static readonly string[] FileVerbNames =
     [
-        "create", "read", "query", "get", "edit", "render", "validate", "template", "audit",
+        "create", "read", "query", "get", "edit", "render", "validate", "template", "audit", "diff",
     ];
 
     private static async Task<int> Main(string[] argv)
@@ -174,6 +174,7 @@ internal static class Program
             "validate" => fileVerbs.Validate(parsed),
             "template" => fileVerbs.Template(parsed),
             "audit" => fileVerbs.Audit(parsed),
+            "diff" => fileVerbs.Diff(parsed),
             _ => throw new UnreachableException(verb),
         };
     }

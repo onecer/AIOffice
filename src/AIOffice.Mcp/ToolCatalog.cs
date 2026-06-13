@@ -4,9 +4,9 @@ using ModelContextProtocol.Protocol;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The 15 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
-/// M7 added <c>office_audit</c> (the 15th tool); M1 added
-/// <c>preview_open</c> / <c>preview_selection</c>.
+/// The 16 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// M8 added <c>office_diff</c> (the 16th tool); M7 added <c>office_audit</c>;
+/// M1 added <c>preview_open</c> / <c>preview_selection</c>.
 /// <para>
 /// <c>preview_open</c> / <c>preview_selection</c> were reserved through v0 and
 /// register here in M1, inside the token budget set aside for them in
@@ -20,7 +20,7 @@ namespace AIOffice.Mcp;
 /// </summary>
 public static class ToolCatalog
 {
-    /// <summary>All tools, in spec order (15 as of M7).</summary>
+    /// <summary>All tools, in spec order (16 as of M8).</summary>
     public static IReadOnlyList<Tool> Tools { get; } =
     [
         Make(
@@ -78,7 +78,7 @@ public static class ToolCatalog
                   "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject"],
                     "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\""},
-                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline"},
+                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx)"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
                     "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
                   "position":{"type":["integer","string"],
@@ -117,6 +117,17 @@ public static class ToolCatalog
               "category":{"type":"string","enum":["accessibility","quality","all"],"default":"all"},
               "severity":{"type":"string","enum":["error","warning","info"],"default":"info","description":"Minimum severity to report"},
               "fix":{"type":"boolean","default":false,"description":"Apply safe autofixes, then re-audit; result adds {fixed:N, remaining:[ids]}"}},
+             "required":["file"]}
+            """),
+        Make(
+            "office_diff",
+            "Semantically compare a document against a baseline — another same-format file (other) OR one of its own snapshots (snapshot:N). Returns a sorted added/removed/modified/moved change list. Changes are data: ok:true.",
+            """
+            {"type":"object","properties":{
+              "file":{"type":"string","description":"The current/new document"},
+              "other":{"type":"string","description":"Baseline: the OLD same-format document. A format mismatch is invalid_args. Exactly one of other/snapshot required"},
+              "snapshot":{"type":"integer","description":"Baseline: snapshot N of file from its auto pre-edit ring; a missing index is invalid_args naming the available numbers. Exactly one of other/snapshot required"},
+              "view":{"type":"string","enum":["summary","detailed"],"default":"detailed","description":"detailed: full before/after per change; summary: counts + path+kind only"}},
              "required":["file"]}
             """),
         Make(

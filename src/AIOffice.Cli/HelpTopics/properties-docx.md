@@ -255,3 +255,34 @@ Block-level structured document tags (`w:sdt`) for template fields. Addressed by
 `read --view fields` returns each control's `{path, kind, tag, title, value, items?}`.
 `remove /sdt[@tag=X]` unwraps the control but keeps its content (`keepContent:false`
 drops it whole). Position is `before`/`after` a paragraph (default `after`).
+
+## captions & cross-references (M8)
+
+A **caption** (`type:caption`) is a `Caption`-styled paragraph — `"Figure "` + a
+`SEQ` field + `": text"` — wrapped in a bookmark so a reference can point at it.
+
+| prop       | type   | meaning                                                        |
+|------------|--------|----------------------------------------------------------------|
+| `label`    | string | required: `Figure` · `Table` · `Equation` (each has its own counter) |
+| `text`     | string | the caption text after the label/number                        |
+| `position` | string | `before` · `after` the anchor block (default `after`)           |
+
+    {op:"add", path:"/body/p[3]", type:"caption",
+      props:{label:"Figure", text:"Quarterly trend", position:"after"}}
+
+Address a caption `/caption[@label=Figure][1]` (1-based per label). A
+**cross-reference** (`type:crossRef`) appends a `REF` field pointing at one:
+
+| prop          | type   | meaning                                                     |
+|---------------|--------|-------------------------------------------------------------|
+| `to`          | string | required: the caption path, e.g. `/caption[@label=Figure][1]` |
+| `show`        | string | `labelAndNumber` (default) · `numberOnly` · `text` · `page`  |
+| `leadingText` | string | literal text inserted before the reference field            |
+
+    {op:"add", path:"/body/p[5]", type:"crossRef",
+      props:{to:"/caption[@label=Figure][1]", show:"labelAndNumber"}}
+
+Caption and reference numbers are **cached** — Word recomputes them (and
+renumbers all captions) when it opens the file or on field refresh (`F9`); a
+`caption_numbers_cached` warning flags this. `get /caption[@label=Figure][1]`
+returns the caption; `read --view structure` lists captions.

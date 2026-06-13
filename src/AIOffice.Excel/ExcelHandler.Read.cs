@@ -129,14 +129,17 @@ public sealed partial class ExcelHandler
         // Charts and pivot source ranges live in parts ClosedXML cannot
         // see (or keeps internal); read them raw in one pass.
         List<ChartInfo> allCharts;
+        List<SlicerInfo> allSlicers;
         Dictionary<(string, string), (string?, string?)> pivotSources;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
+            allSlicers = ExcelSlicers.Read(document);
             pivotSources = ExcelPivots.ReadSources(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
+        var slicersBySheet = allSlicers.ToLookup(s => s.SheetName, StringComparer.OrdinalIgnoreCase);
         return new
         {
             kind = "xlsx",
@@ -175,6 +178,17 @@ public sealed partial class ExcelHandler
                         .ToList(),
                     pivots = ws.PivotTables
                         .Select(pt => ExcelPivots.Describe(ws, pt, pivotSources))
+                        .ToList(),
+                    slicers = slicersBySheet[ws.Name]
+                        .Select(s => new
+                        {
+                            path = s.Path,
+                            name = s.Name,
+                            source = s.SourceKind,
+                            sourceName = s.Source,
+                            column = s.Column,
+                            caption = s.Caption,
+                        })
                         .ToList(),
                     conditionalFormats = ws.ConditionalFormats
                         .Select((cf, i) => ExcelConditionalFormats.Describe(ws, cf, i + 1))

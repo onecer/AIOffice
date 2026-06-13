@@ -5,9 +5,9 @@ namespace AIOffice.Mcp;
 /// <summary>
 /// The machine-readable description of the whole aioffice command surface —
 /// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
-/// 15 verbs, mirroring the 15 MCP tools (the <c>preview</c> verb carries
+/// 16 verbs, mirroring the 16 MCP tools (the <c>preview</c> verb carries
 /// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
-/// verb itself.
+/// verb itself. M8 added <c>diff</c> / <c>office_diff</c>.
 /// </summary>
 public static class SurfaceSchema
 {
@@ -114,6 +114,16 @@ public static class SurfaceSchema
             [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
             [("aioffice template contract.docx --data @acme.json -o out/acme.docx", "check data.leftoverPlaceholders afterwards")]),
 
+        Verb("diff", "Semantically compare a document against a baseline (another same-format file, or one of its own snapshots): a sorted, deterministic change list. Changes are data — ok:true / exit 0.", "office_diff",
+            [("file", "the current/new document"),
+             ("otherFile", "baseline: the OLD same-format document (sandbox-resolved); a format mismatch is invalid_args. Mutually exclusive with --snapshot"),
+             ("--snapshot", "baseline: snapshot N of <file> from its pre-edit ring; a missing index is invalid_args naming the available numbers. Mutually exclusive with otherFile"),
+             ("--view", "summary | detailed (default): summary trims to counts + path+kind per change, detailed keeps full before/after")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.UnsupportedFeature],
+            [("aioffice diff new.docx old.docx", "every added/removed/modified/moved block, sorted by (path, kind)"),
+             ("aioffice diff report.docx --snapshot 1", "what changed since the last edit (snapshot 1 of the file's own ring)"),
+             ("aioffice diff metrics.xlsx baseline.xlsx --view summary", "just the counts + a terse path+kind line per change")]),
+
         Verb("snapshot", "List or restore the automatic pre-edit snapshot ring (20 per file).", "file_snapshot",
             [("action", "list | restore (default list)"),
              ("file", "document path"),
@@ -127,7 +137,7 @@ public static class SurfaceSchema
             [("aioffice doctor", "run when commands start failing oddly")]),
 
         Verb("schema", "Machine-readable JSON of this whole command surface.", "office_schema",
-            [("verb", "optional filter: one of the 15 verb names")],
+            [("verb", "optional filter: one of the 16 verb names")],
             [ErrorCodes.InvalidArgs],
             [("aioffice schema edit", "just the edit verb")]),
 
@@ -145,13 +155,13 @@ public static class SurfaceSchema
             [("aioffice preview open report.docx", "blocks; click elements in the browser, then read them"),
              ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit")]),
 
-        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (15 tools).", null,
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (16 tools).", null,
             [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
             [ErrorCodes.InternalError],
             [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),
     ];
 
-    /// <summary>The 15 verb names, in surface order.</summary>
+    /// <summary>The 16 verb names, in surface order.</summary>
     public static IReadOnlyList<string> VerbNames { get; } = [.. Verbs.Select(v => v.Name)];
 
     /// <summary>

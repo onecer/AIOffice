@@ -146,6 +146,10 @@ public sealed partial class WordHandler
             "add" when op.Type == "equation" && session.Track => throw TrackedStructureUnsupported("equation"),
             "add" when op.Type == "equation" => ApplyAddEquation(doc, op, session),
             "add" when op.Type == "columnBreak" => ApplyAddColumnBreak(doc, op, session),
+            "add" when op.Type == "caption" && session.Track => throw TrackedStructureUnsupported("caption"),
+            "add" when op.Type == "caption" => ApplyAddCaption(doc, op, session),
+            "add" when op.Type == "crossRef" && session.Track => throw TrackedStructureUnsupported("crossRef"),
+            "add" when op.Type == "crossRef" => ApplyAddCrossRef(doc, op, session),
             "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
             "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
             "add" => ApplyAdd(doc, op, session),
@@ -268,10 +272,12 @@ public sealed partial class WordHandler
                 "footnote/endnote (props.text), comment/reply, style, toc (props.levels), watermark (props.text), " +
                 "sectionBreak (props.kind), field (props.kind=pageNumber|numPages|date|docTitle), " +
                 "equation (props.latex, props.display), columnBreak, " +
+                "caption (props.label=Figure|Table|Equation, props.text), crossRef (props.to, props.show), " +
                 "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
-                    "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak"]),
+                    "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
+                    "caption", "crossRef"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

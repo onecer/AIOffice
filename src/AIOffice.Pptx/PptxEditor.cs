@@ -455,8 +455,42 @@ internal static class PptxEditor
             return Units.Inv($"{view.CanonicalPath(address.SlideIndex)}/p[{address.ParagraphIndex}]");
         }
 
-        SetShapeProps(view, op.Props);
+        // M8 shape hyperlinks/actions live on the cNvPr and need the presentation
+        // (slide-jump targets resolve against the slide list), so they are split
+        // out here and the remaining props flow to the format-agnostic setter.
+        var rest = op.Props;
+        if (PptxHyperlinks.Handles(op.Props))
+        {
+            rest = SplitHyperlinkProps(op.Props, out var linkProps);
+            PptxHyperlinks.Apply(presentation, slidePart, view, linkProps);
+        }
+
+        if (rest.Count > 0)
+        {
+            SetShapeProps(view, rest);
+        }
+
         return view.CanonicalPath(address.SlideIndex);
+    }
+
+    /// <summary>Peels hyperlink/linkText out of a props object, returning the rest (the original is not mutated).</summary>
+    private static JsonObject SplitHyperlinkProps(JsonObject props, out JsonObject linkProps)
+    {
+        linkProps = [];
+        var rest = new JsonObject();
+        foreach (var (key, value) in props)
+        {
+            if (key is "hyperlink" or "linkText")
+            {
+                linkProps[key] = value?.DeepClone();
+            }
+            else
+            {
+                rest[key] = value?.DeepClone();
+            }
+        }
+
+        return rest;
     }
 
     /// <summary>set /slide[i]/chart[k] {embedData:true}: retrofit an embedded, editable data workbook.</summary>

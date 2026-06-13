@@ -240,6 +240,8 @@ public sealed partial class WordHandler
             .Select((sdt, i) => new { path = $"/toc[{i + 1}]", properties = TocShape(sdt) })
             .ToList();
 
+        var captions = CaptionsStructure(doc);
+
         return new
         {
             view = "structure",
@@ -248,6 +250,7 @@ public sealed partial class WordHandler
             footers = footers.Count > 0 ? footers : null,
             bookmarks = bookmarks.Count > 0 ? bookmarks : null,
             tocs = tocs.Count > 0 ? tocs : null,
+            captions = captions.Count > 0 ? captions : null,
             sections = SectionsStructure(body),
         };
 

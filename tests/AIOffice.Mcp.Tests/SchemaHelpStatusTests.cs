@@ -7,7 +7,7 @@ namespace AIOffice.Mcp.Tests;
 public sealed class SchemaHelpStatusTests
 {
     [Fact]
-    public async Task OfficeSchema_ReturnsTheFullFifteenVerbSurface()
+    public async Task OfficeSchema_ReturnsTheFullSixteenVerbSurface()
     {
         using var ws = new TempWorkspace();
         await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
@@ -16,7 +16,7 @@ public sealed class SchemaHelpStatusTests
         Assert.Equal(Meta.ToolVersion, data.GetProperty("version").GetString());
 
         var verbs = data.GetProperty("verbs").EnumerateArray().ToList();
-        Assert.Equal(15, verbs.Count); // M1 added preview; M7 added audit
+        Assert.Equal(16, verbs.Count); // M1 added preview; M7 added audit; M8 added diff
         Assert.Equal(
             SurfaceSchema.VerbNames.ToHashSet(StringComparer.Ordinal),
             verbs.Select(v => v.GetProperty("name").GetString()!).ToHashSet(StringComparer.Ordinal));
@@ -50,7 +50,7 @@ public sealed class SchemaHelpStatusTests
 
         var envelope = await srv.CallAsync("office_schema", new Dictionary<string, object?> { ["verb"] = "transmogrify" });
         var error = EnvelopeAssert.Fail(envelope, "invalid_args");
-        Assert.Equal(15, error.GetProperty("candidates").GetArrayLength());
+        Assert.Equal(16, error.GetProperty("candidates").GetArrayLength());
     }
 
     [Fact]

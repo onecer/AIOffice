@@ -220,6 +220,51 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>
+    /// The round-trip law over the M8 surface: shape hyperlinks (external url,
+    /// slide jump, show action) and the read-only diff verb. Building the links
+    /// and then running every read-side verb — including diff against a copy —
+    /// must leave the deck byte-for-byte unchanged.
+    /// </summary>
+    [Fact]
+    public void M8Features_ReadSideVerbsAndDiff_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Links"))));
+        var added = TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[1]", type: "slide", position: "after", props: TestEnv.Props(("title", "Two"))),
+            TestEnv.Op("add", "/slide[2]", type: "slide", position: "after", props: TestEnv.Props(("title", "Three"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "to web"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "to slide 3"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "to end"))),
+        ]));
+        var web = added["results"]![2]!["target"]!.GetValue<string>();
+        var jump = added["results"]![3]!["target"]!.GetValue<string>();
+        var show = added["results"]![4]!["target"]!.GetValue<string>();
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", web, props: TestEnv.Props(("hyperlink", "https://example.com/deck"))),
+            TestEnv.Op("set", jump, props: TestEnv.Props(("hyperlink", "#slide:3"))),
+            TestEnv.Op("set", show, props: TestEnv.Props(("hyperlink", "#end"))),
+        ]));
+
+        // A baseline copy for the diff verb to compare against (it is read-only).
+        File.Copy(_ws.PathOf("deck.pptx"), _ws.PathOf("baseline.pptx"));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", web))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", jump))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", show))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape[hyperlink=*]"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        // diff is read-only: it must not touch either the current file or the baseline.
+        var baselineBefore = File.ReadAllBytes(_ws.PathOf("baseline.pptx"));
+        var result = _handler.Diff(_ws.Ctx("deck.pptx"), _ws.PathOf("baseline.pptx"));
+        Assert.Empty(result.Changes); // a deck diffed against its own copy is identical
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+        Assert.Equal(baselineBefore, File.ReadAllBytes(_ws.PathOf("baseline.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {
@@ -384,6 +429,32 @@ public sealed class RoundTripTests : IDisposable
         TestEnv.AssertOk(handler.Edit(edit, [
             TestEnv.Op("add", "/slide[6]/comment[@id=2]", type: "reply", props: TestEnv.Props(
                 ("text", "Threaded reply added by aioffice M5."), ("author", "Reviewer"))),
+        ]));
+
+        // M8 surface: an interactive slide whose shapes carry click hyperlinks —
+        // an external url, a jump to slide 1 and a "go to end" show action.
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("add", "/slide[7]", type: "slide", props: TestEnv.Props(
+                ("title", "M8: shape hyperlinks & actions"))),
+            TestEnv.Op("add", "/slide[7]", type: "shape", props: TestEnv.Props(
+                ("shape", "roundRect"), ("x", "2cm"), ("y", "6cm"), ("w", "8cm"), ("h", "3cm"),
+                ("text", "Open the web"), ("align", "center"), ("fill", "4472C4"), ("color", "FFFFFF"))),
+            TestEnv.Op("add", "/slide[7]", type: "shape", props: TestEnv.Props(
+                ("shape", "roundRect"), ("x", "12cm"), ("y", "6cm"), ("w", "8cm"), ("h", "3cm"),
+                ("text", "Back to slide 1"), ("align", "center"), ("fill", "70AD47"), ("color", "FFFFFF"))),
+            TestEnv.Op("add", "/slide[7]", type: "shape", props: TestEnv.Props(
+                ("shape", "roundRect"), ("x", "22cm"), ("y", "6cm"), ("w", "8cm"), ("h", "3cm"),
+                ("text", "End the show"), ("align", "center"), ("fill", "ED7D31"), ("color", "FFFFFF"))),
+        ]));
+        var slide7 = TestEnv.AssertOk(handler.Get(
+            new CommandContext { Workspace = ws, File = ctx.File, Args = new JsonObject { ["path"] = "/slide[7]" } }));
+        string LinkButton(string contains) => slide7["shapes"]!.AsArray()
+            .Single(s => s!["text"]!.GetValue<string>().Contains(contains, StringComparison.Ordinal))!["path"]!
+            .GetValue<string>();
+        TestEnv.AssertOk(handler.Edit(edit, [
+            TestEnv.Op("set", LinkButton("Open the web"), props: TestEnv.Props(("hyperlink", "https://github.com"))),
+            TestEnv.Op("set", LinkButton("Back to slide 1"), props: TestEnv.Props(("hyperlink", "#slide:1"))),
+            TestEnv.Op("set", LinkButton("End the show"), props: TestEnv.Props(("hyperlink", "#end"))),
         ]));
 
         var validation = TestEnv.AssertOk(handler.Validate(

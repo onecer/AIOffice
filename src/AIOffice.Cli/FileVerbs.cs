@@ -75,7 +75,18 @@ public sealed class FileVerbs
         var file = RequireFile(args, mustExist: true);
         var pathText = RequirePositional(args, 1, "path",
             "aioffice get <file> <path> — e.g. aioffice get report.docx /body/p[3].");
-        _ = DocPath.Parse(pathText); // fail fast with the grammar hint
+
+        // The docx caption/cross-reference forms (/caption[@label=Figure][i],
+        // /crossRef[i]) are virtual two-bracket paths that sit OUTSIDE the core
+        // grammar; the handler intercepts them before parsing, so skip the
+        // fail-fast DocPath validation for them (mirrors office_get, which never
+        // pre-parses) and let the handler resolve or reject.
+        if (!pathText.StartsWith("/caption[", StringComparison.Ordinal) &&
+            !pathText.StartsWith("/crossRef[", StringComparison.Ordinal))
+        {
+            _ = DocPath.Parse(pathText); // fail fast with the grammar hint
+        }
+
         var ctx = Context(file, new JsonObject { ["path"] = pathText });
         return ResolveHandler(file, kindOverride: null).Get(ctx);
     }
@@ -188,6 +199,53 @@ public sealed class FileVerbs
         });
 
         return AIOffice.Mcp.AuditVerb.Run(auditor, ctx, opts);
+    }
+
+    public Envelope Diff(ParsedArgs args)
+    {
+        var file = RequireFile(args, mustExist: true);
+        var handler = ResolveHandler(file, kindOverride: null);
+        var view = AIOffice.Mcp.DiffVerb.NormalizeView(args.GetOption("view"));
+
+        // Exactly one baseline source: a second positional file OR --snapshot N.
+        var otherFile = args.Positionals.Count > 1 ? args.Positionals[1] : null;
+        var snapshotText = args.GetOption("snapshot");
+
+        if (otherFile is null && snapshotText is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "diff needs a baseline: a second file, or --snapshot N.",
+                "Compare two files: aioffice diff new.docx old.docx — or against a snapshot: aioffice diff report.docx --snapshot 1.");
+        }
+
+        if (otherFile is not null && snapshotText is not null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "diff takes EITHER a baseline file OR --snapshot N, not both.",
+                "Drop one: a second positional file diffs against that file; --snapshot N diffs against the file's own snapshot.");
+        }
+
+        var ctx = Context(file, new JsonObject { ["view"] = view });
+
+        if (snapshotText is not null)
+        {
+            if (!int.TryParse(snapshotText, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n <= 0)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"--snapshot must be a positive snapshot number, got '{snapshotText}'.",
+                    "Run 'aioffice snapshot list <file>' to see the available snapshot numbers, then diff --snapshot N.");
+            }
+
+            return AIOffice.Mcp.DiffVerb.RunSnapshot(handler, ctx, _snapshots, n, view);
+        }
+
+        // Two-file mode: sandbox-resolve the baseline (must exist + inside the
+        // workspace) before handing it to the differ.
+        var baseline = _workspace.Resolve(otherFile!, mustExist: true);
+        return AIOffice.Mcp.DiffVerb.RunTwoFile(handler, ctx, baseline, otherFile!, view);
     }
 
     public Envelope Template(ParsedArgs args)

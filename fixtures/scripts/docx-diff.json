@@ -1,0 +1,50 @@
+{
+  "name": "docx-diff",
+  "description": "Golden path for the M8 diff verb: build a baseline and a new docx, semantically diff them (changes are data, ok:true), then exercise the format-mismatch and no-baseline guard rails.",
+  "steps": [
+    {
+      "argv": ["create", "golden-out/diff-base.docx", "--title", "Diff Base"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/diff-base.docx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Intro line.\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Second line.\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["create", "golden-out/diff-new.docx", "--title", "Diff New"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/diff-new.docx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Intro line.\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Second line EDITED.\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"position\":\"inside\",\"props\":{\"text\":\"Appended line.\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["diff", "golden-out/diff-new.docx", "golden-out/diff-base.docx"],
+      "expect": { "ok": true, "dataContains": "Second line EDITED." }
+    },
+    {
+      "argv": ["diff", "golden-out/diff-new.docx", "golden-out/diff-base.docx", "--view", "summary"],
+      "expect": { "ok": true, "dataContains": "modified" }
+    },
+    {
+      "argv": ["create", "golden-out/diff-book.xlsx", "--title", "Mismatch"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["diff", "golden-out/diff-new.docx", "golden-out/diff-book.xlsx"],
+      "expect": { "ok": false, "errorCode": "invalid_args" }
+    },
+    {
+      "argv": ["diff", "golden-out/diff-new.docx"],
+      "expect": { "ok": false, "errorCode": "invalid_args" }
+    }
+  ]
+}

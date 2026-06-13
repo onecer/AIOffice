@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
     private static readonly IReadOnlyList<string> AddTypes =
     [
         "sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note",
-        "dataValidation", "sparkline", "comment", "reply", "group",
+        "dataValidation", "sparkline", "comment", "reply", "group", "slicer",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -56,6 +56,7 @@ public sealed partial class ExcelHandler
         // write is deferred to a post-save pass (ClosedXML cannot author chart
         // parts; measured: it preserves them byte-identical once present).
         var charts = new ChartOpBatch(file);
+        var slicers = new ExcelSlicers.Batch(file);
         var post = new PostSaveWork();
         var opWarnings = new List<Warning>();
         var details = new List<object>(ops.Count);
@@ -65,7 +66,7 @@ public sealed partial class ExcelHandler
             // before any later op that addresses the same sheet (it would
             // otherwise replay after that op and clobber its cells).
             FlushStreamedWritesFor(post, ops[i].Path);
-            ApplyOp(ctx, workbook, ops[i], i, details, charts, post, opWarnings);
+            ApplyOp(ctx, workbook, ops[i], i, details, charts, slicers, post, opWarnings);
         }
 
         if (ArgBool(ctx, "dryRun"))
@@ -109,6 +110,13 @@ public sealed partial class ExcelHandler
             if (!charts.IsEmpty)
             {
                 ExcelCharts.Apply(file, charts.Ops);
+            }
+
+            if (!slicers.IsEmpty)
+            {
+                // Slicers ride the same post-save discipline as charts: ClosedXML
+                // cannot author them and preserves them byte-identical once present.
+                ExcelSlicers.Apply(file, slicers.Ops);
             }
 
             if (post.SyncPivotParts)
@@ -337,7 +345,7 @@ public sealed partial class ExcelHandler
 
     private static void ApplyOp(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, PostSaveWork post, List<Warning> warnings)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post, List<Warning> warnings)
     {
         // "/" (document root) is meaningful only as a replace scope (expanded
         // upstream into per-sheet ops). Any other root-targeted op has no xlsx
@@ -405,10 +413,10 @@ public sealed partial class ExcelHandler
                 ApplySet(workbook, op, index, details, post);
                 break;
             case "add":
-                ApplyAdd(ctx, workbook, op, index, details, charts, post);
+                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, post);
                 break;
             case "remove":
-                ApplyRemove(ctx, workbook, op, index, details, charts, post);
+                ApplyRemove(ctx, workbook, op, index, details, charts, slicers, post);
                 break;
             case "replace":
                 ApplyReplace(workbook, op, index, details, warnings);
@@ -995,7 +1003,7 @@ public sealed partial class ExcelHandler
 
     private static void ApplyAdd(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post)
     {
         switch (op.Type)
         {
@@ -1004,6 +1012,9 @@ public sealed partial class ExcelHandler
                 break;
             case "table":
                 details.Add(ExcelTables.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
+                break;
+            case "slicer":
+                AddSlicer(workbook, op, index, details, slicers);
                 break;
             case "row":
                 AddRow(workbook, op, index, details);
@@ -1183,11 +1194,35 @@ public sealed partial class ExcelHandler
         });
     }
 
+    /// <summary>
+    /// Validates an <c>add slicer</c> op against the live workbook (the source
+    /// table/pivot and its column/field must exist) and queues the raw OpenXml
+    /// write for the post-save pass.
+    /// </summary>
+    private static void AddSlicer(
+        XLWorkbook workbook, EditOp op, int index, List<object> details, ExcelSlicers.Batch slicers)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        var spec = ExcelSlicers.ParseAdd(workbook, target, op, index);
+        var slicerIndex = slicers.Add(spec);
+        details.Add(new
+        {
+            op = "add",
+            type = "slicer",
+            path = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{ExcelPaths.SheetPath(target.Sheet)}/slicer[{slicerIndex}]"),
+            source = spec.Source == SlicerSource.Table ? "table" : "pivot",
+            column = spec.Column,
+            caption = spec.Caption,
+        });
+    }
+
     // ----- remove -----------------------------------------------------------
 
     private static void ApplyRemove(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post)
     {
         // Group spans (row[a]:row[b] / col[a]:col[b]) are an element-range form
         // the shared grammar cannot parse; peel them off first (precedent:
@@ -1323,6 +1358,11 @@ public sealed partial class ExcelHandler
             case ExcelTargetKind.Chart:
                 charts.Remove(target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.ChartIndex!.Value, index);
                 details.Add(new { op = "remove", path = canonical, removed = "chart" });
+                break;
+
+            case ExcelTargetKind.Slicer:
+                slicers.Remove(target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.SlicerIndex!.Value, index);
+                details.Add(new { op = "remove", path = canonical, removed = "slicer" });
                 break;
 
             case ExcelTargetKind.Cell:

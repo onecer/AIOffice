@@ -39,7 +39,7 @@ internal static class PptxRenderer
 
         foreach (var shape in PptxDoc.Shapes(slidePart))
         {
-            AppendShape(svg, slidePart, shape, slideIndex);
+            AppendShape(svg, presentation, slidePart, shape, slideIndex);
         }
 
         svg.Append("</svg>");
@@ -51,7 +51,7 @@ internal static class PptxRenderer
     /// contract: a browser click on any child maps back to the canonical
     /// stable-id document path.
     /// </summary>
-    private static void AppendShape(StringBuilder svg, SlidePart slidePart, ShapeView shape, int slideIndex)
+    private static void AppendShape(StringBuilder svg, PresentationPart presentation, SlidePart slidePart, ShapeView shape, int slideIndex)
     {
         var geometry = PptxDoc.Geometry(shape.Element) ?? new GeometryEmu(0, 0, Units.CmToEmu(4), Units.CmToEmu(1.5));
         var x = Units.EmuToPx(geometry.X);
@@ -60,12 +60,23 @@ internal static class PptxRenderer
         var h = Units.EmuToPx(geometry.Cy);
         var fill = PptxDoc.FillHex(shape.Element);
 
-        svg.Append(Units.Inv($"  <g data-aio-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\">\n"));
+        // A linked shape carries its resolved target on the group so a browser /
+        // assistive tech can surface the click action (the render contract's
+        // sibling to data-aio-path).
+        var hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, shape.Element);
+        var linkAttr = hyperlink is null ? string.Empty : Units.Inv($" data-aio-hyperlink=\"{Escape(hyperlink)}\"");
+
+        svg.Append(Units.Inv($"  <g data-aio-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\"{linkAttr}>\n"));
 
         // Accessible name: an SVG <title> child is what assistive tech announces.
         if ((PptxDoc.AltText(shape.Element) ?? PptxDoc.AltTitle(shape.Element)) is { } altText)
         {
             svg.Append(Units.Inv($"    <title>{Escape(altText)}</title>\n"));
+        }
+        else if (hyperlink is not null)
+        {
+            // No alt text, but a link: announce the link target as the title.
+            svg.Append(Units.Inv($"    <title>link: {Escape(hyperlink)}</title>\n"));
         }
 
         if (PptxCharts.ChartPartOf(slidePart, shape.Element) is { } chartPart)

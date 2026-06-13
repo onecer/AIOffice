@@ -21,6 +21,7 @@ internal enum ExcelTargetKind
     Sparkline,
     Comment,
     Table,
+    Slicer,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -68,6 +69,12 @@ internal sealed record ExcelTarget
 
     /// <summary>Table name when <see cref="Kind"/> is Table (<c>table[@name=…]</c>).</summary>
     public string? TableName { get; init; }
+
+    /// <summary>1-based per-sheet slicer index when <see cref="Kind"/> is Slicer (null when addressed by name).</summary>
+    public int? SlicerIndex { get; init; }
+
+    /// <summary>Slicer name when <see cref="Kind"/> is Slicer and the path used <c>[@name=…]</c>.</summary>
+    public string? SlicerName { get; init; }
 }
 
 /// <summary>
@@ -104,6 +111,13 @@ internal static partial class ExcelPaths
     /// </summary>
     [GeneratedRegex(@"^(?<sheet>/.+)/(?i:table)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
     private static partial Regex TableByName();
+
+    /// <summary>
+    /// The stable-name slicer form <c>/Sheet/slicer[@name=X]</c> (bare or
+    /// <c>'quoted'</c> name), peeled off like the pivot/table forms.
+    /// </summary>
+    [GeneratedRegex(@"^(?<sheet>/.+)/(?i:slicer)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
+    private static partial Regex SlicerByName();
 
     /// <summary>Quotes a sheet name when it would not survive the path grammar bare.</summary>
     public static string QuoteSheet(string name) =>
@@ -172,6 +186,25 @@ internal static partial class ExcelPaths
                 ? byTable.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
                 : byTable.Groups["bare"].Value;
             return new ExcelTarget { Kind = ExcelTargetKind.Table, Sheet = sheetTarget.Sheet, TableName = name };
+        }
+
+        // /Sheet/slicer[@name=X] gets the same id-form peel-off as pivots/tables.
+        var bySlicer = SlicerByName().Match(pathText);
+        if (bySlicer.Success)
+        {
+            var sheetTarget = Resolve(workbook, bySlicer.Groups["sheet"].Value);
+            if (sheetTarget.Kind != ExcelTargetKind.Sheet)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"slicer[@name=…] must follow a sheet name: {pathText}",
+                    "Use /SheetName/slicer[@name=X]; quote names with specials: slicer[@name='Slicer Region'].");
+            }
+
+            var name = bySlicer.Groups["quoted"].Success
+                ? bySlicer.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
+                : bySlicer.Groups["bare"].Value;
+            return new ExcelTarget { Kind = ExcelTargetKind.Slicer, Sheet = sheetTarget.Sheet, SlicerName = name };
         }
 
         var path = DocPath.Parse(pathText);
@@ -278,13 +311,18 @@ internal static partial class ExcelPaths
                 segment is { Id: { } commentId, IdAttribute: "id" }:
                 return new ExcelTarget { Kind = ExcelTargetKind.Comment, Sheet = sheet, CommentId = commentId };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "slicer", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } slicerIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Slicer, Sheet = sheet, SlicerIndex = slicerIndex };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
                     $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], col[C], chart[n], pivot[n], " +
-                    $"conditionalFormat[n], image[n], dataValidation[n], sparkline[n] or comment[@id=…] in: {pathText}",
+                    $"conditionalFormat[n], image[n], dataValidation[n], sparkline[n], slicer[n] or comment[@id=…] in: {pathText}",
                     "After the sheet name use A1, A1:C10, row[3], col[C], chart[1], pivot[1] (or pivot[@name=X]), " +
-                    "conditionalFormat[1], image[1], dataValidation[1], sparkline[1] or comment[@id=GUID]; " +
+                    "conditionalFormat[1], image[1], dataValidation[1], sparkline[1], slicer[1] or comment[@id=GUID]; " +
                     "column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
@@ -309,6 +347,9 @@ internal static partial class ExcelPaths
 
     public static string SparklinePath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/sparkline[{index}]");
+
+    public static string SlicerPath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/slicer[{index}]");
 
     /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
     public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>

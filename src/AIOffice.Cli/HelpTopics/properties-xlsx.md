@@ -236,6 +236,33 @@ as docx/pptx). `set /properties` writes; `get /properties` or
     {op:"set", path:"/properties", props:{title:"Sales Metrics", author:"AIOffice",
       custom:{Quarter:"Q3", Final:true}}}
 
+## slicers (M8)
+
+A **slicer** (`type:slicer`) is a dashboard filter wired to a table column or a
+pivot field. Authored on raw OpenXml (ClosedXML cannot create slicer parts), so
+it validates clean and round-trips byte-identical.
+
+| prop          | type   | meaning                                                       |
+|---------------|--------|---------------------------------------------------------------|
+| `column`      | string | table slicer: the column to slice (path is `/Sheet/table[@name=…]`) |
+| `field`       | string | pivot slicer: the field to slice (path is `/Sheet/pivot[i]`)   |
+| `caption`     | string | optional header text (default: the column/field name)         |
+| `x`           | string | top-left anchor cell, e.g. `H2` (default: 2 cols right of data)|
+| `widthCells`  | int    | box width in cells (default 2)                                |
+| `heightCells` | int    | box height in cells (default 7)                               |
+
+    # table-column slicer
+    {op:"add", path:"/Sheet1/table[@name=Sales]", type:"slicer",
+      props:{column:"Region", x:"H2"}}
+    # pivot-field slicer
+    {op:"add", path:"/Sheet1/pivot[1]", type:"slicer", props:{field:"Region"}}
+
+`column`/`field` match case-insensitively; a wrong name is `invalid_args` with
+the available names as candidates. Address a slicer `/Sheet1/slicer[1]` (1-based
+per sheet) or `/Sheet1/slicer[@name=X]`. `get` reports `kind` (`table`/`pivot`),
+`column`, `caption`; `read --view structure` lists per-sheet slicers; `remove`
+by either path.
+
 ## audit (M7)
 
 `aioffice audit metrics.xlsx [--fix]` lints accessibility + quality: cells whose
