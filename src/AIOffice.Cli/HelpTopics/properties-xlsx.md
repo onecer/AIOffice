@@ -202,3 +202,45 @@ commas/newlines, sniffed `, ; tab |` delimiter, `--title` names the sheet):
 numbers/dates/booleans are typed, leading-zero codes like `007` stay text,
 >50k cells stream through the SAX writer. `aioffice read orders.xlsx --view csv
 [--sheet NAME] [--range A1:C10]` exports one sheet back as csv.
+
+## named cell styles (M7, `add type:cellStyle`, `read --view styles`)
+
+Reusable, named bundles of formatting: define once, apply by name to any cell or
+range. Addressed by `/style[@name=X]`; listed by `read --view styles`.
+
+| prop         | type   | notes                                            |
+|--------------|--------|--------------------------------------------------|
+| name         | string | required; the style's unique name                |
+| numberFormat | string | e.g. `"$#,##0.00"`, `"0.0%"`, `"yyyy-mm-dd"`     |
+| bold, italic | bool   |                                                  |
+| fill         | string | background hex, e.g. `"FFF2CC"`                   |
+| color        | string | font hex, e.g. `"C00000"`                         |
+| border       | string | none · thin · medium · thick · dashed · dotted · double · hair |
+
+    {op:"add", path:"/styles", type:"cellStyle",
+      props:{name:"Currency-Red", numberFormat:"$#,##0.00", color:"C00000", bold:true}}
+    {op:"set", path:"/Sheet1/B2:B10", props:{cellStyle:"Currency-Red"}}   # apply to a range
+
+Applying writes the concrete formatting onto the target cells (cached display
+reflects the number format immediately) and also registers a real `cellStyle`
+entry so Excel surfaces it in its gallery; the file stays validator-clean.
+`get /style[@name=X]` reads a definition back; `remove /style[@name=X]` drops it.
+
+## document properties (M7, `/properties`)
+
+Core + custom workbook metadata on a virtual `/properties` node (same contract
+as docx/pptx). `set /properties` writes; `get /properties` or
+`read --view properties` returns `{core:{title,…}, custom:{…}}`. `title` is what
+`audit`'s `a11y_no_doc_title` checks; `--fix` derives it from the filename.
+
+    {op:"set", path:"/properties", props:{title:"Sales Metrics", author:"AIOffice",
+      custom:{Quarter:"Q3", Final:true}}}
+
+## audit (M7)
+
+`aioffice audit metrics.xlsx [--fix]` lints accessibility + quality: cells whose
+cached value is an Excel error (`quality_formula_error`, e.g. `#DIV/0!`/`#REF!`),
+merged ranges inside a data region (`a11y_merged_data_cells`), images/charts with
+no alt text (`a11y_no_alt_text`), and a missing workbook Title
+(`a11y_no_doc_title`). `--fix` safely sets a placeholder alt text and a title;
+formula errors and merged data cells are report-only. See `aioffice help audit`.

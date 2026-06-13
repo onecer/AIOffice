@@ -206,8 +206,52 @@ apply with `{op:"set", path:"/body/p[2]", props:{style:"Callout"}}`.
 |---------------|--------|------------------------------------------------|
 | src           | string | required; PNG/JPEG path inside the workspace   |
 | width, height | length | e.g. "10cm", "72pt"; omit either to keep aspect|
+| alt (M7)      | string | accessibility description (`wp:docPr/@descr`); also settable on the image-carrying paragraph/run with `set {alt}` |
 
-`{op:"add", path:"/body", type:"image", props:{src:"logo.png", width:"10cm"}}`
+`{op:"add", path:"/body", type:"image", props:{src:"logo.png", width:"10cm", alt:"Company logo"}}`
 appends; `{op:"add", path:"/body/p[1]", type:"image", position:"before"}`
 places it relative to a paragraph. An `src` escaping the workspace sandbox
-fails with `sandbox_denied`.
+fails with `sandbox_denied`. The audit verb flags images with no `alt` as
+`a11y_no_alt_text` and `--fix` inserts a placeholder.
+
+## document properties (M7, `/properties`)
+
+Core + custom package metadata live on a virtual `/properties` node. Read with
+`get /properties` or `read --view properties`; write with `set /properties`.
+
+| prop        | type   | notes                                                       |
+|-------------|--------|-------------------------------------------------------------|
+| title       | string | core Title (also what `audit`'s `a11y_no_doc_title` checks) |
+| subject · author · keywords · category · comments · lastModifiedBy · revision | string | core properties (`author` = Creator) |
+| created · modified | date | ISO 8601, e.g. "2026-06-13" or "2026-06-13T10:00:00Z" |
+| custom      | object | typed custom props: string/number/bool/date round-trip with their JSON type |
+
+    {op:"set", path:"/properties", props:{title:"Q3 Report", author:"AIOffice",
+      custom:{Project:"Aurora", Reviewed:true, Budget:1000}}}
+
+`read --view properties` returns `{core:{…}, custom:{…}}`; a custom value that
+parses as a number/bool/ISO-date is stored as `vt:r8`/`vt:bool`/`vt:filetime`
+and reads back with that type. A `null` custom value clears the property.
+
+## content controls (M7, `add type:contentControl`, `read --view fields`)
+
+Block-level structured document tags (`w:sdt`) for template fields. Addressed by
+`/sdt[@tag=X]` (or positionally `/sdt[i]`); listed by `read --view fields`.
+
+| prop  | type   | notes                                                         |
+|-------|--------|---------------------------------------------------------------|
+| kind  | string | text · dropdown · date · checkbox (default text)              |
+| tag   | string | required; unique stable identifier                            |
+| title | string | optional display title (`w:alias`)                            |
+| items | array  | dropdown only: the choices, e.g. `["Draft","Final"]`          |
+| text  | string | initial value (dropdown: must be one of `items`; date: ISO)   |
+| checked | bool | checkbox only                                                 |
+
+    {op:"add", path:"/body/p[2]", type:"contentControl",
+      props:{kind:"dropdown", tag:"status", title:"Status", items:["Draft","Final"]}}
+    {op:"set", path:"/sdt[@tag=status]", props:{text:"Final"}}    # writes the value
+    {op:"set", path:"/sdt[@tag=signed]", props:{checked:true}}    # checkbox
+
+`read --view fields` returns each control's `{path, kind, tag, title, value, items?}`.
+`remove /sdt[@tag=X]` unwraps the control but keeps its content (`keepContent:false`
+drops it whole). Position is `before`/`after` a paragraph (default `after`).

@@ -4,7 +4,9 @@ using ModelContextProtocol.Protocol;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The 14 M1 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// The 15 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// M7 added <c>office_audit</c> (the 15th tool); M1 added
+/// <c>preview_open</c> / <c>preview_selection</c>.
 /// <para>
 /// <c>preview_open</c> / <c>preview_selection</c> were reserved through v0 and
 /// register here in M1, inside the token budget set aside for them in
@@ -18,7 +20,7 @@ namespace AIOffice.Mcp;
 /// </summary>
 public static class ToolCatalog
 {
-    /// <summary>All v0 tools, in spec order.</summary>
+    /// <summary>All tools, in spec order (15 as of M7).</summary>
     public static IReadOnlyList<Tool> Tools { get; } =
     [
         Make(
@@ -39,8 +41,8 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "view":{"type":"string","enum":["outline","text","stats","structure","revisions","comments","styles","markdown","csv"],"default":"outline",
-                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; revisions/comments/styles: docx only; markdown: docx body as GFM markdown (round-trips office_create from); csv: one xlsx sheet as RFC-4180 csv"},
+              "view":{"type":"string","enum":["outline","text","stats","structure","properties","revisions","comments","styles","fields","markdown","csv"],"default":"outline",
+                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; properties: core + custom doc properties (all formats); revisions/comments/markdown/fields: docx (fields = content controls); styles: docx style defs or xlsx named cell styles; csv: one xlsx sheet as RFC-4180 csv"},
               "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx; csv view also takes 'A1:C10'"},
               "sheet":{"type":"string","description":"csv view: sheet name (default: first sheet)"},
               "max_bytes":{"type":"integer","description":"Cap payload size; truncation reported in meta.warnings and data.truncated"}},
@@ -105,6 +107,17 @@ public static class ToolCatalog
             "OpenXmlValidator schema check + lint; each issue carries a suggestion. Cheap post-edit health check.",
             """
             {"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}
+            """),
+        Make(
+            "office_audit",
+            "Accessibility + quality lint: findings are DATA (ok:true even with errors). fix:true applies only safe autofixes (alt text, table header, doc/slide title, orphan bookmark). Codes: office_help {topic:\"audit\"}.",
+            """
+            {"type":"object","properties":{
+              "file":{"type":"string"},
+              "category":{"type":"string","enum":["accessibility","quality","all"],"default":"all"},
+              "severity":{"type":"string","enum":["error","warning","info"],"default":"info","description":"Minimum severity to report"},
+              "fix":{"type":"boolean","default":false,"description":"Apply safe autofixes, then re-audit; result adds {fixed:N, remaining:[ids]}"}},
+             "required":["file"]}
             """),
         Make(
             "office_template",

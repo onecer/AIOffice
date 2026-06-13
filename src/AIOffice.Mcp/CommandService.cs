@@ -117,6 +117,26 @@ public sealed class CommandService
 
     public Envelope Validate(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Validate(ctx));
 
+    public Envelope Audit(JsonObject args) => Run(args, a =>
+    {
+        var file = RequireString(a, "file", "Pass the document to audit (.docx/.xlsx/.pptx).");
+        var resolved = Workspace.Resolve(file, mustExist: true);
+        var handler = Handlers.Resolve(resolved);
+        if (handler is not IAuditor auditor)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"The {handler.Kind.ToString().ToLowerInvariant()} handler does not implement auditing in this build.",
+                "Use office_status for handler health; the docx/xlsx/pptx handlers all audit.");
+        }
+
+        var opts = ParseAuditOptions(a);
+        a["category"] = opts.Category;
+        a["minSeverity"] = opts.MinSeverity;
+        a["fix"] = opts.Fix;
+        return AuditVerb.Run(auditor, Context(resolved, a), opts);
+    });
+
     public Envelope Edit(JsonObject args) => Run(args, a =>
     {
         var file = RequireString(a, "file", "Pass the document to edit.");
@@ -435,6 +455,37 @@ public sealed class CommandService
                 // Best effort: a stray pre-image snapshot is harmless.
             }
         }
+    }
+
+    /// <summary>Parses category/severity/fix args into an <see cref="AuditOptions"/>, validating the enums.</summary>
+    private static AuditOptions ParseAuditOptions(JsonObject args)
+    {
+        var category = OptionalString(args, "category") ?? "all";
+        if (!AuditOptions.Categories.Contains(category, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown category: '{category}'.",
+                "Use one of: accessibility, quality, all (default).",
+                candidates: AuditOptions.Categories);
+        }
+
+        var severity = OptionalString(args, "severity") ?? "info";
+        if (!AuditOptions.Severities.Contains(severity, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown severity: '{severity}'.",
+                "Use one of: error, warning, info (the minimum level to report; default info).",
+                candidates: AuditOptions.Severities);
+        }
+
+        return new AuditOptions
+        {
+            Category = category,
+            MinSeverity = severity,
+            Fix = OptionalBool(args, "fix", false),
+        };
     }
 
     private IFormatHandler ResolveByKind(string kind)

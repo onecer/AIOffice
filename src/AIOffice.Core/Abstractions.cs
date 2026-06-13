@@ -157,6 +157,104 @@ public interface IFormatHandler
     Envelope Template(CommandContext ctx);
 }
 
+/// <summary>
+/// One finding from an <c>aioffice audit</c> pass. <see cref="Id"/> is stable
+/// within a run (e.g. <c>"a11y_no_alt_text#/slide[2]/shape[@id=5]"</c>) so
+/// <c>--fix</c> can target specific findings; <see cref="Autofixable"/> says
+/// whether the default <c>--fix</c> will resolve it.
+/// </summary>
+public sealed record AuditFinding
+{
+    /// <summary>Stable-within-a-run id, conventionally <c>code#path</c>.</summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>error | warning | info.</summary>
+    [JsonPropertyName("severity")]
+    public required string Severity { get; init; }
+
+    /// <summary>accessibility | quality.</summary>
+    [JsonPropertyName("category")]
+    public required string Category { get; init; }
+
+    /// <summary>The finding code namespace, e.g. a11y_no_alt_text, quality_broken_ref.</summary>
+    [JsonPropertyName("code")]
+    public required string Code { get; init; }
+
+    /// <summary>The canonical path the finding points at, when it has one.</summary>
+    [JsonPropertyName("path")]
+    public string? Path { get; init; }
+
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
+
+    [JsonPropertyName("suggestion")]
+    public required string Suggestion { get; init; }
+
+    /// <summary>True when <c>--fix</c> can safely resolve this finding.</summary>
+    [JsonPropertyName("autofixable")]
+    public required bool Autofixable { get; init; }
+}
+
+/// <summary>The result of an audit pass: every finding plus a severity tally.</summary>
+public sealed record AuditResult
+{
+    [JsonPropertyName("findings")]
+    public required IReadOnlyList<AuditFinding> Findings { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required AuditSummary Summary { get; init; }
+}
+
+/// <summary>Per-severity counts over an <see cref="AuditResult"/>.</summary>
+public sealed record AuditSummary(
+    [property: JsonPropertyName("errors")] int Errors,
+    [property: JsonPropertyName("warnings")] int Warnings,
+    [property: JsonPropertyName("infos")] int Infos);
+
+/// <summary>Knobs for one audit pass.</summary>
+public sealed record AuditOptions
+{
+    /// <summary>accessibility | quality | all.</summary>
+    [JsonPropertyName("category")]
+    public string Category { get; init; } = "all";
+
+    /// <summary>error | warning | info — the lowest severity to report.</summary>
+    [JsonPropertyName("minSeverity")]
+    public string MinSeverity { get; init; } = "info";
+
+    /// <summary>True when the caller wants safe autofixes applied.</summary>
+    [JsonPropertyName("fix")]
+    public bool Fix { get; init; }
+
+    /// <summary>The audit categories, severities (low → high) and their ordering helpers.</summary>
+    public static readonly IReadOnlyList<string> Categories = ["accessibility", "quality", "all"];
+
+    public static readonly IReadOnlyList<string> Severities = ["info", "warning", "error"];
+
+    /// <summary>Severity rank (info=0, warning=1, error=2); unknown sorts lowest.</summary>
+    public static int SeverityRank(string severity) => severity switch
+    {
+        "error" => 2,
+        "warning" => 1,
+        _ => 0,
+    };
+}
+
+/// <summary>
+/// The M7 audit surface: a handler inspects a document for accessibility and
+/// quality findings and can apply the safe subset of autofixes. Every format
+/// handler implements this; <see cref="Fix"/> is never destructive.
+/// </summary>
+public interface IAuditor
+{
+    /// <summary>Runs the audit checks selected by <paramref name="opts"/>.</summary>
+    AuditResult Audit(CommandContext ctx, AuditOptions opts);
+
+    /// <summary>Applies the autofixes for the given finding ids and reports how many landed.</summary>
+    int Fix(CommandContext ctx, IReadOnlyList<string> findingIds);
+}
+
 /// <summary>Maps file extensions to format handlers.</summary>
 public sealed class HandlerRegistry
 {

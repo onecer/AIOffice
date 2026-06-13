@@ -21,7 +21,25 @@ public sealed partial class ExcelHandler
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 "xlsx has no document-root properties to get.",
-                "Address a sheet (/Sheet1), a cell (/Sheet1/A1) or a range; run 'aioffice read --view outline' to list sheets.");
+                "Address a sheet (/Sheet1), a cell (/Sheet1/A1) or a range, or /properties / /style[@name=…]; " +
+                "run 'aioffice read --view outline' to list sheets.");
+        }
+
+        // Workbook-level get targets the shared grammar cannot parse (no sheet
+        // prefix), peeled off before path resolution like defined names.
+        if (pathArg is "/properties" or "/styles")
+        {
+            using var propsWorkbook = OpenWorkbook(file);
+            return pathArg == "/properties"
+                ? Envelope.Ok(ExcelProperties.Describe(propsWorkbook), MetaFor(file, sw))
+                : Envelope.Ok(
+                    new { kind = "xlsx", styles = ExcelCellStyles.ListAll(propsWorkbook) }, MetaFor(file, sw));
+        }
+
+        if (ExcelCellStyles.TryParsePath(pathArg, out var styleName))
+        {
+            using var styleWorkbook = OpenWorkbook(file);
+            return Envelope.Ok(ExcelCellStyles.Get(styleWorkbook, styleName), MetaFor(file, sw));
         }
 
         // Cell/range gets on big files (or with stream=true) are served by the

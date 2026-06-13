@@ -1003,3 +1003,169 @@ equations render, sections appear, tables/grouping show:
   (naming the body/section/sheet workaround) rather than crashing.
 - M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still
   open**, observed again in M6.3/M6.4; carry to M7.
+
+---
+
+# M7 (v0.8.0) — audit before you ship, document properties, content controls, named cell styles
+
+## M7.1 Build — PASS
+
+`dotnet build AIOffice.sln -warnaserror` → **0 warnings, 0 errors** across all 9 src + 7 test projects (net10.0, Nullable enable, TreatWarningsAsErrors).
+Reconciled Core: a single canonical `IAuditor` + `AuditFinding`/`AuditResult`/`AuditSummary`/`AuditOptions` in `src/AIOffice.Core/Abstractions.cs`; all three handlers implement it. New 15th MCP tool `office_audit`; new CLI `audit` verb; shared `AIOffice.Mcp.AuditVerb` so CLI and MCP emit a byte-identical payload.
+
+## M7.2 Tests — PASS (1366/1366 across 7 projects)
+
+- Core 124 · Word 424 · Excel 335 · Pptx 365 · MCP 63 · Preview 24 · Render 31 = **1366** (up from 1253; the format owners landed audit/properties/content-control/named-style tests WITH the features).
+- MCP tool-count expectations updated 14 → 15 (`ServerBootTests`, `SchemaHelpStatusTests`, `BridgeTests`). Token-budget test (`TokenBudgetTests`, ≤ 3500) **still green** with `office_audit` added — the terse description kept the surface under budget, so the 3500 ceiling was **not** raised.
+- OpenXmlValidator reports 0 errors after every mutating test (independent oracle, unchanged).
+
+## M7.3 docx audit → --fix → re-audit → validate — PASS
+
+Built a deliberately-bad `report.docx` through the real CLI (`dotnet run --project src/AIOffice.Cli -- --workspace …`): image with no alt, H1 then H3 (skip), an empty H2, a header-less 2×2 table, no document title.
+
+```
+$ aioffice audit report.docx
+  findings: a11y_no_doc_title(warn,/properties) · a11y_no_alt_text(error,/body/p[5]) ·
+            a11y_heading_skip(warn,/body/p[3]) · quality_empty_heading(warn,/body/p[4]) ·
+            a11y_no_table_header(error,/body/table[1])
+  summary: {errors:2, warnings:3, infos:0}   exit=0   (findings are data, not errors)
+
+$ aioffice audit report.docx --fix
+  fixed: 3   remaining: [a11y_heading_skip#/body/p[3], quality_empty_heading#/body/p[4]]
+  summary: {errors:0, warnings:2, infos:0}   exit=0
+  (alt text, table header row, and doc title set from the first Heading1 "Overview";
+   heading-skip + empty-heading are report-only and correctly REMAIN)
+
+$ aioffice validate report.docx → {valid:true, count:0, issues:[]}   exit=0
+```
+
+## M7.4 docx document properties (core + typed custom) — PASS
+
+```
+$ aioffice edit report.docx --ops '[{"op":"set","path":"/properties","props":{"title":"Q3 Report","author":"Onecer","custom":{"Project":"Aurora","Reviewed":true}}}]'
+  → core:["title","author"] custom:["Project","Reviewed"]
+$ aioffice read report.docx --view properties
+  → core.title="Q3 Report", core.author="Onecer";
+    custom.Project="Aurora" (string), custom.Reviewed=true (REAL boolean — typed round-trip, not "true")
+```
+
+## M7.5 docx content controls (dropdown) — PASS
+
+```
+$ aioffice edit report.docx --ops '[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"dropdown","tag":"status","title":"Status","items":["Draft","Final"]}}]'
+  → path "/sdt[@tag=status]" kind dropdown
+$ aioffice edit report.docx --ops '[{"op":"set","path":"/sdt[@tag=status]","props":{"text":"Final"}}]'  → value "Final"
+$ aioffice read report.docx --view fields
+  → [{ path:"/sdt[@tag=status]", kind:"dropdown", tag:"status", title:"Status", value:"Final", items:["Draft","Final"] }]
+$ aioffice validate report.docx → {valid:true, count:0}   (w14:checkbox-style sdt parts validate clean)
+```
+
+## M7.6 xlsx audit / --fix / named cell style — PASS
+
+Built a bad `metrics.xlsx`: `=B2/0` (→ `#DIV/0!`), a merged data range A2:A3 inside the used region A1:C3, an anchored image with no alt, no doc title.
+
+```
+$ aioffice audit metrics.xlsx
+  findings: quality_formula_error(error,/Sheet1/C2 → #DIV/0!) · a11y_merged_data_cells(warn,/Sheet1/A2:A3) ·
+            a11y_no_alt_text(warn,/Sheet1/image[1]) · a11y_no_doc_title(warn,/properties)
+  summary: {errors:1, warnings:3, infos:0}   exit=0
+
+$ aioffice audit metrics.xlsx --fix
+  fixed: 2 (alt text + title derived from filename "metrics")
+  remaining: [a11y_merged_data_cells#/Sheet1/A2:A3]   (formula-error + merged-cells are report-only)
+
+$ aioffice edit metrics.xlsx --ops '[{"op":"add","path":"/styles","type":"cellStyle","props":{"name":"Currency-Red","numberFormat":"$#,##0.00","color":"FF0000","bold":true}}]'
+$ aioffice edit metrics.xlsx --ops '[{"op":"set","path":"/Sheet1/B2:B3","props":{"cellStyle":"Currency-Red"}}]'  → applied:["cellStyle"]
+$ aioffice read metrics.xlsx --view styles
+  → [{ path:"/style[@name=Currency-Red]", kind:"cellStyle", name:"Currency-Red", numberFormat:"$#,##0.00", bold:true, color:"FF0000" }]
+$ aioffice validate metrics.xlsx → {valid:true, errors:0, warnings:1}
+  (the 1 warning is the #DIV/0! formula lint — a quality signal, NOT a schema error; intentional)
+```
+
+## M7.7 pptx audit / --fix / explicit altText — PASS
+
+Built a bad `deck.pptx`: an off-canvas shape (x=60cm), a 6pt shape, a picture with no alt, no slide title.
+
+```
+$ aioffice audit deck.pptx
+  findings: a11y_no_slide_title(warn,/slide[1]) · a11y_reading_order(info,/slide[1]) ·
+            quality_off_canvas(warn,/slide[1]/shape[@id=2]) · a11y_tiny_font(error,/slide[1]/shape[@id=3], 6pt<8pt) ·
+            a11y_no_alt_text(warn,/slide[1]/shape[@id=4])
+  summary: {errors:1, warnings:3, infos:1}   exit=0
+
+$ aioffice audit deck.pptx --fix
+  fixed: 2 (picture alt text + slide title placeholder)
+  remaining: [a11y_reading_order#/slide[1], quality_off_canvas#…shape[@id=2], a11y_tiny_font#…shape[@id=3]]
+
+$ aioffice edit deck.pptx --ops '[{"op":"set","path":"/slide[1]/shape[@id=4]","props":{"altText":"Company logo, red square"}}]'
+$ aioffice audit deck.pptx --category accessibility  → the picture alt finding is GONE (off-canvas/tiny-font/reading-order remain)
+$ aioffice validate deck.pptx → {valid:true, count:0}
+```
+
+## M7.8 Clean file — zero findings — PASS
+
+```
+$ aioffice create clean.docx --title "Clean Report"
+$ aioffice edit clean.docx --ops '[{"op":"set","path":"/body/p[1]","props":{"text":"Summary","style":"Heading1"}},{"op":"add","path":"/body","type":"p","props":{"text":"Body text here."}}]'
+$ aioffice edit clean.docx --ops '[{"op":"set","path":"/properties","props":{"title":"Clean Report"}}]'
+$ aioffice audit clean.docx → {findings:[], summary:{errors:0,warnings:0,infos:0}}   exit=0
+```
+
+(Honest note: `create --title` writes the title as a Heading1 paragraph, NOT the core property Title — pre-existing M0 docx behavior — so a freshly-created file still trips `a11y_no_doc_title` until you `set /properties {title}`. This is exactly the finding the auditor is supposed to raise; `--fix` would set it from the first heading.)
+
+## M7.9 MCP over the wire — PASS (tools/list == 15, office_audit, office_audit fix:true)
+
+Drove the real `aioffice mcp` stdio server (JSON-RPC: initialize → notifications/initialized → tools/list → tools/call) against a fresh bad docx:
+
+```
+TOOL COUNT: 15        HAS office_audit: True
+office_audit          → ok:true, isError:None (findings are DATA, not protocol errors),
+                        summary {errors:2, warnings:1}, codes [a11y_no_doc_title, a11y_no_alt_text, a11y_no_table_header]
+office_audit fix:true → ok:true, fixed:3, remaining:[]
+```
+
+## M7.10 Schema / help / version — PASS
+
+```
+$ aioffice version → version "0.8.0"
+$ aioffice doctor  → version "0.8.0"
+$ aioffice help audit → the audit topic (codes + --fix semantics + examples) loads from the embedded HelpTopics/audit.md
+$ aioffice schema  → 15 verbs incl. audit (mcpTool office_audit); office_read view enum includes properties/fields/styles
+```
+
+## M7.11 Published binary (dist/osx-arm64) — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+  → dist/osx-arm64/aioffice  = 38,187,209 bytes (~36 MB, single self-contained file, no runtime dependency)
+$ ./dist/osx-arm64/aioffice doctor   → version "0.8.0"; handlers docx/xlsx/pptx all "ready"
+  audit loop (binary): audit → {errors:2,warnings:1} · audit --fix → {fixed:3, remaining:[]} · validate → valid:true
+  MCP (binary stdio): tools/list == 15, office_audit over the wire → ok:true
+```
+
+## M7.12 Token budget — under ceiling, NOT raised
+
+The MCP tool surface (15 tools incl. `office_audit`) stays well under the 3500-token budget
+(`TokenBudgetTests` green; the terse `office_audit` description + the `office_help {topic:"audit"}`
+externalization of the code list kept it in budget). The 3500 ceiling was therefore **kept**, not raised.
+
+## M7 Honest notes / known gaps
+
+- **`audit` findings are data, never errors.** Like `validate`, a successful audit is `ok:true` / exit 0
+  even with error-severity findings. The only non-zero path is the usual `invalid_args`/`file_not_found`/
+  `sandbox_denied`/`format_corrupt` — i.e. "the audit could not run", not "the document has problems".
+- **`--fix` is safe-only and never destructive.** It applies placeholder alt text, a marked table header
+  row, a doc/slide title (first heading > filename > placeholder), and orphan-bookmark removal. Heading
+  skips, low contrast, empty headings, off-canvas shapes, formula errors, broken links/refs, tiny fonts
+  and merged data cells are **report-only** and remain in `remaining` after `--fix`. Every `--fix` pass
+  snapshots the pre-image first (undoable via `file_snapshot`).
+- **`create --title` (docx) still writes a Heading1 paragraph, not the core property Title** (pre-existing
+  M0 behavior). So a freshly created docx trips `a11y_no_doc_title` until you `set /properties {title}` —
+  which is exactly the finding the auditor should raise. `--fix` derives the title from the first heading.
+- **xlsx `validate` reports `#DIV/0!` as a lint warning, not a schema error.** A file with a formula error
+  is still valid OOXML (`valid:true`); the formula-error signal surfaces through `audit`
+  (`quality_formula_error`, severity error) and as a `validate` lint warning. Both are intentional.
+- **The deck.pptx good fixture keeps one `a11y_reading_order` (info) finding** — a non-defect heuristic
+  noting the picture sits visually above the text shape. Info-level findings are signal, not failure.
+- M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**,
+  observed again in M7.3/M7.6; carry to M8.

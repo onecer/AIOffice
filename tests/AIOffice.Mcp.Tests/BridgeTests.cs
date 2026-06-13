@@ -204,7 +204,7 @@ public sealed class BridgeTests : IDisposable
         await using var srv = await McpTestServer.StartAsync(_service);
 
         var tools = await srv.Client.ListToolsAsync();
-        Assert.Equal(14, tools.Count); // the bridge adds args, never tools
+        Assert.Equal(15, tools.Count); // the bridge adds args, never tools
         var createSchema = tools.First(t => t.Name == "office_create").JsonSchema.GetRawText();
         Assert.Contains("\"from\"", createSchema, StringComparison.Ordinal);
 
@@ -248,13 +248,13 @@ public sealed class BridgeTests : IDisposable
 
     // M6: add a docx equation over MCP, then read its stored LaTeX back. Exercises
     // the new "equation" op type and the /body/p[i]/omath[j] addressing form
-    // through the real server + EditOp.ParseBatch gate (tool count stays 14).
+    // through the real server + EditOp.ParseBatch gate (tool count stays 15).
     [Fact]
     public async Task Office_edit_adds_a_docx_equation_over_the_wire()
     {
         await using var srv = await McpTestServer.StartAsync(_service);
 
-        Assert.Equal(14, (await srv.Client.ListToolsAsync()).Count);
+        Assert.Equal(15, (await srv.Client.ListToolsAsync()).Count);
 
         EnvelopeAssert.Ok(await srv.CallAsync("office_create", new Dictionary<string, object?>
         {

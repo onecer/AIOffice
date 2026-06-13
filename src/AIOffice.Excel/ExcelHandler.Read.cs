@@ -9,7 +9,7 @@ public sealed partial class ExcelHandler
     private const int DefaultMaxTextBytes = 65536;
 
     private static readonly IReadOnlyList<string> ReadViews =
-        ["outline", "text", "stats", "structure", "csv", "comments"];
+        ["outline", "text", "stats", "structure", "csv", "comments", "properties", "styles"];
 
     public Envelope Read(CommandContext ctx) => Run(ctx, sw =>
     {
@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use one of: outline, text, stats, structure, csv, comments.",
+                "Use one of: outline, text, stats, structure, csv, comments, properties, styles.",
                 candidates: ReadViews);
         }
 
@@ -53,6 +53,9 @@ public sealed partial class ExcelHandler
             "structure" => Envelope.Ok(ReadStructure(workbook, file), MetaFor(file, sw, fallback)),
             "csv" => ReadCsv(ctx, workbook, file, sw),
             "comments" => ReadComments(workbook, file, sw),
+            "properties" => Envelope.Ok(ExcelProperties.Describe(workbook), MetaFor(file, sw, fallback)),
+            "styles" => Envelope.Ok(
+                new { kind = "xlsx", styles = ExcelCellStyles.ListAll(workbook) }, MetaFor(file, sw, fallback)),
             _ => ReadText(ctx, workbook, file, sw),
         };
     });

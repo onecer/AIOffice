@@ -90,8 +90,11 @@ public sealed partial class WordHandler
         var relId = main.GetIdOfPart(imagePart);
         var docPrId = NextDrawingId(doc);
         var name = Path.GetFileName(src);
+        var alt = props["alt"] is { } altNode ? NodeToString(altNode)
+            : props["descr"] is { } descrNode ? NodeToString(descrNode)
+            : null;
 
-        var paragraph = new Paragraph(new Run(BuildInlineDrawing(relId, docPrId, name, cx, cy)));
+        var paragraph = new Paragraph(new Run(BuildInlineDrawing(relId, docPrId, name, cx, cy, alt)));
         if (session.Track)
         {
             RequireBodyScope(anchor.CanonicalPath, "add");
@@ -111,11 +114,11 @@ public sealed partial class WordHandler
     }
 
     /// <summary>The standard wp:inline &gt; pic:pic markup Word writes for embedded images.</summary>
-    private static Drawing BuildInlineDrawing(string relId, uint docPrId, string name, long cx, long cy) => new(
+    private static Drawing BuildInlineDrawing(string relId, uint docPrId, string name, long cx, long cy, string? alt = null) => new(
         new Dw.Inline(
             new Dw.Extent { Cx = cx, Cy = cy },
             new Dw.EffectExtent { LeftEdge = 0L, TopEdge = 0L, RightEdge = 0L, BottomEdge = 0L },
-            new Dw.DocProperties { Id = docPrId, Name = name },
+            new Dw.DocProperties { Id = docPrId, Name = name, Description = alt is { Length: > 0 } ? alt : null },
             new Dw.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
             new A.Graphic(
                 new A.GraphicData(
@@ -265,18 +268,41 @@ public sealed partial class WordHandler
 
     private static double EmuToCm(long emu) => Math.Round((double)emu / EmuPerCm, 2);
 
+    // ------------------------------------------------------------------- set
+
+    /// <summary>
+    /// <c>set</c> alt/descr on an image-carrying paragraph or run: writes the
+    /// wp:docPr description (the alt text accessibility tools read).
+    /// </summary>
+    private static object ApplySetImageAlt(ResolvedNode node, System.Text.Json.Nodes.JsonObject props)
+    {
+        var altNode = props["alt"] ?? props["descr"];
+        var alt = NodeToString(altNode);
+
+        var docPr = node.Element.Descendants<Dw.DocProperties>().FirstOrDefault()
+            ?? throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"{node.CanonicalPath} carries a drawing with no docPr to describe.",
+                "Re-add the image with 'aioffice edit --add … --type image'.");
+
+        docPr.Description = alt;
+        return new { op = "set", path = node.CanonicalPath, type = "image", alt };
+    }
+
     // ------------------------------------------------------------------- get
 
     /// <summary>get on a paragraph/run holding an inline image.</summary>
     private static Dictionary<string, object?> ImageProperties(OpenXmlElement element)
     {
         var extent = element.Descendants<Dw.Inline>().FirstOrDefault()?.Extent;
+        var docPr = element.Descendants<Dw.DocProperties>().FirstOrDefault();
         return new Dictionary<string, object?>
         {
             ["kind"] = "image",
             ["widthCm"] = extent?.Cx?.Value is { } cx ? EmuToCm(cx) : null,
             ["heightCm"] = extent?.Cy?.Value is { } cy ? EmuToCm(cy) : null,
-            ["name"] = element.Descendants<Dw.DocProperties>().FirstOrDefault()?.Name?.Value,
+            ["name"] = docPr?.Name?.Value,
+            ["alt"] = docPr?.Description?.Value,
             ["text"] = element.InnerText.Length > 0 ? element.InnerText : null,
             ["note"] = "The image bytes are embedded in the document; the original src path is not stored.",
         };

@@ -117,6 +117,8 @@ public sealed partial class WordHandler
             "replace" => ApplyReplace(doc, op, session),
             "set" when rootName == "style" => ApplySetStyle(doc, op),
             "set" when rootName == "section" => ApplySetSection(doc, op),
+            "set" when rootName == "properties" => ApplySetProperties(doc, op),
+            "set" when rootName == "sdt" => ApplySetContentControl(doc, op),
             "set" => ApplySet(doc, op, session),
             // Part-backed adds cannot resolve their anchor through WordAddress
             // (the target part/list, not body content, receives the element).
@@ -144,6 +146,8 @@ public sealed partial class WordHandler
             "add" when op.Type == "equation" && session.Track => throw TrackedStructureUnsupported("equation"),
             "add" when op.Type == "equation" => ApplyAddEquation(doc, op, session),
             "add" when op.Type == "columnBreak" => ApplyAddColumnBreak(doc, op, session),
+            "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
+            "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
             "add" => ApplyAdd(doc, op, session),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
@@ -153,6 +157,7 @@ public sealed partial class WordHandler
             "remove" when rootName == "toc" => ApplyRemoveToc(doc, op),
             "remove" when rootName == "watermark" => ApplyRemoveWatermark(doc, op),
             "remove" when rootName == "section" => ApplyRemoveSection(doc, op),
+            "remove" when rootName == "sdt" => ApplyRemoveContentControl(doc, op),
             "remove" when DocPath.Parse(op.Path).Segments[^1].Name == "omath" => ApplyRemoveEquation(doc, op),
             "remove" when rootName == "revision" => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -183,6 +188,14 @@ public sealed partial class WordHandler
         if (node.Element is TableCell cell)
         {
             return ApplySetCell(cell, node, props);
+        }
+
+        // Image-carrying paragraphs/runs take an alt/descr property: it sets the
+        // wp:docPr description (the accessibility alt text the auditor checks).
+        if (node.Element.Descendants<Drawing>().Any() &&
+            (props.ContainsKey("alt") || props.ContainsKey("descr")))
+        {
+            return ApplySetImageAlt(node, props);
         }
 
         foreach (var (name, value) in OrderedProps(props))

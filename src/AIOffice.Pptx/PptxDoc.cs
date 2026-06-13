@@ -349,6 +349,20 @@ internal static class PptxDoc
                 .Select(i => Units.Inv($"{view.CanonicalPath(address.SlideIndex)}/p[{i}]"))]);
     }
 
+    /// <summary>The accessibility description (a:cNvPr/@descr) of a shape, when set and non-empty.</summary>
+    public static string? AltText(OpenXmlCompositeElement element)
+    {
+        var descr = NonVisualProps(element)?.Description?.Value;
+        return string.IsNullOrEmpty(descr) ? null : descr;
+    }
+
+    /// <summary>The accessibility title (a:cNvPr/@title) of a shape, when set and non-empty.</summary>
+    public static string? AltTitle(OpenXmlCompositeElement element)
+    {
+        var title = NonVisualProps(element)?.Title?.Value;
+        return string.IsNullOrEmpty(title) ? null : title;
+    }
+
     public static P.NonVisualDrawingProperties? NonVisualProps(OpenXmlCompositeElement element) => element switch
     {
         P.Shape s => s.NonVisualShapeProperties?.NonVisualDrawingProperties,

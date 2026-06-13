@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：M6 规格（v0.7.0）：**工具数维持 14 个**——M6 深水区能力只扩 `office_edit` 的 add type 词表与寻址形式，不加工具：新增 `equation`（docx LaTeX）/ `columnBreak`/ `section`（pptx）/ `layout`（pptx 克隆）/ `group`（xlsx 大纲）/ `table`（xlsx ListObject），新寻址 `/`（演示文稿根：pptx 幻灯片尺寸 + 分节 + 文档级 get）、`/body/p[i]/omath[j]`（行内公式）、`row[a]:row[b]`/`col[a]:col[b]`（xlsx 大纲分组跨段）、可编辑 `/master[1]/layout[i]`；schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M5：`office_create` 的 `from`（markdown/csv 导入）+ `office_read` 的 `markdown`/`csv` 视图；M2：`track`/`author` + accept/reject op + revisions/comments/styles 视图 + `file_too_large` 错误码。
+> 状态：M7 规格（v0.8.0）：**工具数 14 → 15**——新增 `office_audit`（无障碍 + 质量 lint，findings 是数据，`--fix` 仅安全自动修复），以及 `office_read` 的 `properties`/`fields`/`styles` 视图、`office_edit` 的 `set /properties`（文档属性 core + 类型化 custom）、`add type:contentControl`（docx 内容控件）、`add type:cellStyle`（xlsx 命名单元格样式）、shape `altText`/`altTitle`（pptx）；新寻址 `/properties`、`/sdt[@tag=X]`、`/style[@name=X]`；加入 office_audit 后 schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M6（v0.7.0）：工具数维持 14，深水区只扩 `office_edit` 的 add type 词表与寻址（`equation`/`columnBreak`/`section`/`layout`/`group`/`table`，`/`、`/body/p[i]/omath[j]`、`row[a]:row[b]`、可编辑 `/master[1]/layout[i]`）；M5：`office_create` 的 `from` + `office_read` 的 `markdown`/`csv` 视图；M2：`track`/`author` + accept/reject op + revisions/comments/styles 视图 + `file_too_large` 错误码。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -17,7 +17,7 @@ aioffice mcp [--workspace <dir>]
 
 - stdio MCP server；`--workspace`（或环境变量 `AIOFFICE_WORKSPACE`，默认 cwd）定义沙箱根。
 - 所有 `file` / `output` 参数在每次调用时做 realpath + symlink 逃逸检查，越界即 `sandbox_denied`。
-- 14 个工具：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_template` `file_snapshot` `office_status` `office_help` `office_schema` `preview_open` `preview_selection`（preview 二件套 M1 转正注册，见 §1.13）。
+- 15 个工具：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_audit` `office_template` `file_snapshot` `office_status` `office_help` `office_schema` `preview_open` `preview_selection`（`office_audit` M7 加入，见 §1.7a；preview 二件套 M1 转正注册，见 §1.13）。
 
 ### 0.2 统一返回 envelope
 
@@ -392,6 +392,64 @@ aioffice mcp [--workspace <dir>]
 
 ---
 
+### 1.7a `office_audit`（M7）
+
+**用途**：无障碍 + 质量 lint。findings 是**数据**，不是错误——即使有 error 级 finding，`ok:true`（exit 0），与 `office_validate` 同理（错误码只描述「工具没跑成」）。`fix:true` 只应用**安全、非破坏性**自动修复，再重审。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file": { "type": "string" },
+    "category": { "type": "string", "enum": ["accessibility", "quality", "all"], "default": "all" },
+    "severity": { "type": "string", "enum": ["error", "warning", "info"], "default": "info",
+      "description": "Minimum severity to report" },
+    "fix": { "type": "boolean", "default": false,
+      "description": "Apply safe autofixes, then re-audit; result adds {fixed:N, remaining:[ids]}" }
+  },
+  "required": ["file"]
+}
+```
+
+**result**：`data: { findings: [{ id: "code#path", severity: "error"|"warning"|"info", category: "accessibility"|"quality", code, path?, message, suggestion, autofixable }], summary: { errors, warnings, infos } }`；`fix:true` 时追加 `fixed: N` 与 `remaining: [id]`（重审后仍存在的 finding id）。
+
+**code 全集**（详见 `office_help {topic:"audit"}`）：
+- accessibility：`a11y_no_alt_text`(err,fix) · `a11y_no_table_header`(err,fix) · `a11y_no_doc_title`(warn,fix) · `a11y_no_slide_title`(warn,fix) · `a11y_heading_skip`(warn) · `a11y_low_contrast`(warn) · `a11y_tiny_font`(warn) · `a11y_merged_data_cells`(warn) · `a11y_reading_order`(info)。
+- quality：`quality_broken_ref`(err) · `quality_formula_error`(err) · `quality_broken_link`(err) · `quality_empty_heading`(warn) · `quality_off_canvas`(warn) · `quality_empty_placeholder`(warn) · `quality_orphan_bookmark`(info,fix) · `quality_duplicate_id`(warn)。
+
+安全自动修复：占位 alt 文本 `(describe this image)`、标记表头行、设文档/幻灯片标题（首个 Heading1 > 文件名 > 占位）、删孤儿书签。其余一律仅报告；`fix:true` 前自动建快照（可 `file_snapshot restore`）。
+
+**示例**
+
+```json
+// call —— 故意做坏的 report.docx（图片无 alt + 无表头表格 + 无文档标题 + H1→H3 + 空标题）
+{ "file": "report.docx" }
+// result
+{ "ok": true, "data": {
+  "findings": [
+    { "id": "a11y_no_alt_text#/body/p[5]", "severity": "error", "category": "accessibility",
+      "code": "a11y_no_alt_text", "path": "/body/p[5]", "message": "An image has no alternative text (descr).",
+      "suggestion": "Add a description … or --fix to insert a placeholder.", "autofixable": true }
+    /* … */
+  ],
+  "summary": { "errors": 2, "warnings": 3, "infos": 0 } } }
+
+// call —— fix:true
+{ "file": "report.docx", "fix": true }
+// result
+{ "ok": true, "data": {
+  "findings": [ /* 仅剩 report-only */ ],
+  "summary": { "errors": 0, "warnings": 2, "infos": 0 },
+  "fixed": 3,
+  "remaining": ["a11y_heading_skip#/body/p[3]", "quality_empty_heading#/body/p[4]"] } }
+```
+
+**映射 CLI**：`aioffice audit <file> [--category …] [--severity …] [--fix]`
+
+**错误码**：`invalid_args`（category/severity 非法）、`file_not_found`、`sandbox_denied`、`format_corrupt`、`unsupported_feature`（格式 handler 未实现审计——三格式均已实现）。
+
+---
+
 ### 1.8 `office_template`
 
 **用途**：模板合并——把 `data` 里的键值对填入文档文本 run 中的 `{{key}}` 占位符（docx/xlsx/pptx 通用，跨 run 拆分的占位符也能命中）。
@@ -533,7 +591,7 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.12 `office_schema`
 
-**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。14 工具 / 14 动词的单一事实来源（与 `aioffice schema` 字节一致）。
+**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。15 工具 / 15 动词的单一事实来源（与 `aioffice schema` 字节一致）。
 
 ```json
 {
@@ -649,16 +707,17 @@ aioffice mcp [--workspace <dir>]
 | `office_create` | 150 | |
 | `office_schema` | 120 | |
 | `office_validate` | 100 | |
+| `office_audit` | 140 | M7 加入；描述刻意精简，code 全集外置到 `office_help {topic:"audit"}` |
 | `office_status` | 90 | |
 | `preview_open` | 300 | M1 转正，吃掉当年预留额度的大头 |
 | `preview_selection` | 180 | M1 转正 |
-| **M1 小计（14 工具）** | **3020** | v0 小计 2540 + preview 预留 480，预算如约未重谈 |
-| 措辞浮动预留 | 480 | description 迭代余量（M5 的 `from`/新视图/新 type 词表、M6 的公式/分节/分组/Excel 表 type 词表与新寻址提示均从这里支出，实测全表 ≈ 2214 tokens，余量仍充足） |
-| **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关 |
+| **M7 小计（15 工具）** | **3160** | M1 小计 3020（v0 2540 + preview 480）+ `office_audit` 140 |
+| 措辞浮动预留 | 340 | description 迭代余量（M5 的 `from`/新视图/新 type 词表、M6 的公式/分节/分组/Excel 表 type 词表、M7 的 `office_audit` + `properties`/`fields`/`styles` 视图 + `contentControl`/`cellStyle` type + `altText` 提示均从这里支出，实测全表仍 ≤ 3500，CI schema-budget 测试把关） |
+| **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关；加入 `office_audit`（第 15 个工具）后未超额，故沿用 3500 上限、不上调天花板 |
 
 预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。
 
-### 2.2 Few-fat vs many-thin：为什么是 14 个中粒度能力
+### 2.2 Few-fat vs many-thin：为什么是 15 个中粒度能力
 
 - **Many-thin 的失败模式**：按「动词 × 格式」切会得到 50+ 个工具（docx_add_paragraph、xlsx_set_cell…），schema 总量超预算一个数量级，且把路由难题推给模型——工具选择错误率随工具数超线性上涨。
 - **One-mega 的失败模式**：单个 `run_aioffice(argv: string)` 看似零预算，实际把 CLI 语法学习成本转嫁给模型：丢失参数级校验、丢失结构化错误与 `candidates[]`、丢失 `expect_rev` / 自动快照等横切机制的注入点。

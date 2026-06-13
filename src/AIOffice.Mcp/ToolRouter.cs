@@ -43,6 +43,7 @@ internal static class ToolRouter
         "office_edit" => service.Edit(args),
         "office_render" => service.Render(args),
         "office_validate" => service.Validate(args),
+        "office_audit" => service.Audit(args),
         "office_template" => service.Template(args),
         "file_snapshot" => service.Snapshot(args),
         "office_status" => service.Status(),

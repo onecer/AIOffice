@@ -577,6 +577,8 @@ internal static class PptxQueryEngine
             Kind = view.Kind,
             Name = view.Name,
             Placeholder = PptxDoc.PlaceholderType(view.Element),
+            AltText = PptxDoc.AltText(view.Element),
+            AltTitle = PptxDoc.AltTitle(view.Element),
             Geometry = PptxDoc.GeometryToken(view.Element),
             Flip = PptxDoc.FlipToken(view.Element),
             Text = PptxDoc.ShapeText(view.Element),

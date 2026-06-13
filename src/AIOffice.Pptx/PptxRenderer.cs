@@ -62,6 +62,12 @@ internal static class PptxRenderer
 
         svg.Append(Units.Inv($"  <g data-aio-path=\"{Escape(shape.CanonicalPath(slideIndex))}\" data-name=\"{Escape(shape.Name)}\">\n"));
 
+        // Accessible name: an SVG <title> child is what assistive tech announces.
+        if ((PptxDoc.AltText(shape.Element) ?? PptxDoc.AltTitle(shape.Element)) is { } altText)
+        {
+            svg.Append(Units.Inv($"    <title>{Escape(altText)}</title>\n"));
+        }
+
         if (PptxCharts.ChartPartOf(slidePart, shape.Element) is { } chartPart)
         {
             svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));

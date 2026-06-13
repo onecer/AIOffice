@@ -306,7 +306,7 @@ public sealed class EditTests : ExcelTestBase
     {
         var file = CreateWorkbook();
 
-        var envelope = EditOps(file, SetOp("/Sheet1/A1", ("color", "red")));
+        var envelope = EditOps(file, SetOp("/Sheet1/A1", ("underline", "single")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);

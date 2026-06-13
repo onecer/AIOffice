@@ -43,9 +43,26 @@ public sealed partial class WordHandler
                     meta);
             }
 
+            // Virtual document-properties node (core + custom file properties).
+            if (docPath.Segments is [{ Name: "properties" }])
+            {
+                return Envelope.Ok(
+                    new { path = "/properties", type = "properties", properties = PropertiesShape(doc) },
+                    meta);
+            }
+
             // The id-addressed roots that live outside body content.
             switch (docPath.Segments[0].Name)
             {
+                case "sdt":
+                {
+                    var (sdt, properties) = ResolveContentControl(doc, docPath);
+                    _ = sdt;
+                    return Envelope.Ok(
+                        new { path = (string)properties["path"]!, type = "contentControl", properties },
+                        meta);
+                }
+
                 case "revision":
                 {
                     var revision = ResolveRevision(doc, docPath);

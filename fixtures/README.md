@@ -42,14 +42,20 @@ pptx 加页+加形状+渲染 SVG。每个脚本都以 `validate` 收尾——这
 `fixtures/manual-check/`，由真人用真实 Office 打开确认。CI 无法自动化这一步，
 OpenXmlValidator 只是代理指标。
 
-M6（v0.7.0）三件套，请用真实 Office 打开核验渲染：
+M7（v0.8.0）三件套是**已审计 + 已修复**的干净产物，请用真实 Office 打开核验：
 
-- `report.docx` —— 行内公式 `E=mc²`、显示块二次求根公式、2×2 单位矩阵（确认**公式真的渲染成数学排版**）、
-  一段阿拉伯语 RTL 段落（确认从右到左）、整节两栏排版。
-- `metrics.xlsx` —— Excel 表 "Sales"（medium2 样式 + 汇总行），`=SUM(Sales[Amount])` 应为 965，
-  第 2–6 行折叠为大纲分组（确认左侧出现折叠符号）。
-- `deck.pptx` —— 编辑过的母版（深色背景 + 强调色）、克隆出的版式、两个节 "Intro"/"Body"（确认节视图分组）、
-  4:3 幻灯片尺寸。
+- `report.docx` —— 文档标题 "Quarterly Overview"、自定义属性 Project=Aurora / Reviewed=true
+  （文件 → 信息 → 属性里可见）、图片带 alt 文本、表格首行标记为重复表头、一个值为 Final 的
+  下拉**内容控件**（Status）。`aioffice audit report.docx` 应报告**零 findings**。
+- `metrics.xlsx` —— 文档标题 "Sales Metrics"、命名单元格样式 **Currency-Red**（红色加粗货币格式，
+  套在 B2:B4，Excel 单元格样式库里可见），`=SUM(B2:B3)` 应为 3600。`audit` 应报告**零 findings**。
+- `deck.pptx` —— 幻灯片标题 "Q4 Review"、图片带 alt 文本、24pt 可读正文。`audit` 仅剩一条
+  `a11y_reading_order`（info，非缺陷，提示图形在视觉上位于文本之上）。
+
+`audit-demo/` 里是**故意做坏**的同名三件套（before-audit），供你亲自跑 `aioffice audit`
+（及 `--fix`）观察真实 findings——详见 `audit-demo/README.md`。
+
+历史：M6（v0.7.0）三件套曾覆盖 docx 公式/RTL/分栏、xlsx Excel 表/大纲分组、pptx 母版/分节/幻灯片尺寸。
 
 ## 从 OfficeCLI 学习能力（而非语法）/ Lifting capability cases from OfficeCLI
 

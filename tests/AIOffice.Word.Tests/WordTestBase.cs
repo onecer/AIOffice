@@ -63,6 +63,25 @@ public abstract class WordTestBase : IDisposable
     protected Envelope Edit(string file, string opsJson, JsonObject? args = null) =>
         Handler.Edit(Ctx(file, args), EditOp.ParseBatch(opsJson));
 
+    /// <summary>Runs an audit pass with the given options (default: all categories, info+).</summary>
+    protected AuditResult Audit(string file, AuditOptions? opts = null) =>
+        Handler.Audit(Ctx(file), opts ?? new AuditOptions());
+
+    /// <summary>A PNG header claiming a size — enough for the sniffer (it never decodes).</summary>
+    protected string WritePng(string name, int width = 4, int height = 4)
+    {
+        var bytes = new byte[33];
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }.CopyTo(bytes, 0);
+        bytes[11] = 13;
+        "IHDR"u8.ToArray().CopyTo(bytes, 12);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(16, 4), width);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(20, 4), height);
+        bytes[24] = 8;
+        bytes[25] = 6;
+        File.WriteAllBytes(Path.Combine(Dir, name), bytes);
+        return name;
+    }
+
     /// <summary>Envelope data through the JSON wire shape (what agents actually see).</summary>
     protected static JsonNode Data(Envelope envelope)
     {

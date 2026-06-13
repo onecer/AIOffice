@@ -15,7 +15,7 @@
 aioffice create report.docx --title "Q3 Report"
 aioffice edit   report.docx --set '/body/p[1]' text="Revenue grew 12%"
 aioffice read   report.docx --view outline
-aioffice mcp    # the same 14 capabilities, as MCP tools over stdio
+aioffice mcp    # the same 15 capabilities, as MCP tools over stdio
 ```
 
 ## Show, don't tell
@@ -165,7 +165,7 @@ Most office libraries are built for programmers. Most office CLIs are built for 
 | **Human-in-the-loop preview** | `preview open` serves a live view on localhost; rendered nodes carry `data-aio-path`, so a human **click** comes back to the agent as a canonical path via `preview selection`. |
 | **Sandboxed by default** | All file args resolve inside a workspace allowlist (`--workspace`, symlink-escape checked). Out-of-bounds access → `sandbox_denied`, exit 4. |
 | **Introspectable surface** | `aioffice schema` returns the entire command surface as machine-readable JSON. Agents read the spec instead of hallucinating it. |
-| **CLI = MCP, one mental model** | 15 CLI verbs and 14 MCP tools map 1:1. Learn it once, drive it from a shell or over stdio. |
+| **CLI = MCP, one mental model** | 15 CLI verbs and 15 MCP tools map 1:1. Learn it once, drive it from a shell or over stdio. |
 
 ### Errors that teach — real output
 
@@ -299,10 +299,56 @@ aioffice render report.docx --to png -o quadratic.png   # the formula below was 
 
 ![The quadratic formula, rendered from LaTeX through real Office Math](assets/demo/equation-quadratic.png)
 
+## Audit before you ship
+
+`aioffice audit` is accessibility + quality lint for Office files. Findings are
+**data**, never errors — the command exits `0` even when it surfaces
+error-severity findings, exactly like `validate`. `--fix` applies only the
+**safe, non-destructive** autofixes and re-audits, so you see what is left.
+
+```bash
+# A deliberately-bad report: image with no alt text, H1 then H3, a header-less
+# table, an empty heading, no document title.
+$ aioffice audit report.docx
+{ "ok": true, "data": {
+  "findings": [
+    { "code": "a11y_no_doc_title",   "severity": "warning", "path": "/properties",      "autofixable": true  },
+    { "code": "a11y_no_alt_text",     "severity": "error",   "path": "/body/p[5]",        "autofixable": true  },
+    { "code": "a11y_heading_skip",    "severity": "warning", "path": "/body/p[3]",        "autofixable": false },
+    { "code": "quality_empty_heading","severity": "warning", "path": "/body/p[4]",        "autofixable": false },
+    { "code": "a11y_no_table_header", "severity": "error",   "path": "/body/table[1]",    "autofixable": true  }
+  ],
+  "summary": { "errors": 2, "warnings": 3, "infos": 0 } } }
+
+# --fix applies the safe autofixes (alt text, table header, doc title), then
+# re-audits. The heading-skip and empty-heading findings are report-only and
+# stay in `remaining` for you to fix by hand.
+$ aioffice audit report.docx --fix
+{ "ok": true, "data": {
+  "findings": [
+    { "code": "a11y_heading_skip",     "path": "/body/p[3]", "autofixable": false },
+    { "code": "quality_empty_heading", "path": "/body/p[4]", "autofixable": false }
+  ],
+  "summary": { "errors": 0, "warnings": 2, "infos": 0 },
+  "fixed": 3,
+  "remaining": ["a11y_heading_skip#/body/p[3]", "quality_empty_heading#/body/p[4]"] } }
+
+# Still valid OOXML afterwards.
+$ aioffice validate report.docx
+{ "ok": true, "data": { "valid": true, "count": 0, "issues": [] } }
+```
+
+Same verb, same findings, same `--fix` semantics for **.xlsx** (formula errors
+like `#DIV/0!`, merged data cells, missing alt text/title) and **.pptx** (picture
+alt text, slide titles, off-canvas shapes, tiny fonts, reading order). Scope with
+`--category accessibility|quality|all` and `--severity error|warning|info`; the
+full code list and which codes are autofixable is in `aioffice help audit`.
+Over MCP it is `office_audit {file, category?, severity?, fix?}` — the 15th tool.
+
 ## MCP (for Claude and other agents)
 
 ```bash
-aioffice mcp     # stdio MCP server — 14 tools, 1:1 with the CLI verbs
+aioffice mcp     # stdio MCP server — 15 tools, 1:1 with the CLI verbs
 ```
 
 Claude Desktop / Claude Code config:
@@ -326,11 +372,12 @@ Claude Desktop / Claude Code config:
 | `office_get` | get | `office_status` | doctor |
 | `office_edit` | edit | `office_help` | help |
 | `office_render` | render | `office_schema` | schema |
-| `preview_open` | preview open | `preview_selection` | preview selection |
+| `office_audit` | audit | `preview_open` | preview open |
+| `preview_selection` | preview selection | | |
 
-`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test.
+`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test, and still under it with `office_audit` added.
 
-## Command surface (v0.7.0)
+## Command surface (v0.8.0)
 
 | Verb | Summary |
 |---|---|
@@ -341,27 +388,28 @@ Claude Desktop / Claude Code config:
 | `edit <file> --ops <json\|@file>` | **Atomic** batch set/add/remove/move/replace · `--dry-run` · `--expect-rev` · sugar `--set/--add/--remove` · **document-wide find/replace sugar** `--find X --replace Y [--regex] [--match-case] [--whole-word]` (docx body+headers+footers, every sheet, every slide incl. notes; aggregate `{replacements, locations}`; with `--track` on docx every hit becomes a revision pair) |
 | `render <file> [--to html\|svg\|text\|png\|pdf] [--scope]` | The *look* step — html for docx/xlsx, svg per pptx slide, **png/pdf** via the system browser (pptx pdf: whole deck, one page per slide) |
 | `validate <file>` | OOXML validation + lint with fix suggestions |
+| `audit <file> [--category accessibility\|quality\|all] [--severity error\|warning\|info] [--fix]` | **Accessibility + quality lint** — findings are data (`ok:true`, exit 0); `--fix` applies only safe autofixes (alt text, table header, doc/slide title, orphan bookmark) and reports `{fixed, remaining}` |
 | `template <file> --data <json\|@file>` | `{{key}}` merge across docx/xlsx/pptx (split-run safe) |
 | `snapshot <list\|restore> <file> [n]` | Pre-edit snapshot ring (20) |
 | `preview <open\|selection\|close> <file> [--port N]` | Live localhost preview; human clicks → canonical paths via `selection` |
 | `doctor` | Environment / runtime / handler diagnosis |
 | `schema [verb]` | Machine-readable JSON of the whole surface |
-| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** |
+| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** |
 | `mcp` | stdio MCP server |
 | `version` | Version info |
 
 Global flags: `--json` (default when not a TTY) · `--pretty` · `--workspace <dir>` (sandbox root, default cwd, or `AIOFFICE_WORKSPACE`) · `--quiet`.
 Exit codes: `0` ok · `2` user error · `3` internal/format error · `4` sandbox_denied · `5` unsupported_feature.
 
-**Addressing** (1-based): `/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/` (pptx slide size + sections).
+**Addressing** (1-based): `/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/` (pptx slide size + sections) · **M7**: `/properties` (core + custom doc properties) · `/sdt[@tag=status]` (docx content controls) · `/style[@name=Currency-Red]` (xlsx named cell styles).
 
-## What works today (M0 + M1 + M2 + M3 + M4 + M5 + M6)
+## What works today (M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7)
 
-| Format | M0 (v0.1.0) | + M1 (v0.2.0) | + M2 (v0.3.0) | + M3 (v0.4.0) | + M4 (v0.5.0) | + M5 (v0.6.0) | + M6 (v0.7.0) |
-|---|---|---|---|---|---|---|---|
-| **.docx** | create · paragraphs/headings/styles · tables · text & formatting edits (bold/italic/color/alignment/size) · query/get · outline/text/stats/structure views · HTML render · `{{key}}` templates · validate | **headers/footers** (create + edit, `/header[1]/p[1]`) · PNG render · live preview | **tracked changes** (`--track --author`, `read --view revisions`, accept/reject by `/revision[@id=N]` or scope) · **comments** (add/read/remove, `/comment[@id=N]`) · **custom styles** (`/styles` add, `/style[@id=X]` set/get/remove) · **images** (PNG/JPEG, sandboxed `src`, aspect-keeping) | **lists** (numbered/bulleted, nested levels, restart; `1.`/`•` markers in text view, real `<ol>/<ul>` in HTML) · **hyperlinks** (external url + bookmark anchors) · **bookmarks** · **footnotes** · **page setup** (`/section[1]`: pageSize/orientation/margins) · **formatting-revision accept/reject** (w:rPrChange/w:pPrChange) · **threaded comment replies** (`add type:reply` on `/comment[@id=N]`) | **table of contents** (`add type:toc`, levels/title/position; `/toc[1]` get with entryCount) · **text watermarks** (`add type:watermark`, every header, auto-creates one) · **endnotes** (`/endnote[@id=N]`) · **section breaks** (`add type:sectionBreak`, per-section page setup — portrait & landscape in one file) · **find/replace** (split-run safe; `--track` makes every hit a w:del+w:ins pair) | **markdown bridge** (`create --from notes.md` imports GFM — headings/lists/tables/links/code; `read --view markdown` exports it back, structure round-trips) · **deep tables** (`mergeRight`/`mergeDown`, borders all/outer/none, shading, `headerRow` repeat, `columnWidths`, valign; real colspan/rowspan in HTML) · **fields** (PAGE/NUMPAGES/DATE/TITLE + `leadingText` — 'Page X of Y' footers) · **firstPage/even header+footer variants** (`/header[firstPage]`, auto `w:titlePg`/`w:evenAndOddHeaders`) | **equations** (`add type:equation` — LaTeX → real Office Math; inline `/body/p[i]/omath[j]` or display block; `$…$`/`$$…$$` in text view; unknown commands degrade with an `equation_partial` warning; original LaTeX stored for faithful read-back) · **right-to-left / bidi** (`rtl` on paragraph `w:bidi` / run `w:rtl` / table `w:bidiVisual`) · **multi-column sections** (`columns`/`columnGap` on `/section[1]` + `add type:columnBreak`) |
-| **.xlsx** | create · typed cell writes (number/bool/string/date) · **formula evaluation with cached values** + honest warnings · number formats · merge · tables/sheets · range reads · query by value/formula · HTML render · templates · validate | **charts** (bar/line/pie, `add type:chart`) · PNG render · live preview | **pivot tables** (rows/columns/filters + sum/average/count/min/max values, `pivot[@name=X]`) · **conditional formatting** (cellIs/colorScale/dataBar/containsText) · **images** (anchored, PNG/JPEG) | **streaming reads** for huge workbooks (SAX over raw XML — `read --view stats/text` and cell/range `get` without loading the DOM; a 41 MB / 330k-row book answers stats in ~2 s) · **scatter & area charts** · **defined names** (`/name[@name=X]`, live in formulas — `=SUM(SalesData)` evaluates) · **freeze panes** · **autoFilter** · **print setup** (orientation/paperSize/fitTo/printArea) | **bulk 2D writes** (anchor `set /Sheet1/A2 values:[[…]]` or exact range; formulas ride along and evaluate; >50k cells into a blank sheet stream via SAX) · **rows & columns** (insert/delete with formula rewriting, height/width, hidden, `col[C]` letter addressing) · **cell notes** (add/read/remove + author) · **find/replace** (text cells; `inFormulas:true` opts into formula text) | **csv bridge** (`create --from orders.csv`: RFC 4180, sniffed delimiter, typed cells — `007` stays text, >50k cells stream; `read --view csv [--sheet] [--range]` exports back) · **data validation** (list dropdowns from values or a source range; wholeNumber/decimal/date/textLength rules with operators; error styles) · **sparklines** (line/column/winLoss, color, markers) · **threaded comments** (real `xl/threadedComments` + replies by `/Sheet1/comment[@id=GUID]`, legacy-note fallback) · **cell hyperlinks** (`https://…` + internal `#Sheet!A1`, tooltips) | **in-place streaming writes** (`stream:true` or any >20 MB file rewrites the workbook through the SAX writer — set deep cells & bulk-write ranges in a 50 MB+ book in seconds; `streamed:true` in the result) · **Excel Tables / ListObjects** (`add type:table` over a range — name, built-in style, totals row with sum/avg/…, structured references `=SUM(Sales[Amount])` evaluate; `/Sheet1/table[@name=X]`) · **outline grouping** (`add type:group` over a `row[a]:row[b]` / `col[a]:col[b]` span, `collapsed`, nested levels) |
-| **.pptx** | create (validator-clean, opens in PowerPoint/Keynote) · add/reorder/remove slides · positioned text shapes (cm/EMU) · query/get with stable shape ids · **SVG render per slide** · templates · validate | shape **fill/font/color/align props** · **master/layout read addressing** · PNG render per slide · live preview | **slide backgrounds** (real `p:bg` solid fill) · **speaker notes** (`/slide[i]/notes` set/add/remove/get) · **images** (PNG/JPEG, stable `shape[@id=N]` paths) | **native charts** (bar/line/pie with literal data caches, `/slide[i]/chart[k]`) · **`dataFrom` cross-doc data** (chart series pulled straight from a workbook) · **slide transitions** (fade/push/wipe + duration) · **preset geometries** (ellipse/triangle/diamond/arrow/roundRect + line connectors, flips) · **z-order** (`move` to front/back/forward/backward) | **editable chart data** (new charts embed a real workbook — right-click → *Edit Data* works in PowerPoint; retrofit old charts with `set {embedData:true}`) · **entrance animations** (appear/fade/flyIn/wipe, directions, click/with/after triggers, `/slide[i]/animation[k]`) · **slide comments** (`add type:comment`, `/slide[i]/comment[@id=N]`) · **find/replace** (slide scope includes speaker notes) | **native tables** (`add type:table` rows×cols, `headerRow`, light/medium/dark looks, cell `mergeRight`/`mergeDown`, `/slide[i]/table[k]/tr[r]/tc[c]` paths, real grid in SVG) · **emphasis & exit animations** (pulse/grow/spin/colorPulse · fadeOut/flyOut/wipeOut, ordered in structure view) · **comment replies** (`add type:reply` — p15 threads PowerPoint 2013+ shows) · **SmartArt read** (`/slide[i]/smartart[k]` nested node trees; editing stays a typed `unsupported_feature`) | **master & layout editing** (`set /master[m]` background + theme accents, `add type:layout` clones a layout, edit master/layout shapes, use a cloned layout via `add type:slide props:{layout:N}`) · **slide sections** (`add type:section` on `/`, `afterSlide` ranges; `read --view outline` groups slides; survive reordering) · **slide size / aspect ratio** (`set / {slideSize:"4:3"}` or explicit `width`/`height`) · **animation timeline reorder** (`move /slide[i]/animation[2] before …`) |
+| Format | M0 (v0.1.0) | + M1 (v0.2.0) | + M2 (v0.3.0) | + M3 (v0.4.0) | + M4 (v0.5.0) | + M5 (v0.6.0) | + M6 (v0.7.0) | + M7 (v0.8.0) |
+|---|---|---|---|---|---|---|---|---|
+| **.docx** | create · paragraphs/headings/styles · tables · text & formatting edits (bold/italic/color/alignment/size) · query/get · outline/text/stats/structure views · HTML render · `{{key}}` templates · validate | **headers/footers** (create + edit, `/header[1]/p[1]`) · PNG render · live preview | **tracked changes** (`--track --author`, `read --view revisions`, accept/reject by `/revision[@id=N]` or scope) · **comments** (add/read/remove, `/comment[@id=N]`) · **custom styles** (`/styles` add, `/style[@id=X]` set/get/remove) · **images** (PNG/JPEG, sandboxed `src`, aspect-keeping) | **lists** (numbered/bulleted, nested levels, restart; `1.`/`•` markers in text view, real `<ol>/<ul>` in HTML) · **hyperlinks** (external url + bookmark anchors) · **bookmarks** · **footnotes** · **page setup** (`/section[1]`: pageSize/orientation/margins) · **formatting-revision accept/reject** (w:rPrChange/w:pPrChange) · **threaded comment replies** (`add type:reply` on `/comment[@id=N]`) | **table of contents** (`add type:toc`, levels/title/position; `/toc[1]` get with entryCount) · **text watermarks** (`add type:watermark`, every header, auto-creates one) · **endnotes** (`/endnote[@id=N]`) · **section breaks** (`add type:sectionBreak`, per-section page setup — portrait & landscape in one file) · **find/replace** (split-run safe; `--track` makes every hit a w:del+w:ins pair) | **markdown bridge** (`create --from notes.md` imports GFM — headings/lists/tables/links/code; `read --view markdown` exports it back, structure round-trips) · **deep tables** (`mergeRight`/`mergeDown`, borders all/outer/none, shading, `headerRow` repeat, `columnWidths`, valign; real colspan/rowspan in HTML) · **fields** (PAGE/NUMPAGES/DATE/TITLE + `leadingText` — 'Page X of Y' footers) · **firstPage/even header+footer variants** (`/header[firstPage]`, auto `w:titlePg`/`w:evenAndOddHeaders`) | **equations** (`add type:equation` — LaTeX → real Office Math; inline `/body/p[i]/omath[j]` or display block; `$…$`/`$$…$$` in text view; unknown commands degrade with an `equation_partial` warning; original LaTeX stored for faithful read-back) · **right-to-left / bidi** (`rtl` on paragraph `w:bidi` / run `w:rtl` / table `w:bidiVisual`) · **multi-column sections** (`columns`/`columnGap` on `/section[1]` + `add type:columnBreak`) | **audit** (`audit report.docx [--fix]` — no-alt-text, heading skips, table headers, low contrast, doc title, empty/broken headings, broken links, orphan bookmarks; safe autofixes for alt/header/title/bookmark) · **document properties** (`set /properties` core + typed custom; `read --view properties`) · **content controls** (`add type:contentControl` text/dropdown/date/checkbox; `/sdt[@tag=X]`; `read --view fields`) · **image alt text** (`set {alt}`) |
+| **.xlsx** | create · typed cell writes (number/bool/string/date) · **formula evaluation with cached values** + honest warnings · number formats · merge · tables/sheets · range reads · query by value/formula · HTML render · templates · validate | **charts** (bar/line/pie, `add type:chart`) · PNG render · live preview | **pivot tables** (rows/columns/filters + sum/average/count/min/max values, `pivot[@name=X]`) · **conditional formatting** (cellIs/colorScale/dataBar/containsText) · **images** (anchored, PNG/JPEG) | **streaming reads** for huge workbooks (SAX over raw XML — `read --view stats/text` and cell/range `get` without loading the DOM; a 41 MB / 330k-row book answers stats in ~2 s) · **scatter & area charts** · **defined names** (`/name[@name=X]`, live in formulas — `=SUM(SalesData)` evaluates) · **freeze panes** · **autoFilter** · **print setup** (orientation/paperSize/fitTo/printArea) | **bulk 2D writes** (anchor `set /Sheet1/A2 values:[[…]]` or exact range; formulas ride along and evaluate; >50k cells into a blank sheet stream via SAX) · **rows & columns** (insert/delete with formula rewriting, height/width, hidden, `col[C]` letter addressing) · **cell notes** (add/read/remove + author) · **find/replace** (text cells; `inFormulas:true` opts into formula text) | **csv bridge** (`create --from orders.csv`: RFC 4180, sniffed delimiter, typed cells — `007` stays text, >50k cells stream; `read --view csv [--sheet] [--range]` exports back) · **data validation** (list dropdowns from values or a source range; wholeNumber/decimal/date/textLength rules with operators; error styles) · **sparklines** (line/column/winLoss, color, markers) · **threaded comments** (real `xl/threadedComments` + replies by `/Sheet1/comment[@id=GUID]`, legacy-note fallback) · **cell hyperlinks** (`https://…` + internal `#Sheet!A1`, tooltips) | **in-place streaming writes** (`stream:true` or any >20 MB file rewrites the workbook through the SAX writer — set deep cells & bulk-write ranges in a 50 MB+ book in seconds; `streamed:true` in the result) · **Excel Tables / ListObjects** (`add type:table` over a range — name, built-in style, totals row with sum/avg/…, structured references `=SUM(Sales[Amount])` evaluate; `/Sheet1/table[@name=X]`) · **outline grouping** (`add type:group` over a `row[a]:row[b]` / `col[a]:col[b]` span, `collapsed`, nested levels) | **audit** (`audit metrics.xlsx [--fix]` — formula errors `#DIV/0!`/`#REF!`, merged data cells, image alt text, doc title; safe autofixes for alt/title) · **named cell styles** (`add type:cellStyle` numberFormat/bold/fill/color/border once, `set {cellStyle:"X"}` to a range, `read --view styles`, `/style[@name=X]`) · **document properties** (`set /properties`; `read --view properties`) · **image alt text** |
+| **.pptx** | create (validator-clean, opens in PowerPoint/Keynote) · add/reorder/remove slides · positioned text shapes (cm/EMU) · query/get with stable shape ids · **SVG render per slide** · templates · validate | shape **fill/font/color/align props** · **master/layout read addressing** · PNG render per slide · live preview | **slide backgrounds** (real `p:bg` solid fill) · **speaker notes** (`/slide[i]/notes` set/add/remove/get) · **images** (PNG/JPEG, stable `shape[@id=N]` paths) | **native charts** (bar/line/pie with literal data caches, `/slide[i]/chart[k]`) · **`dataFrom` cross-doc data** (chart series pulled straight from a workbook) · **slide transitions** (fade/push/wipe + duration) · **preset geometries** (ellipse/triangle/diamond/arrow/roundRect + line connectors, flips) · **z-order** (`move` to front/back/forward/backward) | **editable chart data** (new charts embed a real workbook — right-click → *Edit Data* works in PowerPoint; retrofit old charts with `set {embedData:true}`) · **entrance animations** (appear/fade/flyIn/wipe, directions, click/with/after triggers, `/slide[i]/animation[k]`) · **slide comments** (`add type:comment`, `/slide[i]/comment[@id=N]`) · **find/replace** (slide scope includes speaker notes) | **native tables** (`add type:table` rows×cols, `headerRow`, light/medium/dark looks, cell `mergeRight`/`mergeDown`, `/slide[i]/table[k]/tr[r]/tc[c]` paths, real grid in SVG) · **emphasis & exit animations** (pulse/grow/spin/colorPulse · fadeOut/flyOut/wipeOut, ordered in structure view) · **comment replies** (`add type:reply` — p15 threads PowerPoint 2013+ shows) · **SmartArt read** (`/slide[i]/smartart[k]` nested node trees; editing stays a typed `unsupported_feature`) | **master & layout editing** (`set /master[m]` background + theme accents, `add type:layout` clones a layout, edit master/layout shapes, use a cloned layout via `add type:slide props:{layout:N}`) · **slide sections** (`add type:section` on `/`, `afterSlide` ranges; `read --view outline` groups slides; survive reordering) · **slide size / aspect ratio** (`set / {slideSize:"4:3"}` or explicit `width`/`height`) · **animation timeline reorder** (`move /slide[i]/animation[2] before …`) | **audit** (`audit deck.pptx [--fix]` — picture alt text, slide titles, off-canvas shapes, tiny fonts (<12pt warn / <8pt error), reading order; safe autofixes for alt/title) · **explicit alt text / title** (`set {altText}`/`{altTitle}` on a shape; SVG renders a `<title>`) · **document properties** (`set /properties`) |
 
 Cross-format in M3 (功能第一 — features first):
 
@@ -382,7 +430,7 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
 ```
                  ┌─────────────────────────────────────────────┐
    agent/human → │  src/AIOffice.Cli   (aioffice, 15 verbs)    │
-   MCP client  → │  src/AIOffice.Mcp   (stdio, 14 tools, 1:1)  │
+   MCP client  → │  src/AIOffice.Mcp   (stdio, 15 tools, 1:1)  │
                  ├─────────────────────────────────────────────┤
                  │  src/AIOffice.Render  (png/pdf via browser) │
                  │  src/AIOffice.Preview  (live click-select)  │
@@ -406,7 +454,7 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
 
 Born from studying an excellent office CLI that ships **zero automated tests** — AIOffice takes the opposite stance:
 
-- **1253 tests** across 7 projects (Core 124 · Word 385 · Excel 299 · Pptx 327 · MCP 63 · Preview 24 · Render 31), green on every commit.
+- **1366 tests** across 7 projects (Core 124 · Word 424 · Excel 335 · Pptx 365 · MCP 63 · Preview 24 · Render 31), green on every commit.
 - **Round-trip law**: open → save with no edits must leave every zip part byte-identical; documented exceptions are asserted exactly.
 - **Independent oracle**: OpenXmlValidator must report 0 errors after every mutating test — the tool never grades its own homework.
 - **CI matrix**: macOS 14 + Windows, builds with warnings-as-errors, runs golden scripts, publishes and smokes the single-file binary.
@@ -422,7 +470,8 @@ Born from studying an excellent office CLI that ships **zero automated tests** �
 - **M4 (shipped, v0.5.0)** — one **find/replace** contract for all three formats (split-run safe, regex with timeout, document-wide `"/"` scope, CLI `--find/--replace` sugar, tracked revision pairs on docx) · docx **TOC / watermarks / endnotes / section breaks** · xlsx **bulk 2D writes** (SAX streaming into blank sheets) / **row & column ops** / **cell notes** · pptx **editable chart data** (embedded workbooks, Edit-Data in PowerPoint, `embedData:true` retrofit) / **entrance animations** / **slide comments** · tag-driven **release automation**.
 - **M5 (shipped, v0.6.0)** — the **markdown/csv bridge**: `create --from` (`.md` → `.docx` via Markdig, `.csv` → `.xlsx` typed import) + `read --view markdown|csv` exports that round-trip · docx **deep tables** (merges/borders/shading/columnWidths/headerRow) / **fields** (PAGE/NUMPAGES/DATE/TITLE) / **firstPage & even header/footer variants** · xlsx **data validation** (dropdowns + rules) / **sparklines** / **threaded comments + replies** / **cell hyperlinks** · pptx **native tables** (merges + looks) / **emphasis & exit animations** / **comment replies** / **SmartArt read** · `IFormatHandler.CreateFrom` import hook (additive, default `unsupported_feature`).
 - **M6 (shipped, v0.7.0)** — the **deep-water pass**: docx **equations** (a hand-rolled LaTeX → Office Math converter, inline/display, matrices, partial-degrade warnings, LaTeX stored for faithful read-back) / **right-to-left & bidi** (paragraph/run/table) / **multi-column sections** (+ column breaks) · xlsx **in-place streaming writes** (rewrite a 50 MB+ workbook through the SAX writer) / **Excel Tables** (ListObjects + totals + structured references) / **outline grouping** (row/col spans) · pptx **master & layout editing** (backgrounds, theme accents, cloned layouts) / **slide sections** / **slide size & aspect ratio** / **animation timeline reorder** · new addressing forms `/` (presentation root), `/body/p[i]/omath[j]`, `/section[i]`, `row[a]:row[b]` spans, editable `/master[1]/layout[i]`.
-- **M7 (seeds)** — pptx/xlsx equations (OMML in slides and cells) · plugin mechanism (external format handlers) · modern xlsx comment polish · animation presets++ (full emphasis/exit set, effect chains, motion paths) · OLE objects · accessibility / alt-text audit.
+- **M7 (shipped, v0.8.0)** — **audit before you ship**: a shared `audit` verb + `office_audit` MCP tool (the 15th tool) across all three formats — accessibility + quality lint where findings are *data* (`ok:true`, exit 0), with safe-only `--fix` (placeholder alt text, table header rows, doc/slide titles, orphan bookmarks) reporting `{fixed, remaining}` · docx **document properties** (core + typed custom) / **content controls** (text/dropdown/date/checkbox, `read --view fields`) / image alt text · xlsx **named cell styles** (`add type:cellStyle`, `read --view styles`) / document properties / formula-error + merged-data-cell + alt-text audit · pptx alt-text/title/reading-order audit + explicit `altText`/`altTitle` / document properties · new addressing forms `/properties`, `/sdt[@tag=X]`, `/style[@name=X]`; `office_read` view enum gains `properties`/`fields`/`styles`.
+- **M8 (seeds)** — pptx/xlsx equations (OMML in slides and cells, reusing the `AIOffice.Word.Equations` converter) · semantic diff verb · cross-format convert (docx ↔ pptx) · OLE objects · plugin mechanism (external format handlers) · animation presets++ (full emphasis/exit set, effect chains, motion paths) · modern xlsx comment polish · xlsx/pptx RTL.
 
 ## Design statement
 

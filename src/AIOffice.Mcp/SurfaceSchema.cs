@@ -5,7 +5,7 @@ namespace AIOffice.Mcp;
 /// <summary>
 /// The machine-readable description of the whole aioffice command surface —
 /// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
-/// 14 verbs, mirroring the 14 M1 MCP tools (the <c>preview</c> verb carries
+/// 15 verbs, mirroring the 15 MCP tools (the <c>preview</c> verb carries
 /// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
 /// verb itself.
 /// </summary>
@@ -46,9 +46,9 @@ public static class SurfaceSchema
             [("aioffice create out/q4.pptx --title 'Q4 Review'", "kind pptx inferred from extension"),
              ("aioffice create report.docx --from notes.md", "markdown bridge: headings/lists/tables/links/code become real docx")]),
 
-        Verb("read", "Read a document as outline, plain text, stats, full structure tree, markdown (docx) or csv (xlsx).", "office_read",
+        Verb("read", "Read a document as outline, plain text, stats, structure, properties, markdown (docx), csv (xlsx) and more.", "office_read",
             [("file", "document path"),
-             ("--view", "outline|text|stats|structure (default outline); docx adds revisions|comments|styles|markdown; xlsx adds csv"),
+             ("--view", "outline|text|stats|structure|properties (default outline; properties = core+custom doc props, all formats); docx adds revisions|comments|styles|fields|markdown (fields = content controls); xlsx adds csv|styles (named cell styles)"),
              ("--range", "scope 'a..b' (1-based): paragraphs/slides/rows; csv view also takes A1:C10"),
              ("--sheet", "csv view: sheet name (default first)"),
              ("--max-bytes", "cap payload; truncation flagged in warnings")],
@@ -96,6 +96,16 @@ public static class SurfaceSchema
             [ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
             [("aioffice validate data.xlsx", "ok:true even when the doc has issues — read data.valid")]),
 
+        Verb("audit", "Accessibility + quality lint; findings are data (ok:true, exit 0). --fix applies safe autofixes, then re-audits.", "office_audit",
+            [("file", "document path (.docx/.xlsx/.pptx)"),
+             ("--category", "accessibility|quality|all (default all)"),
+             ("--severity", "error|warning|info — minimum level to report (default info)"),
+             ("--fix", "apply only safe autofixes (alt text, table header, doc/slide title, orphan bookmark); result adds {fixed, remaining}. Codes + autofix table: aioffice help audit")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.UnsupportedFeature],
+            [("aioffice audit report.docx", "every finding with code + path + summary{errors,warnings,infos}"),
+             ("aioffice audit report.docx --fix", "fixes alt/header/title, reports {fixed:N, remaining:[…]}"),
+             ("aioffice audit metrics.xlsx --category accessibility --severity warning", "only a11y findings at warning+")]),
+
         Verb("template", "Fill {{key}} placeholders in text runs from a JSON merge map.", "office_template",
             [("file", "template document containing {{key}} placeholders"),
              ("--data", "JSON object of string values, or @data.json"),
@@ -117,7 +127,7 @@ public static class SurfaceSchema
             [("aioffice doctor", "run when commands start failing oddly")]),
 
         Verb("schema", "Machine-readable JSON of this whole command surface.", "office_schema",
-            [("verb", "optional filter: one of the 14 verb names")],
+            [("verb", "optional filter: one of the 15 verb names")],
             [ErrorCodes.InvalidArgs],
             [("aioffice schema edit", "just the edit verb")]),
 
@@ -135,13 +145,13 @@ public static class SurfaceSchema
             [("aioffice preview open report.docx", "blocks; click elements in the browser, then read them"),
              ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit")]),
 
-        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (14 tools).", null,
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (15 tools).", null,
             [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
             [ErrorCodes.InternalError],
             [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),
     ];
 
-    /// <summary>The 14 verb names, in surface order.</summary>
+    /// <summary>The 15 verb names, in surface order.</summary>
     public static IReadOnlyList<string> VerbNames { get; } = [.. Verbs.Select(v => v.Name)];
 
     /// <summary>

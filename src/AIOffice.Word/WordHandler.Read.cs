@@ -9,7 +9,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] ReadViews =
-        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown"];
+        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown", "properties", "fields"];
 
     public Envelope Read(CommandContext ctx)
     {
@@ -20,7 +20,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use --view text, outline, stats, structure, revisions, comments, styles or markdown.",
+                "Use --view text, outline, stats, structure, revisions, comments, styles, markdown, properties or fields.",
                 candidates: ReadViews);
         }
 
@@ -40,6 +40,8 @@ public sealed partial class WordHandler
                 "comments" => CommentsView(doc),
                 "styles" => StylesView(doc),
                 "markdown" => MarkdownView(doc, body),
+                "properties" => new { view = "properties", properties = PropertiesShape(doc) },
+                "fields" => FieldsView(doc),
                 _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 

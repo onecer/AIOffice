@@ -19,7 +19,7 @@ namespace AIOffice.Pptx;
 /// </summary>
 public sealed partial class PptxHandler : IFormatHandler
 {
-    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure", "comments"];
+    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure", "comments", "properties"];
     private static readonly IReadOnlyList<string> RenderTargets = ["svg", "html", "text"];
 
     [GeneratedRegex(@"^([0-9]+)(?:\.\.([0-9]+))?$")]
@@ -65,6 +65,13 @@ public sealed partial class PptxHandler : IFormatHandler
 
         using var stream = PptxDoc.LoadStream(file);
         using var doc = PptxDoc.Open(stream, editable: false, file);
+
+        // Document properties are a package-level node, not slide content.
+        if (view == "properties")
+        {
+            return PptxProperties.Shape(doc);
+        }
+
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
         var slides = SlidesInRange(presentation, J.Str(ctx.Args, "range"));
 
@@ -91,6 +98,13 @@ public sealed partial class PptxHandler : IFormatHandler
 
         using var stream = PptxDoc.LoadStream(file);
         using var doc = PptxDoc.Open(stream, editable: false, file);
+
+        // Document properties are a package-level node, before the presentation part.
+        if (address.IsProperties)
+        {
+            return PptxProperties.Shape(doc);
+        }
+
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
 
         if (address.IsPresentation)
@@ -184,7 +198,7 @@ public sealed partial class PptxHandler : IFormatHandler
             var presentation = PptxDoc.RequirePresentationPart(doc, file);
             foreach (var op in ops)
             {
-                var outcome = PptxEditor.Apply(presentation, op, ctx.Workspace);
+                var outcome = PptxEditor.Apply(doc, presentation, op, ctx.Workspace);
                 if (outcome.Replacements is { } replacements)
                 {
                     results.Add(new

@@ -15,6 +15,9 @@ internal enum PptxRootKind
 
     /// <summary>A named slide section ("/section[i]").</summary>
     Section,
+
+    /// <summary>The package document properties ("/properties"): core + custom metadata.</summary>
+    Properties,
 }
 
 /// <summary>
@@ -45,7 +48,8 @@ internal sealed partial record PptxAddress
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
         "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
         "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
-        "/section[1] (a slide section) or / (the presentation: slide size and sections); " +
+        "/section[1] (a slide section), /properties (document core + custom metadata) " +
+        "or / (the presentation: slide size and sections); " +
         "indices are 1-based, @id is the stable id from query/get.";
 
     [GeneratedRegex(@"^slide\[([0-9]+)\]$")]
@@ -168,6 +172,9 @@ internal sealed partial record PptxAddress
     /// <summary>True when the path addresses a slide section ("/section[i]").</summary>
     public bool IsSection => Root == PptxRootKind.Section;
 
+    /// <summary>True when the path is the document-properties root ("/properties").</summary>
+    public bool IsProperties => Root == PptxRootKind.Properties;
+
     /// <summary>Parses an address or throws a typed <c>invalid_path</c>/<c>unsupported_feature</c>.</summary>
     public static PptxAddress Parse(string raw)
     {
@@ -175,6 +182,12 @@ internal sealed partial record PptxAddress
         if (raw == "/")
         {
             return new PptxAddress { Raw = raw, Root = PptxRootKind.Presentation };
+        }
+
+        // "/properties" is the package metadata root (core + custom document properties).
+        if (string.Equals(raw, "/properties", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PptxAddress { Raw = raw, Root = PptxRootKind.Properties };
         }
 
         if (string.IsNullOrWhiteSpace(raw) || raw[0] != '/' || raw.Length < 2 || raw[^1] == '/')

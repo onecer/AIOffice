@@ -167,6 +167,29 @@ public sealed class FileVerbs
         return ResolveHandler(file, kindOverride: null).Validate(ctx);
     }
 
+    public Envelope Audit(ParsedArgs args)
+    {
+        var file = RequireFile(args, mustExist: true);
+        var handler = ResolveHandler(file, kindOverride: null);
+        if (handler is not IAuditor auditor)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"The {handler.Kind.ToString().ToLowerInvariant()} handler does not implement auditing in this build.",
+                "Run 'aioffice doctor' for handler status; the docx/xlsx/pptx handlers all audit.");
+        }
+
+        var opts = ParseAuditOptions(args);
+        var ctx = Context(file, new JsonObject
+        {
+            ["category"] = opts.Category,
+            ["minSeverity"] = opts.MinSeverity,
+            ["fix"] = opts.Fix,
+        });
+
+        return AIOffice.Mcp.AuditVerb.Run(auditor, ctx, opts);
+    }
+
     public Envelope Template(ParsedArgs args)
     {
         var file = RequireFile(args, mustExist: true);
@@ -196,6 +219,37 @@ public sealed class FileVerbs
             ["output"] = output is null ? null : _workspace.Resolve(output),
         });
         return ResolveHandler(file, kindOverride: null).Template(ctx);
+    }
+
+    /// <summary>Parses --category/--severity/--fix into an <see cref="AuditOptions"/>, validating the enums.</summary>
+    private static AuditOptions ParseAuditOptions(ParsedArgs args)
+    {
+        var category = args.GetOption("category") ?? "all";
+        if (!AuditOptions.Categories.Contains(category, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown --category: '{category}'.",
+                "Use one of: accessibility, quality, all (default).",
+                candidates: AuditOptions.Categories);
+        }
+
+        var severity = args.GetOption("severity") ?? "info";
+        if (!AuditOptions.Severities.Contains(severity, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown --severity: '{severity}'.",
+                "Use one of: error, warning, info (the minimum level to report; default info).",
+                candidates: AuditOptions.Severities);
+        }
+
+        return new AuditOptions
+        {
+            Category = category,
+            MinSeverity = severity,
+            Fix = args.HasFlag("fix"),
+        };
     }
 
     // ----- shared plumbing -------------------------------------------------

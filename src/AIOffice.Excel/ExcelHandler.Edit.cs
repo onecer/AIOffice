@@ -12,9 +12,9 @@ public sealed partial class ExcelHandler
 {
     private static readonly IReadOnlyList<string> SetProps =
     [
-        "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "merge", "name",
+        "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "color", "merge", "name",
         "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
-        "height", "width", "hidden", "hyperlink", "hyperlinkTooltip",
+        "height", "width", "hidden", "hyperlink", "hyperlinkTooltip", "cellStyle",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -130,6 +130,14 @@ public sealed partial class ExcelHandler
                 ExcelComments.WriteAfterSave(file, comments);
             }
 
+            if (post.MaterializeStyles)
+            {
+                // Surface the named cell styles in Excel's gallery (real
+                // cellStyle entries); the registry property carries the truth.
+                using var reopened = OpenWorkbook(file);
+                ExcelCellStyles.MaterializeAfterSave(file, ExcelCellStyles.Load(reopened).Values.ToList());
+            }
+
             // Correct ClosedXML's data-bar GUID/orphan defects on the saved
             // bytes (no-op scan when there is nothing to fix).
             ExcelConditionalFormats.FixUpAfterSave(file);
@@ -223,6 +231,13 @@ public sealed partial class ExcelHandler
     {
         /// <summary>Set when a pivot was removed (its parts outlive ClosedXML's save).</summary>
         public bool SyncPivotParts { get; set; }
+
+        /// <summary>
+        /// Set when a named cell style was added/removed: the registry lives in a
+        /// custom property ClosedXML persists, but Excel's gallery needs real
+        /// <c>cellStyle</c> entries authored raw after the save.
+        /// </summary>
+        public bool MaterializeStyles { get; set; }
 
         /// <summary>
         /// Pictures queued for raw removal, in batch order. The ClosedXML model
@@ -333,6 +348,55 @@ public sealed partial class ExcelHandler
                 ErrorCodes.UnsupportedFeature,
                 $"ops[{index}]: xlsx has no document-root edit target ('/').",
                 "Address a sheet (/Sheet1), cell (/Sheet1/A1) or range; document-wide find/replace uses 'replace' with path '/'.");
+        }
+
+        // Workbook-level edit targets (document properties, named cell styles)
+        // use paths the shared grammar cannot resolve to a sheet, so they are
+        // routed before the cell/range dispatch (precedent: defined names).
+        if (op.Path == "/properties")
+        {
+            if (op.Op != "set")
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: /properties only supports 'set'.",
+                    "Use {op:set, path:/properties, props:{title:\"…\", custom:{…}}}.");
+            }
+
+            var appliedProps = ExcelProperties.ApplySet(workbook, op, index);
+            details.Add(new { op = "set", path = "/properties", applied = appliedProps });
+            return;
+        }
+
+        if (op.Path == "/styles")
+        {
+            if (op.Op != "add" || !string.Equals(op.Type, "cellStyle", StringComparison.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: /styles only supports adding a cellStyle.",
+                    "Use {op:add, type:cellStyle, path:/styles, props:{name:\"Currency-Red\", numberFormat:\"$#,##0.00\"}}.");
+            }
+
+            details.Add(ExcelCellStyles.Add(workbook, op, index));
+            post.MaterializeStyles = true;
+            return;
+        }
+
+        if (ExcelCellStyles.TryParsePath(op.Path, out var styleName))
+        {
+            if (op.Op != "remove")
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: /style[@name=…] only supports 'remove'.",
+                    "Define styles with {op:add, type:cellStyle, path:/styles, ...} and apply them with " +
+                    "{op:set, path:/Sheet1/B2, props:{cellStyle:\"" + styleName + "\"}}.");
+            }
+
+            details.Add(ExcelCellStyles.Remove(workbook, styleName));
+            post.MaterializeStyles = true;
+            return;
         }
 
         switch (op.Op)
@@ -449,6 +513,21 @@ public sealed partial class ExcelHandler
         {
             StyleOf(target).Fill.BackgroundColor = ParseColor(fillNode.GetValue<string>());
             applied.Add("fill");
+        }
+
+        if (props.TryGetPropertyValue("color", out var colorNode) && colorNode is not null)
+        {
+            StyleOf(target).Font.FontColor = ParseColor(colorNode.GetValue<string>());
+            applied.Add("color");
+        }
+
+        if (props.TryGetPropertyValue("cellStyle", out var cellStyleNode) && cellStyleNode is not null)
+        {
+            // Apply the named style's concrete formatting LAST so explicit props
+            // in the same op act as the base and the style wins (the common
+            // intent: "make this look like Currency-Red").
+            ExcelCellStyles.Apply(workbook, StyleOf(target), cellStyleNode.GetValue<string>(), index);
+            applied.Add("cellStyle");
         }
 
         if (props.TryGetPropertyValue("merge", out var mergeNode) && mergeNode is not null)

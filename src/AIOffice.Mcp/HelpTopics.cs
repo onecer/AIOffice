@@ -23,6 +23,7 @@ public static class HelpTopics
                 - edit-ops        op kinds, position forms, atomicity, expect_rev
                 - envelope        the {ok,data,error,meta} result shape
                 - errors          all error codes and how to recover
+                - audit           accessibility + quality lint codes + --fix semantics (M7)
                 - bridges         markdown↔docx and csv↔xlsx import/export (M5)
                 - equations       docx LaTeX → Office Math: the supported subset (M6)
                 - rtl             right-to-left paragraph/run/table (M6)
@@ -62,6 +63,24 @@ public static class HelpTopics
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
+
+            ["audit"] = (
+                """
+                ## audit (M7) — office_audit {file, category?, severity?, fix?}
+                Findings are DATA, not errors: ok:true / exit 0 even with error-severity findings (like office_validate).
+                category: accessibility | quality | all (default all). severity: error|warning|info = the MINIMUM to report (default info).
+                Result: {findings:[{id:"code#path", severity, category, code, path?, message, suggestion, autofixable}], summary:{errors,warnings,infos}}.
+                fix:true applies only the SAFE autofixes, then re-audits — result adds {fixed:N, remaining:[ids]}. Never destructive.
+                accessibility codes: a11y_no_alt_text(err,fix) a11y_no_table_header(err,fix) a11y_no_doc_title(warn,fix)
+                  a11y_no_slide_title(warn,fix) a11y_heading_skip(warn) a11y_low_contrast(warn) a11y_tiny_font(warn)
+                  a11y_merged_data_cells(warn) a11y_reading_order(info).
+                quality codes: quality_broken_ref(err) quality_formula_error(err) quality_broken_link(err)
+                  quality_empty_heading(warn) quality_off_canvas(warn) quality_empty_placeholder(warn)
+                  quality_orphan_bookmark(info,fix) quality_duplicate_id(warn).
+                Autofixes: placeholder alt text "(describe this image)", mark a table header row, set a doc/slide title
+                  (first heading > file name > placeholder), drop an orphan bookmark. Everything else is report-only.
+                """,
+                ["errors", "edit-ops"]),
 
             ["bridges"] = (
                 """

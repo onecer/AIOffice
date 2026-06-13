@@ -54,12 +54,12 @@ public static class CommandSurface
             "office_create"),
 
         new("read",
-            "Read a document as outline, plain text, stats or structure (docx adds revisions/comments/styles/markdown; xlsx adds csv).",
-            "aioffice read <file> [--view outline|text|stats|structure|revisions|comments|styles|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]",
+            "Read a document as outline, plain text, stats, structure or properties (docx adds revisions/comments/styles/markdown/fields; xlsx adds csv/styles).",
+            "aioffice read <file> [--view outline|text|stats|structure|properties|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]",
             [new("file", true, "Document to read.")],
             [
-                new("view", "outline|text|stats|structure|revisions|comments|styles|markdown|csv",
-                    "Projection to return (default: outline). revisions/comments/styles/markdown are docx views; csv is xlsx-only (one sheet, RFC 4180)."),
+                new("view", "outline|text|stats|structure|properties|revisions|comments|styles|fields|markdown|csv",
+                    "Projection to return (default: outline). properties = core + custom document properties (docx/xlsx/pptx). revisions/comments/markdown/fields are docx views (fields = content controls); styles is docx (style defs) or xlsx (named cell styles); csv is xlsx-only (one sheet, RFC 4180)."),
                 new("range", "a..b", "Limit to an element range, e.g. paragraphs 3..10 or slides 1..4; the csv view also takes a cell range like A1:C10."),
                 new("sheet", "<name>", "csv view: which sheet to emit (default: the first sheet)."),
                 new("max-bytes", "N", "Truncate the response payload to at most N bytes."),
@@ -140,6 +140,17 @@ public static class CommandSurface
             ],
             "office_template"),
 
+        new("audit",
+            "Audit a document for accessibility + quality findings (findings are data, exit 0); --fix applies the safe autofixes.",
+            "aioffice audit <file> [--category accessibility|quality|all] [--severity error|warning|info] [--fix]",
+            [new("file", true, "Document to audit (.docx/.xlsx/.pptx).")],
+            [
+                new("category", "accessibility|quality|all", "Which checks to run (default: all). accessibility = alt text, headings, table headers, contrast, titles, reading order, tiny fonts, merged data cells; quality = broken refs/links, formula errors, empty/duplicate ids, off-canvas, empty placeholders."),
+                new("severity", "error|warning|info", "Minimum severity to report (default: info reports everything; warning hides info; error hides info+warning)."),
+                new("fix", null, "Apply only the safe, non-destructive autofixes (placeholder alt text, mark a table header row, set a doc/slide title, drop an orphan bookmark). Reports {fixed:N, remaining:[…]}. See 'aioffice help audit' for the codes and which are autofixable."),
+            ],
+            "office_audit"),
+
         new("snapshot",
             "List or restore the automatic pre-edit snapshot ring (keeps the last 20 per file).",
             "aioffice snapshot <list|restore> <file> [n]",
@@ -183,7 +194,7 @@ public static class CommandSurface
             "preview_open"),
 
         new("mcp",
-            "Run the stdio MCP server exposing the same 14 capabilities as the CLI.",
+            "Run the stdio MCP server exposing the same 15 tools as the CLI.",
             "aioffice mcp",
             [],
             [],

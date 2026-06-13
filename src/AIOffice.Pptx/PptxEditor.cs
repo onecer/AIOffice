@@ -21,7 +21,7 @@ internal static class PptxEditor
         ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
-        ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title"];
+        ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
     private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
@@ -47,12 +47,18 @@ internal static class PptxEditor
     private const int LineWidthEmu = 19_050;
 
     /// <summary>Applies the op and returns the canonical path of the affected node (plus replace counters).</summary>
-    public static PptxOpOutcome Apply(PresentationPart presentation, EditOp op, Workspace workspace)
+    public static PptxOpOutcome Apply(PresentationDocument document, PresentationPart presentation, EditOp op, Workspace workspace)
     {
         var parsed = PptxAddress.Parse(op.Path);
         if (parsed.IsSmartArt)
         {
             throw PptxSmartArt.EditUnsupported(op.Path);
+        }
+
+        // /properties is a package-level node: core + custom document metadata.
+        if (parsed.IsProperties)
+        {
+            return new PptxOpOutcome(ApplyProperties(document, op));
         }
 
         switch (op.Op)
@@ -335,6 +341,31 @@ internal static class PptxEditor
         }
 
         return layouts[index - 1].Part;
+    }
+
+    /// <summary>Routes a /properties op: only <c>set</c> is meaningful (write core/custom metadata).</summary>
+    private static string ApplyProperties(PresentationDocument document, EditOp op)
+    {
+        if (op.Op != "set")
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Op}' is not supported on /properties.",
+                "Use set to write metadata: {\"op\":\"set\",\"path\":\"/properties\"," +
+                "\"props\":{\"title\":\"Q3 Deck\",\"custom\":{\"Reviewed\":true}}}. " +
+                "Clear a value by setting it to \"\" (core) or null (custom).");
+        }
+
+        if (op.Props is null || op.Props.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "set /properties has no props.",
+                "Pass core props and/or a custom object, e.g. " +
+                "{\"op\":\"set\",\"path\":\"/properties\",\"props\":{\"author\":\"Dana\",\"custom\":{\"Project\":\"Acme\"}}}.");
+        }
+
+        return PptxProperties.Set(document, op.Props);
     }
 
     private static string ApplySet(PresentationPart presentation, EditOp op)
@@ -709,12 +740,14 @@ internal static class PptxEditor
         }
 
         var token = position?.Trim().ToLowerInvariant();
-        if (token is null || !ZOrderPositions.Contains(token, StringComparer.Ordinal))
+        var readingOrderTarget = ParseReadingOrder(position);
+        if (readingOrderTarget is null && (token is null || !ZOrderPositions.Contains(token, StringComparer.Ordinal)))
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown z-order position '{position ?? "(none)"}'.",
-                "Use front (paint last/topmost), back (paint first/bottom), forward or backward.",
+                "Use front (paint last/topmost), back (paint first/bottom), forward, backward, " +
+                "or \"readingOrder N\" to set the 1-based narration/tab order.",
                 candidates: ZOrderPositions);
         }
 
@@ -729,6 +762,38 @@ internal static class PptxEditor
         var siblings = PptxDoc.Shapes(tree).Select(s => s.Element).ToList();
         var element = view.Element;
         var index = siblings.FindIndex(s => ReferenceEquals(s, element));
+
+        // "readingOrder N" places the shape at absolute 1-based document order N.
+        // Document order IS the narration/tab order and the z-order (paint order),
+        // so this is the single lever the auditor's reading-order fix targets.
+        if (readingOrderTarget is { } target)
+        {
+            if (target < 1 || target > siblings.Count)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"readingOrder {target} is out of range 1..{siblings.Count} on slide {address.SlideIndex}."),
+                    "Reading order is 1-based over the slide's top-level shapes; " +
+                    "run 'aioffice read <file> --view structure' to see the current order.");
+            }
+
+            if (target - 1 != index)
+            {
+                element.Remove();
+                // Re-snapshot the siblings without the moved element, then splice at target-1.
+                var remaining = siblings.Where(s => !ReferenceEquals(s, element)).ToList();
+                if (target - 1 >= remaining.Count)
+                {
+                    tree.InsertAfter(element, remaining[^1]);
+                }
+                else
+                {
+                    tree.InsertBefore(element, remaining[target - 1]);
+                }
+            }
+
+            return view.CanonicalPath(address.SlideIndex);
+        }
 
         switch (token)
         {
@@ -753,6 +818,33 @@ internal static class PptxEditor
         }
 
         return view.CanonicalPath(address.SlideIndex);
+    }
+
+    /// <summary>Parses a "readingOrder N" position into its 1-based target, or null when not that form.</summary>
+    private static int? ParseReadingOrder(string? position)
+    {
+        if (position is null)
+        {
+            return null;
+        }
+
+        var text = position.Trim();
+        if (!text.StartsWith("readingOrder", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var rest = text["readingOrder".Length..].Trim();
+        if (int.TryParse(rest, NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"readingOrder needs a 1-based index, got '{position}'.",
+            "Use \"readingOrder 1\" (narrate first) … \"readingOrder N\"; " +
+            "run 'aioffice read <file> --view structure' to see the current order.");
     }
 
     /// <summary>Move targets: a 1-based final index ("3"), or "before:/slide[k]" / "after:/slide[k]".</summary>
@@ -1087,12 +1179,18 @@ internal static class PptxEditor
                     var nonVisual = PptxDoc.NonVisualProps(view.Element) ?? throw CorruptPresentation("shape has no p:cNvPr");
                     nonVisual.Name = value is null ? string.Empty : J.ScalarText(value);
                     break;
+                case "altText":
+                    SetAltText(view, value);
+                    break;
+                case "altTitle":
+                    SetAltTitle(view, value);
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
                         $"Prop '{key}' does not apply to a '{view.Kind}'.",
-                        "Pictures, charts, lines and groups take x, y, w, h and name (lines also fill for the " +
-                        "stroke color); text and styling props target text shapes.");
+                        "Pictures, charts, lines and groups take x, y, w, h, name, altText and altTitle (lines " +
+                        "also fill for the stroke color); text and styling props target text shapes.");
             }
         }
 
@@ -1100,6 +1198,25 @@ internal static class PptxEditor
         {
             SetGeometry(view, x, y, w, h);
         }
+    }
+
+    /// <summary>
+    /// Sets the accessibility description (a:cNvPr/@descr) of any shape; an empty
+    /// value clears it. This is the alt text screen readers announce.
+    /// </summary>
+    private static void SetAltText(ShapeView view, JsonNode? value)
+    {
+        var nonVisual = PptxDoc.NonVisualProps(view.Element) ?? throw CorruptPresentation("shape has no p:cNvPr");
+        var text = value is null ? string.Empty : J.ScalarText(value);
+        nonVisual.Description = text.Length == 0 ? null : text;
+    }
+
+    /// <summary>Sets the accessibility title (a:cNvPr/@title) of any shape; an empty value clears it.</summary>
+    private static void SetAltTitle(ShapeView view, JsonNode? value)
+    {
+        var nonVisual = PptxDoc.NonVisualProps(view.Element) ?? throw CorruptPresentation("shape has no p:cNvPr");
+        var text = value is null ? string.Empty : J.ScalarText(value);
+        nonVisual.Title = text.Length == 0 ? null : text;
     }
 
     private static void SetParagraphProps(ShapeView view, PptxAddress address, JsonObject props)

@@ -30,6 +30,8 @@ appends a textbox; more shape kinds are M1.
 | color    | string | font color, hex RGB                       |
 | align    | string | left · center · right · justify           |
 | name     | string | shape name                                |
+| altText  | string | M7: accessibility description (`a:cNvPr/@descr`); any shape kind; `""` clears |
+| altTitle | string | M7: accessibility title (`a:cNvPr/@title`); any shape kind; `""` clears |
 
 Lengths: a bare number means **centimeters** (`"x": 2.5`); strings take a unit
 suffix: `"5cm"`, `"36pt"`, `"1in"`, `"96px"`, `"1800000emu"`.
@@ -170,6 +172,61 @@ The M1 read-only debt is paid: slide masters and layouts are now editable.
 Use a cloned layout on a new slide via `props:{layout:N}` (1-based) on `add
 type:slide`. `remove` a layout only when no slide references it. `get
 /master[m]` lists layouts (name, type, `usedBySlides`).
+
+## document properties (M7, `/properties`)
+
+Core + custom package metadata on a virtual `/properties` node (same contract as
+docx/xlsx). Read with `get /properties` or `read --view properties`
+(`{core:{…}, custom:{…}}`); write with `set`:
+
+    {op:"set", path:"/properties", props:{
+      title:"Q3 Deck", author:"Dana", subject:"Quarterly review",
+      keywords:"q3;sales", category:"Reports", comments:"draft",
+      created:"2026-06-01", modified:"2026-06-13",
+      custom:{ Project:"Acme", Reviewed:true, Budget:1000, Due:"2026-07-01" }}}
+
+Core props go to the package CoreFilePropertiesPart; `custom` becomes typed
+`vt:*` entries (bool/number/date/string) in the CustomFilePropertiesPart. Clear
+a core prop with `""`, a custom prop with `null`. Settable core props: title,
+subject, author, keywords, category, comments, lastModifiedBy, created,
+modified, revision.
+
+## alt text + reading order (M7)
+
+`set altText`/`altTitle` on any shape path writes `a:cNvPr/@descr` and `@title`
+(the screen-reader description); `get` reports them; `render --to svg` emits an
+SVG `<title>` from the alt text so assistive tech announces it.
+
+    {op:"set", path:"/slide[2]/shape[@id=5]", props:{altText:"Sales chart Q3"}}
+
+Reading order is **document order** of the slide's shapes (the same lever as
+z-order: narration order = tab order = paint order). `read --view structure`
+lists shapes per slide in that order; reorder with
+
+    {op:"move", path:"/slide[2]/shape[@id=5]", position:"readingOrder 1"}
+
+(1 = narrated first). `front`/`back`/`forward`/`backward` move relatively.
+
+## audit (M7, `aioffice audit`)
+
+`aioffice audit deck.pptx [--category accessibility|quality|all]
+[--severity error|warning|info] [--fix] [--json]` lints the deck. Findings
+carry a stable `id` (`code#path`) so `--fix` can target specific ones; default
+`--fix` repairs every autofixable finding and never destroys content.
+
+| code (accessibility)   | severity      | autofix                                  |
+|------------------------|---------------|------------------------------------------|
+| a11y_no_alt_text       | warning       | yes — placeholder `(describe this image)`|
+| a11y_no_slide_title    | warning       | yes — sets/adds a `(slide title)`        |
+| a11y_reading_order     | info          | no  — reorder shapes (readingOrder N)    |
+| a11y_tiny_font         | warn <12pt · error <8pt | no — raise the font size       |
+| a11y_low_contrast      | warning       | no  — fix the text/fill colors (WCAG 4.5:1)|
+
+| code (quality)         | severity      | autofix                                  |
+|------------------------|---------------|------------------------------------------|
+| quality_off_canvas     | warning       | no  — move the shape onto the slide      |
+| quality_empty_placeholder | warning    | yes — removes the empty placeholder      |
+| quality_duplicate_id   | error         | no  — give each shape a unique id        |
 
 ## Rendering
 
