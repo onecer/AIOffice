@@ -64,13 +64,27 @@ public static class PreviewLock
     /// <summary>Best-effort delete; a missing or busy lockfile is not an error.</summary>
     public static void Delete(string lockPath)
     {
-        try
+        // Windows can briefly report a sharing violation (antivirus/indexer or a
+        // handle still settling) right after the server closes, so File.Delete can
+        // throw transiently. Retry for a short window so the "lockfile is gone after
+        // Close" invariant holds on every platform; if it still fails, the
+        // stale-port overwrite on the next start handles the leftover file.
+        for (var attempt = 0; ; attempt++)
         {
-            System.IO.File.Delete(lockPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Stale-port overwrite on the next start handles the leftover file.
+            try
+            {
+                System.IO.File.Delete(lockPath);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 9)
+                {
+                    return;
+                }
+
+                System.Threading.Thread.Sleep(20);
+            }
         }
     }
 
