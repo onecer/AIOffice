@@ -1,14 +1,19 @@
+using AIOffice.Core.Equations;
 using DocumentFormat.OpenXml;
 using M = DocumentFormat.OpenXml.Math;
 
 namespace AIOffice.Word.Equations;
 
 /// <summary>
-/// Emits validator-clean OMML (<c>m:oMath</c> and below) from the math tree. The
-/// emitter targets the DocumentFormat.OpenXml.Math element model directly, so the
-/// output is real OOXML — Word renders it natively and the OpenXmlValidator
-/// passes with zero errors. Argument types (<c>m:num</c>, <c>m:den</c>, <c>m:e</c>,
-/// …) wrap their child run/list exactly as the schema requires.
+/// Emits validator-clean OMML (<c>m:oMath</c> and below) from the shared math
+/// tree (<see cref="MathNode"/> in <c>AIOffice.Core.Equations</c>). The emitter
+/// targets the DocumentFormat.OpenXml.Math element model directly, so the output
+/// is real OOXML — Word renders it natively and the OpenXmlValidator passes with
+/// zero errors. (M10: the parser moved to Core; the Pptx handler emits the same
+/// OMML via <see cref="OmmlMath"/>'s pure-XML producer. This DocumentFormat.OpenXml
+/// emitter is kept for Word so its byte-exact round-trip tests are unchanged.)
+/// Argument types (<c>m:num</c>, <c>m:den</c>, <c>m:e</c>, …) wrap their child
+/// run/list exactly as the schema requires.
 /// </summary>
 internal static class OmmlEmitter
 {

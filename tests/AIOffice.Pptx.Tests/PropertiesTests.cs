@@ -18,8 +18,10 @@ public sealed class PropertiesTests : IDisposable
     private JsonObject Edit(params EditOp[] ops) =>
         TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), ops));
 
+    // M10: properties now nest under data.properties.{core,custom} (unified
+    // docx/xlsx/pptx contract shape); the helpers unwrap that one level.
     private JsonObject GetProperties() =>
-        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/properties"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/properties"))))["properties"]!.AsObject();
 
     private static JsonObject Set(params (string Key, JsonNode? Value)[] pairs) => TestEnv.Props(pairs);
 
@@ -113,7 +115,8 @@ public sealed class PropertiesTests : IDisposable
         Edit(TestEnv.Op("set", "/properties", props: Set(("author", JsonValue.Create("Dana")))));
 
         var view = TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "properties"))));
-        Assert.Equal("Dana", view["core"]!["author"]!.GetValue<string>());
+        // M10: nested under data.properties.{core,custom} (unified contract shape).
+        Assert.Equal("Dana", view["properties"]!["core"]!["author"]!.GetValue<string>());
         Assert.Equal("/properties", view["path"]!.GetValue<string>());
     }
 
@@ -168,7 +171,7 @@ public sealed class PropertiesTests : IDisposable
         }
 
         // Migrate-on-read: the title surfaces despite the non-standard storage.
-        var view = TestEnv.AssertOk(_handler.Read(_ws.Ctx("legacy.pptx", ("view", "properties"))));
+        var view = TestEnv.AssertOk(_handler.Read(_ws.Ctx("legacy.pptx", ("view", "properties"))))["properties"]!;
         Assert.Equal("Legacy Deck", view["core"]!["title"]!.GetValue<string>());
         Assert.Equal("Old Author", view["core"]!["author"]!.GetValue<string>());
 
@@ -188,7 +191,7 @@ public sealed class PropertiesTests : IDisposable
             Assert.Equal("Legacy Deck", doc.CoreFilePropertiesPart!.CoreFileProperties.Title);
         }
 
-        var after = TestEnv.AssertOk(_handler.Read(_ws.Ctx("legacy.pptx", ("view", "properties"))));
+        var after = TestEnv.AssertOk(_handler.Read(_ws.Ctx("legacy.pptx", ("view", "properties"))))["properties"]!;
         Assert.Equal("Legacy Deck", after["core"]!["title"]!.GetValue<string>());
         Assert.Equal("Old Author", after["core"]!["author"]!.GetValue<string>());
         Assert.Equal("Migrated", after["core"]!["subject"]!.GetValue<string>());

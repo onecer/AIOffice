@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AIOffice.Core;
+using AIOffice.Core.Equations;
 using AIOffice.Word.Equations;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;

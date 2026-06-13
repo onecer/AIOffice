@@ -50,7 +50,7 @@ OfficeCLI 的**能力清单**是我们长期对齐的北极星（台账见 `docs
 
 ## 2. 命令面规范（v0）
 
-CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。
+CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。M10 的嵌入对象（`embed`/`extract`）与 pptx 公式搭载在既有 `office_edit`/`office_read`/`office_get` 上，工具数维持 **17**。M10 起 `schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**（`1.0-rc`）——面向 AI 的契约版本，独立于工具包版本（见 [CONTRACT.md](../CONTRACT.md)）。
 
 ### 2.1 全局约定
 
@@ -145,13 +145,15 @@ aioffice create orders.xlsx --from orders.csv    # csv -> xlsx
 #### `read` — 整体读取
 
 ```
-aioffice read <file> [--view outline|text|stats|structure|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]
+aioffice read <file> [--view outline|text|stats|structure|properties|embeds|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]
 ```
 
 - `--view outline`（默认）：标题树 / sheet 清单 / slide 标题清单。
 - `--view text`：纯文本线性化（docx 段落、xlsx 单元格值 TSV 风格、pptx 形状文本）。
 - `--view stats`：计数面板（段落/字数/sheet/行列已用区域/slide/shape 数、part 数、文件大小）。
 - `--view structure`：浅层节点树（带规范路径），是 AI 后续 `get`/`edit` 的地址来源之一。
+- `--view properties`（M7；M10 统一结构）：文档 core + custom 属性，**三格式一致**返回 `data.properties.{core,custom}`（M10 把此前 docx 嵌套 / xlsx·pptx 扁平的差异统一）。
+- `--view embeds`（M10）：文档携带的嵌入 OLE/包对象清单，每项 `{path,name,mediaType,size,container}`（三格式）。
 - `--view markdown`（M5，docx 专属）：body 导出为 GFM markdown，与 `create --from` 导入结构 round-trip。
 - `--view csv`（M5，xlsx 专属）：单 sheet 以 RFC 4180 csv 导出，`--sheet` 选表（缺省首个）、`--range A1:C10` 限窗。
 - 桥接视图用错格式（如对 xlsx 要 markdown）→ `unsupported_feature`，suggestion 列出该格式的全部有效视图（命令层 `Bridge.GuardBridgeView`，CLI 与 MCP 共用）。
@@ -493,7 +495,18 @@ public sealed class AiofficeError : Exception
         // ...
     }
 }
+
+// M7 起的能力接口都遵循「Core 定义、三 handler 各实现、命令层共享 verb」同一模式：
+//   IAuditor（M7）/ IDiffer（M8）/ INeutralConvertible（M9）/ IEmbedHost（M10）。
+public interface IEmbedHost                            // M10 嵌入对象
+{
+    IReadOnlyList<EmbeddedObject> ListEmbeds(CommandContext ctx);          // read --view embeds
+    void ExtractEmbed(CommandContext ctx, string embedPath, string dest);  // extract op（产出型，不改源）
+}
+public sealed record EmbeddedObject(string Path, string Name, string MediaType, long Size, string? Container);
 ```
+
+> **M10 共享公式引擎**：M6 的 LaTeX→OMML 引擎从 `AIOffice.Word.Equations` 迁入 Core 的 `AIOffice.Core.Equations`——`LatexLexer`/`LatexParser`/`LatexSymbols`/`MathNode` 是纯 C# 解析层，新增的 `OmmlMath` 是**纯 `System.Xml.Linq` OMML 生产器，无 `DocumentFormat.OpenXml` 依赖**。Word 把生产的 `XElement` 载入 SDK 数学模型（行为不变，全部既有 docx 公式测试通过），Pptx 把同一 OMML 放进幻灯片文本框（`mc:AlternateContent`/`a14:m`/`m:oMathPara`）。同一段 LaTeX 在两种格式渲染一致；xlsx 无公式对象模型（只有单元格公式），`add type:equation` 返回 `unsupported_feature`。
 
 ### 3.3 数据流
 
@@ -643,10 +656,24 @@ public sealed class AiofficeError : Exception
 - ✅ **Core 寻址扩展**（接到真实命令面的关键一步）：`DocPath` 新增 `/`（零段根路径，`IsRoot`）与元素跨段 `ElementSpan`（`row[a]:row[b]`/`col[a]:col[b]`）。M6 能力在格式层已实现并测试，但 `EditOp.ParseBatch` → `DocPath.Parse` 网关此前拒收这两种新形式（仅直构 EditOp 的格式层测试可达）；本次让它们通过网关，CLI/MCP 命令面直达，且 docx/xlsx 对 `/` 根 op 诚实返回 `unsupported_feature` 而非崩溃。
 - ⏭ 留给 M7 的种子：pptx/xlsx 公式（幻灯片/单元格内 OMML，复用本转换器）、插件机制（外部格式 handler）、现代 xlsx 批注打磨、动画预设++（完整强调/退出全集、效果链、motion path）、OLE 对象、无障碍/alt-text 审计。
 
-### M7 — 能力深化（规划）
+### M7 — 交付前审计（已交付，v0.8.0）
 
-- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M7 窗口），或显式标记"不做 + 理由"。
-- pptx/xlsx 公式、插件机制、动画预设扩容、OLE 对象、无障碍审计。
+- 三格式共享 `audit` 动词 + `office_audit`（第 15 工具）；docx 文档属性 / 内容控件、xlsx 命名单元格样式、三格式文档属性 + 图片 alt。Core 增量 `IAuditor`。
+
+### M8 — 对比与审阅（已交付，v0.9.0）
+
+- 三格式共享 `diff` 动词 + `office_diff`（第 16 工具，语义对比文件或快照）；docx 题注/交叉引用、xlsx 切片器、pptx 形状超链接/动作。Core 增量 `IDiffer`。
+
+### M9 — 跨格式互转（已交付，v0.10.0，pre-1.0 capstone）
+
+- 三格式共享 `convert` 动词 + `office_convert`（第 17 工具）——内容中立模型 `INeutralConvertible`，docx↔md / xlsx↔csv 复用文本桥，any→pdf/png/svg/html 经 render 层；`doctor`/`office_status` 新增 capabilities 自省块。
+
+### M10 — 嵌入对象 + pptx 公式 + 契约冻结（已交付，v0.11.0，1.0 前最后一个功能里程碑）
+
+- 三格式**嵌入对象**（`add type:embed` 任意文件作 OLE/包对象，`read --view embeds`，新增 `extract` op 按位导出；Core 增量 `IEmbedHost` + `EmbeddedObject`）。
+- **pptx 公式**经迁入 Core 的共享 LaTeX→OMML 引擎（`AIOffice.Core.Equations` 的纯 `System.Xml.Linq` `OmmlMath`，Word 与 Pptx 共用；xlsx N/A）。
+- **1.0 契约准备**：`properties` 视图统一为 `data.properties.{core,custom}`；`schema`/`doctor` 声明 `surfaceVersion`（`1.0-rc`）；冻结契约写入 [CONTRACT.md](../CONTRACT.md)。
+- **Toward 1.0**：仅余稳定化——最终跨平台回归扫描、API 冻结签收（`surfaceVersion` 1.0-rc → 1.0）、文档打磨；其后候选插件机制。
 
 ---
 

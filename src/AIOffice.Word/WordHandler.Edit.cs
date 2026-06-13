@@ -121,6 +121,9 @@ public sealed partial class WordHandler
         var rootName = parsedPath.Segments[0].Name;
         return op.Op switch
         {
+            // extract is a producing-but-not-mutating op: it writes an embed's
+            // payload to a sandbox-resolved dest and leaves the document unchanged.
+            "extract" => ApplyExtractEmbed(doc, op, session),
             "accept" or "reject" => ApplyAcceptOrReject(doc, op),
             "replace" => ApplyReplace(doc, op, session),
             "set" when rootName == "style" => ApplySetStyle(doc, op),
@@ -135,6 +138,7 @@ public sealed partial class WordHandler
             "add" when op.Type == "comment" => ApplyAddComment(doc, op, session),
             "add" when op.Type == "reply" => ApplyAddCommentReply(doc, op, session),
             "add" when op.Type == "image" => ApplyAddImage(doc, op, session),
+            "add" when op.Type == "embed" => ApplyAddEmbed(doc, op, session),
             "add" when op.Type == "link" && session.Track => throw TrackedStructureUnsupported("link"),
             "add" when op.Type == "link" => ApplyAddLink(doc, op, session),
             "add" when op.Type == "field" && session.Track => throw TrackedStructureUnsupported("field"),
@@ -161,6 +165,7 @@ public sealed partial class WordHandler
             "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
             "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
             "add" => ApplyAdd(doc, op, session),
+            "remove" when rootName == "embed" => ApplyRemoveEmbed(doc, op),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
             "remove" when rootName == "bookmark" => ApplyRemoveBookmark(doc, op),
@@ -281,11 +286,12 @@ public sealed partial class WordHandler
                 "sectionBreak (props.kind), field (props.kind=pageNumber|numPages|date|docTitle), " +
                 "equation (props.latex, props.display), columnBreak, " +
                 "caption (props.label=Figure|Table|Equation, props.text), crossRef (props.to, props.show), " +
+                "embed (props.src — embeds any file as an OLE package object), " +
                 "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
                     "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
-                    "caption", "crossRef"]),
+                    "caption", "crossRef", "embed"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

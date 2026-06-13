@@ -241,7 +241,8 @@ public sealed class AuditTests : ExcelTestBase
         Assert.Equal(1, fixedCount);
         AssertValidatorClean(file);
 
-        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["core"]!;
+        // M10: properties nest under data.properties.{core,custom} (unified shape).
+        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["core"]!;
         Assert.Equal("revenue", core["title"]!.GetValue<string>());
 
         var after = AuditAll(file);

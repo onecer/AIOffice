@@ -1,12 +1,16 @@
-# equations (M6 — LaTeX in, Office Math out)
+# equations (M6/M10 — LaTeX in, Office Math out; docx + pptx)
 
 aioffice ships a hand-rolled LaTeX → OOXML Math (OMML) converter (no LaTeX
 dependency). You write LaTeX; the document gets real `m:oMath` that Word,
-PowerPoint Online and LibreOffice render as an equation. The original LaTeX is
-stored on the equation (as an `mc:Ignorable` vendor attribute) so `get` returns
-your source verbatim and round-trips are byte-faithful.
+PowerPoint and LibreOffice render as an equation. The original LaTeX is stored
+on the equation (as an `mc:Ignorable` vendor attribute) so `get` returns your
+source verbatim and round-trips are byte-faithful. M10 moved the converter into
+Core (`AIOffice.Core.Equations`, a pure System.Xml.Linq OMML producer), so the
+**same engine drives docx and pptx** — a given LaTeX string renders identically
+in both. Excel is N/A by design (cell formulas, not math objects): `add
+type:equation` on an `.xlsx` returns `unsupported_feature` with the workaround.
 
-## Add an equation
+## Add an equation (docx)
 
     aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"E = mc^2"}}]'
     aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}","display":true}}]'
@@ -16,11 +20,22 @@ your source verbatim and round-trips are byte-faithful.
 - `display:true` emits a **centered display block** (`m:oMathPara`) placed
   `before`/`after`/`inside` like any other block add.
 
+## Add an equation (pptx, M10)
+
+    aioffice edit deck.pptx --ops '[{"op":"add","path":"/slide[1]","type":"equation","props":{"latex":"x = \\frac{1}{2}"}}]'
+
+- Target `/slide[i]` to create a text box holding the equation, or
+  `/slide[i]/shape[@id=N]` to append the math to an existing text box.
+- Optional props `x`/`y`/`w`/`h` (place a new box) and `fontSize` (a bare point
+  number, e.g. `32`) for the fallback run.
+- The result path is `/slide[i]/shape[@id=N]/omath[k]`. The OMML lands natively
+  inside the text box (`mc:AlternateContent`/`a14:m`/`m:oMathPara`).
+
 ## Read it back
 
-- `get /body/p[i]/omath[j]` → `{ latex, display }` (your stored source).
-- `read --view text` shows `$…$` (inline) and `$$…$$` (display) markers inline
-  with the surrounding text.
+- `get <omath path>` → `{ latex, … }` (your stored source).
+- docx `read --view text` shows `$…$` (inline) and `$$…$$` (display) markers
+  inline with the surrounding text.
 
 ## Supported LaTeX subset
 
@@ -48,8 +63,11 @@ fragment in `\text{…}`.
 
 ## Notes
 
-- Equations are a **docx** feature in M6 (pptx/xlsx equations are M7 seeds).
+- Equations work in **docx** (M6) and **pptx** (M10) through the same shared
+  converter. xlsx is N/A by design (`unsupported_feature` — put math in a cell
+  formula or embed a rendered image).
 - Tracked-changes (`--track`) does not record equation adds — run the op
   without `--track`.
-- Remove with `{op:"remove", path:"/body/p[i]/omath[j]"}` (a display equation's
-  whole paragraph goes with it when it becomes empty).
+- Remove with `{op:"remove", path:"<omath path>"}` — docx `/body/p[i]/omath[j]`
+  (a display equation's whole paragraph goes with it when it becomes empty) or
+  pptx `/slide[i]/shape[@id=N]/omath[k]`.

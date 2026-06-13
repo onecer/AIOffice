@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
     private static readonly IReadOnlyList<string> AddTypes =
     [
         "sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note",
-        "dataValidation", "sparkline", "comment", "reply", "group", "slicer",
+        "dataValidation", "sparkline", "comment", "reply", "group", "slicer", "embed",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -57,6 +57,7 @@ public sealed partial class ExcelHandler
         // parts; measured: it preserves them byte-identical once present).
         var charts = new ChartOpBatch(file);
         var slicers = new ExcelSlicers.Batch(file);
+        var embeds = new ExcelEmbeds.Batch(file);
         var post = new PostSaveWork();
         var opWarnings = new List<Warning>();
         var details = new List<object>(ops.Count);
@@ -66,13 +67,23 @@ public sealed partial class ExcelHandler
             // before any later op that addresses the same sheet (it would
             // otherwise replay after that op and clobber its cells).
             FlushStreamedWritesFor(post, ops[i].Path);
-            ApplyOp(ctx, workbook, ops[i], i, details, charts, slicers, post, opWarnings);
+            ApplyOp(ctx, workbook, ops[i], i, details, charts, slicers, embeds, post, opWarnings);
         }
 
         if (ArgBool(ctx, "dryRun"))
         {
             return Envelope.Ok(
                 new { dryRun = true, wouldApply = details.Count, ops = details },
+                MetaFor(file, sw, opWarnings));
+        }
+
+        // A batch of nothing but extract ops produces dest files but never
+        // touches the source: skip the save (and the snapshot) so the source
+        // stays byte-identical, honoring "extract does not modify the document".
+        if (ops.Count > 0 && ops.All(o => o.Op == "extract"))
+        {
+            return Envelope.Ok(
+                new { applied = details.Count, ops = details },
                 MetaFor(file, sw, opWarnings));
         }
 
@@ -117,6 +128,13 @@ public sealed partial class ExcelHandler
                 // Slicers ride the same post-save discipline as charts: ClosedXML
                 // cannot author them and preserves them byte-identical once present.
                 ExcelSlicers.Apply(file, slicers.Ops);
+            }
+
+            if (!embeds.IsEmpty)
+            {
+                // Embedded package parts and their registry property are authored
+                // raw too; ClosedXML preserves both byte-identical once present.
+                ExcelEmbeds.Apply(file, embeds.Ops);
             }
 
             if (post.SyncPivotParts)
@@ -345,7 +363,8 @@ public sealed partial class ExcelHandler
 
     private static void ApplyOp(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post, List<Warning> warnings)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post,
+        List<Warning> warnings)
     {
         // "/" (document root) is meaningful only as a replace scope (expanded
         // upstream into per-sheet ops). Any other root-targeted op has no xlsx
@@ -413,13 +432,16 @@ public sealed partial class ExcelHandler
                 ApplySet(workbook, op, index, details, post);
                 break;
             case "add":
-                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, post);
+                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, post);
                 break;
             case "remove":
-                ApplyRemove(ctx, workbook, op, index, details, charts, slicers, post);
+                ApplyRemove(ctx, workbook, op, index, details, charts, slicers, embeds, post);
                 break;
             case "replace":
                 ApplyReplace(workbook, op, index, details, warnings);
+                break;
+            case "extract":
+                ApplyExtract(ctx, workbook, op, index, details);
                 break;
             case "move":
                 throw new AiofficeException(
@@ -432,6 +454,44 @@ public sealed partial class ExcelHandler
                     $"ops[{index}]: {op.Op} is not supported for xlsx.",
                     "accept/reject resolve tracked docx revisions; xlsx has no tracked changes.");
         }
+    }
+
+    // ----- extract ----------------------------------------------------------
+
+    /// <summary>
+    /// The M10 <c>extract</c> op: writes an embedded object's payload to a
+    /// sandbox-resolved destination. It is a producing op — it reads the embed
+    /// from the on-disk file and writes the dest, never mutating the source
+    /// document. Only embed paths are extractable today.
+    /// </summary>
+    private static void ApplyExtract(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        if (target.Kind != ExcelTargetKind.Embed)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: extract targets an embedded object like /Sheet1/embed[1].",
+                "Only embeds can be extracted; run 'aioffice read --view embeds' to list them.");
+        }
+
+        var to = op.Props is not null && op.Props.TryGetPropertyValue("to", out var toNode) &&
+                 toNode is JsonValue toValue && toValue.GetValueKind() == JsonValueKind.String
+            ? toValue.GetValue<string>()
+            : null;
+        if (string.IsNullOrWhiteSpace(to))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: extract needs props.to (the destination file inside the workspace).",
+                "Use {op:extract, path:/Sheet1/embed[1], props:{to:\"out/report.xlsx\"}}.");
+        }
+
+        // Sandbox the dest BEFORE writing a byte (mustExist:false — it is created).
+        var dest = ctx.Workspace.Resolve(to, mustExist: false);
+        var canonical = ExcelEmbeds.Extract(ctx.File!, target, dest);
+        details.Add(new { op = "extract", path = canonical, to, extracted = "embed" });
     }
 
     // ----- set --------------------------------------------------------------
@@ -472,7 +532,7 @@ public sealed partial class ExcelHandler
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
             or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image
             or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment
-            or ExcelTargetKind.Table)
+            or ExcelTargetKind.Table or ExcelTargetKind.Embed)
         {
             var kindName = target.Kind switch
             {
@@ -1003,7 +1063,7 @@ public sealed partial class ExcelHandler
 
     private static void ApplyAdd(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post)
     {
         switch (op.Type)
         {
@@ -1061,6 +1121,17 @@ public sealed partial class ExcelHandler
                 details.Add(ExcelImages.Add(ctx.Workspace, target, op, index, pending));
                 break;
             }
+            case "embed":
+                AddEmbed(ctx, workbook, op, index, details, embeds);
+                break;
+            case "equation":
+                // xlsx has no math-object model: Excel carries cell formulas, not
+                // OMML equations (docx and pptx do). This is N/A by design, not a gap.
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    $"ops[{index}]: Excel has no equation object — spreadsheets use cell formulas, not OMML math.",
+                    "Put the math in a cell formula (e.g. set /Sheet1/A1 to \"=A2/2\"), or embed a rendered image " +
+                    "of the equation; LaTeX-to-OMML equations are a docx/pptx feature (add type 'equation' there).");
             case null:
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
@@ -1218,11 +1289,34 @@ public sealed partial class ExcelHandler
         });
     }
 
+    /// <summary>
+    /// Validates an <c>add embed</c> op against the live workbook (the sheet must
+    /// exist and the src must resolve inside the sandbox) and queues the raw
+    /// EmbeddedPackagePart write for the post-save pass.
+    /// </summary>
+    private static void AddEmbed(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details, ExcelEmbeds.Batch embeds)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        var spec = ExcelEmbeds.ParseAdd(ctx.Workspace, target, op, index);
+        var embedIndex = embeds.Add(spec);
+        details.Add(new
+        {
+            op = "add",
+            type = "embed",
+            path = ExcelPaths.EmbedPath(target.Sheet, embedIndex),
+            name = spec.Name,
+            mediaType = spec.MediaType,
+            size = (long)spec.Payload.Length,
+            anchor = spec.Anchor,
+        });
+    }
+
     // ----- remove -----------------------------------------------------------
 
     private static void ApplyRemove(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post)
     {
         // Group spans (row[a]:row[b] / col[a]:col[b]) are an element-range form
         // the shared grammar cannot parse; peel them off first (precedent:
@@ -1317,6 +1411,22 @@ public sealed partial class ExcelHandler
             case ExcelTargetKind.Table:
                 details.Add(ExcelTables.Remove(target));
                 return;
+
+            case ExcelTargetKind.Embed:
+            {
+                // Resolve the index against the batch-projected on-disk state and
+                // queue the raw part deletion + registry update for the post-save pass.
+                var removed = embeds.Remove(
+                    ctx.File!, target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.EmbedIndex!.Value, index);
+                details.Add(new
+                {
+                    op = "remove",
+                    path = ExcelPaths.EmbedPath(target.Sheet, target.EmbedIndex!.Value),
+                    removed = "embed",
+                    name = removed.Name,
+                });
+                return;
+            }
         }
 
         var canonical = DocPath.Parse(op.Path).ToCanonicalString();

@@ -1,3 +1,7 @@
+// M10: the LaTeX parser (LatexParser, MathNode, LatexParseResult) moved to the
+// shared AIOffice.Core.Equations so both Word and Pptx consume one converter; the
+// DocumentFormat.OpenXml emitter (OmmlEmitter) stays in AIOffice.Word.Equations.
+using AIOffice.Core.Equations;
 using AIOffice.Word.Equations;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;

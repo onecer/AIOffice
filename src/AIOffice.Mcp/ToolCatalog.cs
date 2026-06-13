@@ -41,8 +41,8 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "view":{"type":"string","enum":["outline","text","stats","structure","properties","revisions","comments","styles","fields","markdown","csv"],"default":"outline",
-                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; properties: core + custom doc properties (all formats); revisions/comments/markdown/fields: docx (fields = content controls); styles: docx style defs or xlsx named cell styles; csv: one xlsx sheet as RFC-4180 csv"},
+              "view":{"type":"string","enum":["outline","text","stats","structure","properties","embeds","revisions","comments","styles","fields","markdown","csv"],"default":"outline",
+                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; properties: core + custom doc properties under data.properties.{core,custom} (all formats); embeds: embedded OLE/package objects (all formats); revisions/comments/markdown/fields: docx (fields = content controls); styles: docx style defs or xlsx named cell styles; csv: one xlsx sheet as RFC-4180 csv"},
               "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx; csv view also takes 'A1:C10'"},
               "sheet":{"type":"string","description":"csv view: sheet name (default: first sheet)"},
               "max_bytes":{"type":"integer","description":"Cap payload size; truncation reported in meta.warnings and data.truncated"}},

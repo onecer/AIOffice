@@ -230,8 +230,10 @@ entry so Excel surfaces it in its gallery; the file stays validator-clean.
 
 Core + custom workbook metadata on a virtual `/properties` node (same contract
 as docx/pptx). `set /properties` writes; `get /properties` or
-`read --view properties` returns `{core:{title,…}, custom:{…}}`. `title` is what
-`audit`'s `a11y_no_doc_title` checks; `--fix` derives it from the filename.
+`read --view properties` returns `data.properties.{core:{title,…}, custom:{…}}`
+(M10: the nested shape is now identical across all three formats — read the title
+at `data.properties.core.title`). `title` is what `audit`'s `a11y_no_doc_title`
+checks; `--fix` derives it from the filename.
 
     {op:"set", path:"/properties", props:{title:"Sales Metrics", author:"AIOffice",
       custom:{Quarter:"Q3", Final:true}}}

@@ -399,6 +399,7 @@ public sealed class CommandService
             snapshotStore = new { path = _snapshotDir, count, bytes },
             capabilities = new
             {
+                surfaceVersion = Meta.SurfaceVersion,
                 mcpTools = ToolCatalog.Names.Count,
                 mcpToolNames = ToolCatalog.Names,
                 verbs = SurfaceSchema.VerbNames.Count,

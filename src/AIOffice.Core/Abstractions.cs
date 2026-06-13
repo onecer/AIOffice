@@ -18,7 +18,7 @@ public enum DocumentKind
 /// </summary>
 public sealed record EditOp
 {
-    public static readonly IReadOnlyList<string> Kinds = ["set", "add", "remove", "move", "replace", "accept", "reject"];
+    public static readonly IReadOnlyList<string> Kinds = ["set", "add", "remove", "move", "replace", "accept", "reject", "extract"];
 
     /// <summary>set | add | remove | move.</summary>
     [JsonPropertyName("op")]
@@ -72,9 +72,10 @@ public sealed record EditOp
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
-                    $"ops[{i}].op is '{op.Op}' but must be one of: set, add, remove, move, replace, accept, reject.",
+                    $"ops[{i}].op is '{op.Op}' but must be one of: set, add, remove, move, replace, accept, reject, extract.",
                     "Use set to change properties, add to insert, remove to delete, move to reposition, " +
-                    "replace for find/replace, accept/reject to resolve tracked revisions.",
+                    "replace for find/replace, accept/reject to resolve tracked revisions, " +
+                    "extract to write an embedded object back out to a file.",
                     candidates: Kinds);
             }
 
@@ -413,6 +414,39 @@ public interface INeutralConvertible
 
     /// <summary>Writes <paramref name="doc"/> INTO <c>ctx.File</c> (a freshly created, empty file of this kind).</summary>
     ImportResult ImportNeutral(CommandContext ctx, NeutralDoc doc);
+}
+
+/// <summary>
+/// One embedded object (an OLE/package object) carried inside a document: a file
+/// of any kind (a source .xlsx attached to a report, a .pdf, a .zip) stored as an
+/// embedded package part. <see cref="Path"/> is the canonical address
+/// (<c>/embed[i]</c> for docx, <c>/Sheet1/embed[i]</c> for xlsx,
+/// <c>/slide[i]/embed[j]</c> for pptx); <see cref="Name"/> is the display name;
+/// <see cref="MediaType"/> is the sniffed content type; <see cref="Size"/> is the
+/// payload byte count; <see cref="Container"/> names the host container the embed
+/// lives in (a slide/sheet path) when one applies, null for body-level embeds.
+/// </summary>
+public sealed record EmbeddedObject(string Path, string Name, string MediaType, long Size, string? Container);
+
+/// <summary>
+/// The M10 embedded-objects surface: a handler can list the embedded files a
+/// document carries and extract one back out to a sandbox-resolved destination.
+/// Adding and removing embeds flows through the normal <c>add</c>/<c>remove</c>
+/// edit ops; the new <c>extract</c> op invokes <see cref="ExtractEmbed"/>. The
+/// embedded payload bytes survive a round-trip exactly — extracting after an
+/// open+save returns identical bytes.
+/// </summary>
+public interface IEmbedHost
+{
+    /// <summary>Lists the metadata of every embedded object in <c>ctx.File</c>, in canonical-path order.</summary>
+    IReadOnlyList<EmbeddedObject> ListEmbeds(CommandContext ctx);
+
+    /// <summary>
+    /// Writes the embedded object addressed by <paramref name="embedPath"/> to
+    /// <paramref name="destPath"/> (already sandbox-resolved by the caller). This
+    /// does NOT modify the source document.
+    /// </summary>
+    void ExtractEmbed(CommandContext ctx, string embedPath, string destPath);
 }
 
 /// <summary>Maps file extensions to format handlers.</summary>

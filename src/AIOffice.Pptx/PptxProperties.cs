@@ -34,7 +34,12 @@ internal static class PptxProperties
 
     // ------------------------------------------------------------------- read
 
-    /// <summary>get /properties / read --view properties: {path, core:{…}, custom:{…}}.</summary>
+    /// <summary>
+    /// get /properties / read --view properties: {path, properties:{core:{…},
+    /// custom:{…}}}. M10: the core/custom blocks nest under a "properties" key
+    /// (data.properties.core.title) so the envelope shape is identical across
+    /// docx/xlsx/pptx — the unified pre-1.0 contract shape.
+    /// </summary>
     public static object Shape(PresentationDocument doc)
     {
         var core = ReadCore(doc);
@@ -64,8 +69,11 @@ internal static class PptxProperties
         return new Dictionary<string, object?>
         {
             ["path"] = "/properties",
-            ["core"] = coreShape,
-            ["custom"] = custom,
+            ["properties"] = new Dictionary<string, object?>
+            {
+                ["core"] = coreShape,
+                ["custom"] = custom,
+            },
         };
     }
 

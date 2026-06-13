@@ -37,6 +37,16 @@ public sealed record Meta
     /// <summary>The aioffice tool version reported in every envelope.</summary>
     public static string ToolVersion { get; } =
         typeof(Meta).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0.0.0";
+
+    /// <summary>
+    /// The AI-facing CONTRACT version — the stability promise for the JSON
+    /// envelope shape, the ErrorCode list, the addressing grammar, exit codes, and
+    /// the op/view/tool vocabularies (see CONTRACT.md). It is independent of the
+    /// tool's package version (<see cref="ToolVersion"/>): the tool can ship many
+    /// releases while the contract stays "1.0-rc". Bumps to this value signal a
+    /// breaking change to the AI surface. Surfaced in office_schema and doctor.
+    /// </summary>
+    public const string SurfaceVersion = "1.0-rc";
 }
 
 /// <summary>

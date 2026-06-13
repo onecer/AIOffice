@@ -165,7 +165,8 @@ public sealed class ConvertTests : IDisposable
         Assert.Equal(2, outline["slides"]!.AsArray().Count);
 
         // The deck title rode along on the core property.
-        var properties = TestEnv.AssertOk(_handler.Read(_ws.Ctx("out.pptx", ("view", "properties"))));
+        // M10: properties nest under data.properties.{core,custom} (unified shape).
+        var properties = TestEnv.AssertOk(_handler.Read(_ws.Ctx("out.pptx", ("view", "properties"))))["properties"]!;
         Assert.Equal("My Deck", properties["core"]!["title"]!.GetValue<string>());
 
         var text = AllText("out.pptx");
@@ -333,7 +334,7 @@ public sealed class ConvertTests : IDisposable
         Assert.Equal("First Heading", firstHeading.Runs![0].Text);
 
         // The envelope reads the title back...
-        var properties = TestEnv.AssertOk(_handler.Read(_ws.Ctx("out.pptx", ("view", "properties"))));
+        var properties = TestEnv.AssertOk(_handler.Read(_ws.Ctx("out.pptx", ("view", "properties"))))["properties"]!;
         Assert.Equal("Deck Title", properties["core"]!["title"]!.GetValue<string>());
 
         // ...and the SAVED package carries it in the standard docProps/core.xml part.

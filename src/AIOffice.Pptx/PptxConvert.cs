@@ -149,6 +149,11 @@ public sealed partial class PptxHandler : INeutralConvertible
             dropped.Add("slide transitions (the neutral model carries content, not motion)");
         }
 
+        if (PptxEmbeds.SlideEmbedCount(slidePart) > 0)
+        {
+            dropped.Add("embedded objects (OLE/package attachments have no neutral equivalent; the embed is not converted)");
+        }
+
         // Speaker notes ride along as a tagged paragraph so they survive the trip.
         var notes = PptxNotes.Text(slidePart).Trim();
         if (notes.Length > 0)

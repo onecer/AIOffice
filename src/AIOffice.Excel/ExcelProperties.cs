@@ -34,7 +34,12 @@ internal static class ExcelProperties
 
     // ----- read / get ---------------------------------------------------------
 
-    /// <summary>Both property blocks (core + custom) for read --view properties and get /properties.</summary>
+    /// <summary>
+    /// Both property blocks (core + custom) for read --view properties and
+    /// get /properties. M10: the core/custom blocks nest under a "properties" key
+    /// (data.properties.core.title) so the envelope shape is identical across
+    /// docx/xlsx/pptx — the unified pre-1.0 contract shape.
+    /// </summary>
     public static object Describe(XLWorkbook workbook)
     {
         var p = workbook.Properties;
@@ -42,22 +47,25 @@ internal static class ExcelProperties
         {
             path = "/properties",
             kind = "properties",
-            core = new
+            properties = new
             {
-                title = NullIfEmpty(p.Title),
-                subject = NullIfEmpty(p.Subject),
-                author = NullIfEmpty(p.Author),
-                manager = NullIfEmpty(p.Manager),
-                company = NullIfEmpty(p.Company),
-                category = NullIfEmpty(p.Category),
-                keywords = NullIfEmpty(p.Keywords),
-                comments = NullIfEmpty(p.Comments),
-                status = NullIfEmpty(p.Status),
-                lastModifiedBy = NullIfEmpty(p.LastModifiedBy),
-                created = p.Created == default ? null : Iso(p.Created),
-                modified = p.Modified == default ? null : Iso(p.Modified),
+                core = new
+                {
+                    title = NullIfEmpty(p.Title),
+                    subject = NullIfEmpty(p.Subject),
+                    author = NullIfEmpty(p.Author),
+                    manager = NullIfEmpty(p.Manager),
+                    company = NullIfEmpty(p.Company),
+                    category = NullIfEmpty(p.Category),
+                    keywords = NullIfEmpty(p.Keywords),
+                    comments = NullIfEmpty(p.Comments),
+                    status = NullIfEmpty(p.Status),
+                    lastModifiedBy = NullIfEmpty(p.LastModifiedBy),
+                    created = p.Created == default ? null : Iso(p.Created),
+                    modified = p.Modified == default ? null : Iso(p.Modified),
+                },
+                custom = CustomMap(workbook),
             },
-            custom = CustomMap(workbook),
         };
     }
 

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace AIOffice.Word.Equations;
+namespace AIOffice.Core.Equations;
 
 /// <summary>The kinds of token the LaTeX subset lexer produces.</summary>
 internal enum LatexTokenKind

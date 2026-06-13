@@ -9,7 +9,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] ReadViews =
-        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown", "properties", "fields"];
+        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown", "properties", "fields", "embeds"];
 
     public Envelope Read(CommandContext ctx)
     {
@@ -20,7 +20,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use --view text, outline, stats, structure, revisions, comments, styles, markdown, properties or fields.",
+                "Use --view text, outline, stats, structure, revisions, comments, styles, markdown, properties, fields or embeds.",
                 candidates: ReadViews);
         }
 
@@ -42,6 +42,7 @@ public sealed partial class WordHandler
                 "markdown" => MarkdownView(doc, body),
                 "properties" => new { view = "properties", properties = PropertiesShape(doc) },
                 "fields" => FieldsView(doc),
+                "embeds" => EmbedsView(doc),
                 _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 
@@ -242,6 +243,17 @@ public sealed partial class WordHandler
 
         var captions = CaptionsStructure(doc);
 
+        var embeds = EnumerateEmbeds(doc)
+            .Select(e => new
+            {
+                path = e.CanonicalPath,
+                name = e.DisplayName,
+                mediaType = e.MediaType,
+                size = e.Size,
+                container = e.Container,
+            })
+            .ToList();
+
         return new
         {
             view = "structure",
@@ -251,6 +263,7 @@ public sealed partial class WordHandler
             bookmarks = bookmarks.Count > 0 ? bookmarks : null,
             tocs = tocs.Count > 0 ? tocs : null,
             captions = captions.Count > 0 ? captions : null,
+            embeds = embeds.Count > 0 ? embeds : null,
             sections = SectionsStructure(body),
         };
 

@@ -1,7 +1,7 @@
-namespace AIOffice.Word.Equations;
+namespace AIOffice.Core.Equations;
 
 /// <summary>The parse outcome: the math tree plus any unrecognized command tokens (for the equation_partial warning).</summary>
-internal sealed record LatexParseResult(MathNode Root, IReadOnlyList<string> UnknownTokens);
+public sealed record LatexParseResult(MathNode Root, IReadOnlyList<string> UnknownTokens);
 
 /// <summary>
 /// A recursive-descent parser for the supported LaTeX-math subset. It never
@@ -12,7 +12,7 @@ internal sealed record LatexParseResult(MathNode Root, IReadOnlyList<string> Unk
 /// <c>\frac</c> missing an argument) degrade to empty arguments rather than
 /// failing the whole equation.
 /// </summary>
-internal sealed class LatexParser
+public sealed class LatexParser
 {
     private readonly List<LatexToken> _tokens;
     private int _pos;

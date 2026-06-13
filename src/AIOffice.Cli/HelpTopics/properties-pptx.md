@@ -177,7 +177,9 @@ type:slide`. `remove` a layout only when no slide references it. `get
 
 Core + custom package metadata on a virtual `/properties` node (same contract as
 docx/xlsx). Read with `get /properties` or `read --view properties`
-(`{core:{…}, custom:{…}}`); write with `set`:
+(`data.properties.{core:{…}, custom:{…}}`; M10: this nested shape is now
+identical across all three formats — read the title at
+`data.properties.core.title`); write with `set`:
 
     {op:"set", path:"/properties", props:{
       title:"Q3 Deck", author:"Dana", subject:"Quarterly review",

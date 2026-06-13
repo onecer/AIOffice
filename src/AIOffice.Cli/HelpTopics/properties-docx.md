@@ -229,9 +229,11 @@ Core + custom package metadata live on a virtual `/properties` node. Read with
     {op:"set", path:"/properties", props:{title:"Q3 Report", author:"AIOffice",
       custom:{Project:"Aurora", Reviewed:true, Budget:1000}}}
 
-`read --view properties` returns `{core:{…}, custom:{…}}`; a custom value that
-parses as a number/bool/ISO-date is stored as `vt:r8`/`vt:bool`/`vt:filetime`
-and reads back with that type. A `null` custom value clears the property.
+`read --view properties` returns `data.properties.{core:{…}, custom:{…}}` (M10:
+this nested shape is now **identical across docx/xlsx/pptx** — read the title at
+`data.properties.core.title`); a custom value that parses as a
+number/bool/ISO-date is stored as `vt:r8`/`vt:bool`/`vt:filetime` and reads back
+with that type. A `null` custom value clears the property.
 
 ## content controls (M7, `add type:contentControl`, `read --view fields`)
 

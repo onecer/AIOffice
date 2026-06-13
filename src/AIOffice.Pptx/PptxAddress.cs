@@ -35,6 +35,9 @@ internal enum PptxRootKind
 /// /slide[2]/smartart[1]       (1-based SmartArt index on the slide; read-only)
 /// /slide[2]/animation[1]      (1-based animation index on the slide)
 /// /slide[2]/comment[@id=3]    (stable comment id on the slide)
+/// /slide[2]/embed[1]          (1-based embedded-object index on the slide)
+/// /slide[2]/embed[@id=7]      (stable embed id — the host graphicFrame's shape id)
+/// /slide[2]/shape[@id=7]/omath[1] (1-based equation in the shape's text body)
 /// /master[1]                  (read-only in this milestone)
 /// /master[1]/layout[2]
 /// /master[1]/layout[2]/shape[1]
@@ -47,6 +50,7 @@ internal sealed partial record PptxAddress
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
         "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
+        "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/shape[@id=7]/omath[1], " +
         "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
         "/section[1] (a slide section), /properties (document core + custom metadata) " +
         "or / (the presentation: slide size and sections); " +
@@ -88,6 +92,12 @@ internal sealed partial record PptxAddress
     [GeneratedRegex(@"^comment\[@id=([0-9]+)\]$")]
     private static partial Regex CommentSegment();
 
+    [GeneratedRegex(@"^embed\[([0-9]+)\]$")]
+    private static partial Regex EmbedOrdinalSegment();
+
+    [GeneratedRegex(@"^embed\[@id=([0-9]+)\]$")]
+    private static partial Regex EmbedIdSegment();
+
     [GeneratedRegex(@"^shape\[@id=([0-9]+)\]$")]
     private static partial Regex ShapeIdSegment();
 
@@ -96,6 +106,9 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^run\[([0-9]+)\]$")]
     private static partial Regex RunSegment();
+
+    [GeneratedRegex(@"^omath\[([0-9]+)\]$")]
+    private static partial Regex OMathSegment();
 
     private static readonly string[] ReservedRoots = ["notes", "notesmaster", "handout", "handoutmaster"];
 
@@ -140,9 +153,18 @@ internal sealed partial record PptxAddress
     /// <summary>Stable comment id on the slide (/slide[i]/comment[@id=N]); null otherwise.</summary>
     public uint? CommentId { get; init; }
 
+    /// <summary>1-based embed index on the slide (/slide[i]/embed[k]); null otherwise.</summary>
+    public int? EmbedOrdinal { get; init; }
+
+    /// <summary>Stable embed id on the slide (/slide[i]/embed[@id=N], the host graphicFrame's shape id); null otherwise.</summary>
+    public uint? EmbedId { get; init; }
+
     public int? ParagraphIndex { get; init; }
 
     public int? RunIndex { get; init; }
+
+    /// <summary>1-based equation index inside the shape's text body (/slide[i]/shape[@id=N]/omath[k]); null otherwise.</summary>
+    public int? OMathIndex { get; init; }
 
     /// <summary>True when the path addresses a slide's speaker notes (/slide[i]/notes).</summary>
     public bool IsNotes { get; init; }
@@ -163,6 +185,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses a comment by id (/slide[i]/comment[@id=N]).</summary>
     public bool IsComment => CommentId.HasValue;
+
+    /// <summary>True when the path addresses an embedded object (/slide[i]/embed[k] or /slide[i]/embed[@id=N]).</summary>
+    public bool IsEmbed => EmbedOrdinal.HasValue || EmbedId.HasValue;
+
+    /// <summary>True when the path addresses an equation inside a shape (/slide[i]/shape[@id=N]/omath[k]).</summary>
+    public bool IsOMath => OMathIndex.HasValue;
 
     public bool IsMaster => Root == PptxRootKind.Master;
 
@@ -304,19 +332,50 @@ internal sealed partial record PptxAddress
             return address with { CommentId = uint.Parse(commentMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
         }
 
+        if (EmbedOrdinalSegment().Match(segments[1]) is { Success: true } embedOrdinalMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow embed[k].");
+            }
+
+            return address with { EmbedOrdinal = ParseIndex(embedOrdinalMatch.Groups[1].Value, raw) };
+        }
+
+        if (EmbedIdSegment().Match(segments[1]) is { Success: true } embedIdMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow embed[@id=N].");
+            }
+
+            return address with { EmbedId = uint.Parse(embedIdMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
+        }
+
         var shaped = WithShapeSegment(address, segments[1], raw,
             $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
-            $"shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"embed[k], embed[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
             return shaped;
         }
 
+        // An equation inside a shape's text body: /slide[i]/shape[@id=N]/omath[k] (1-based).
+        if (OMathSegment().Match(segments[2]) is { Success: true } omathMatch)
+        {
+            if (segments.Length > 3)
+            {
+                throw Invalid(raw, "Nothing can follow omath[k].");
+            }
+
+            return shaped with { OMathIndex = ParseIndex(omathMatch.Groups[1].Value, raw) };
+        }
+
         var paragraph = ParagraphSegment().Match(segments[2]);
         if (!paragraph.Success)
         {
-            throw Invalid(raw, $"The third segment must be p[k]; got '{segments[2]}'.");
+            throw Invalid(raw, $"The third segment must be p[k] or omath[k]; got '{segments[2]}'.");
         }
 
         shaped = shaped with { ParagraphIndex = ParseIndex(paragraph.Groups[1].Value, raw) };
@@ -438,6 +497,13 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical comment path (/slide[i]/comment[@id=N]) of the addressed comment.</summary>
     public string CanonicalCommentPath => Units.Inv($"/slide[{SlideIndex}]/comment[@id={CommentId}]");
+
+    /// <summary>The canonical embed path (/slide[i]/embed[@id=N]) of the addressed embed, by its host graphicFrame id.</summary>
+    public string CanonicalEmbedPath(uint id) => Units.Inv($"/slide[{SlideIndex}]/embed[@id={id}]");
+
+    /// <summary>The canonical equation path (/slide[i]/shape[@id=N]/omath[k]) for the host shape id and 1-based index.</summary>
+    public string CanonicalOMathPath(uint shapeId, int index) =>
+        Units.Inv($"/slide[{SlideIndex}]/shape[@id={shapeId}]/omath[{index}]");
 
     /// <summary>The canonical slide-section path (/section[i]) of the addressed section.</summary>
     public string CanonicalSectionPath => Units.Inv($"/section[{SectionIndex}]");

@@ -9,7 +9,7 @@ public sealed partial class ExcelHandler
     private const int DefaultMaxTextBytes = 65536;
 
     private static readonly IReadOnlyList<string> ReadViews =
-        ["outline", "text", "stats", "structure", "csv", "comments", "properties", "styles"];
+        ["outline", "text", "stats", "structure", "csv", "comments", "properties", "styles", "embeds"];
 
     public Envelope Read(CommandContext ctx) => Run(ctx, sw =>
     {
@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use one of: outline, text, stats, structure, csv, comments, properties, styles.",
+                "Use one of: outline, text, stats, structure, csv, comments, properties, styles, embeds.",
                 candidates: ReadViews);
         }
 
@@ -35,6 +35,13 @@ public sealed partial class ExcelHandler
         if (wantStream && view == "text")
         {
             return ReadTextStreamed(ctx, file, sw);
+        }
+
+        // Embeds live in raw package parts ClosedXML cannot see; answer this view
+        // straight from the package without ever loading the workbook DOM.
+        if (view == "embeds")
+        {
+            return Envelope.Ok(ReadEmbeds(file), MetaFor(file, sw));
         }
 
         // outline/structure/csv/comments need the full model; on a big file
@@ -74,6 +81,33 @@ public sealed partial class ExcelHandler
         return Envelope.Ok(
             new { view = "text", content, truncated, streamed = true },
             MetaFor(file, sw, warnings));
+    }
+
+    /// <summary>
+    /// The <c>--view embeds</c> projection: every embedded object in the
+    /// workbook, grouped by sheet, in canonical-path order. Read straight from
+    /// the raw package (ClosedXML cannot see these parts).
+    /// </summary>
+    private static object ReadEmbeds(string file)
+    {
+        var embeds = ExcelEmbeds.ReadAll(file);
+        return new
+        {
+            kind = "xlsx",
+            embeds = embeds
+                .Select(e => new
+                {
+                    path = e.Path,
+                    sheet = e.SheetName,
+                    name = e.Name,
+                    mediaType = e.MediaType,
+                    size = e.Size,
+                    anchor = e.Anchor,
+                    source = e.Source,
+                })
+                .ToList(),
+            totals = new { count = embeds.Count },
+        };
     }
 
     private static object ReadStats(XLWorkbook workbook)
@@ -130,16 +164,19 @@ public sealed partial class ExcelHandler
         // see (or keeps internal); read them raw in one pass.
         List<ChartInfo> allCharts;
         List<SlicerInfo> allSlicers;
+        List<ExcelEmbeds.Info> allEmbeds;
         Dictionary<(string, string), (string?, string?)> pivotSources;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
             allSlicers = ExcelSlicers.Read(document);
+            allEmbeds = ExcelEmbeds.ReadAll(document);
             pivotSources = ExcelPivots.ReadSources(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
         var slicersBySheet = allSlicers.ToLookup(s => s.SheetName, StringComparer.OrdinalIgnoreCase);
+        var embedsBySheet = allEmbeds.ToLookup(e => e.SheetName, StringComparer.OrdinalIgnoreCase);
         return new
         {
             kind = "xlsx",
@@ -197,6 +234,17 @@ public sealed partial class ExcelHandler
                     sparklineGroups = ExcelSparklines.ListGroups(ws),
                     images = ws.Pictures
                         .Select((pic, i) => ExcelImages.Describe(ws, pic, i + 1))
+                        .ToList(),
+                    embeds = embedsBySheet[ws.Name]
+                        .Select(e => new
+                        {
+                            path = e.Path,
+                            name = e.Name,
+                            mediaType = e.MediaType,
+                            size = e.Size,
+                            anchor = e.Anchor,
+                            source = e.Source,
+                        })
                         .ToList(),
                     notes = NoteList(ws),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),

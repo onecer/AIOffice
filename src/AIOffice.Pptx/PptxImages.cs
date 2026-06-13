@@ -20,6 +20,24 @@ internal static class PptxImages
     /// <summary>Sniffed image identity: content type for the part and pixel dimensions.</summary>
     private readonly record struct ImageInfo(PartTypeInfo PartType, string Format, int PixelWidth, int PixelHeight);
 
+    /// <summary>
+    /// Embeds an already-sandbox-resolved PNG/JPEG file as an ImagePart on the slide
+    /// (header-sniffed) and returns its relationship id. Shared by the picture add
+    /// path and the embed-object preview (props.icon) path.
+    /// </summary>
+    public static string EmbedImagePart(SlidePart slidePart, string resolvedSrc)
+    {
+        var bytes = File.ReadAllBytes(resolvedSrc);
+        var info = Sniff(bytes, resolvedSrc);
+        var imagePart = slidePart.AddImagePart(info.PartType);
+        using (var stream = new MemoryStream(bytes, writable: false))
+        {
+            imagePart.FeedData(stream);
+        }
+
+        return slidePart.GetIdOfPart(imagePart);
+    }
+
     /// <summary>Adds the picture and returns its stable shape id.</summary>
     public static uint AddImage(SlidePart slidePart, JsonObject? props, Workspace workspace)
     {

@@ -74,7 +74,7 @@ public sealed partial class ExcelHandler
 
         return target.Kind switch
         {
-            ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet), MetaFor(file, sw)),
+            ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet, file), MetaFor(file, sw)),
             ExcelTargetKind.Cell => Envelope.Ok(
                 CellInfo(target.Sheet, target.Cell!, CommentInfoFor(file, target)), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
@@ -100,6 +100,8 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Table => Envelope.Ok(
                 ExcelTables.Describe(target.Sheet, ExcelTables.Find(target)), MetaFor(file, sw)),
             ExcelTargetKind.Slicer => Envelope.Ok(SlicerTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.Embed => Envelope.Ok(
+                ExcelEmbeds.Describe(ExcelEmbeds.Resolve(file, target)), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -227,7 +229,7 @@ public sealed partial class ExcelHandler
         };
     }
 
-    private static object SheetInfo(IXLWorksheet sheet)
+    private static object SheetInfo(IXLWorksheet sheet, string file)
     {
         var used = sheet.RangeUsed();
         return new
@@ -245,6 +247,9 @@ public sealed partial class ExcelHandler
             freezeRows = sheet.SheetView.SplitRow > 0 ? sheet.SheetView.SplitRow : (int?)null,
             freezeCols = sheet.SheetView.SplitColumn > 0 ? sheet.SheetView.SplitColumn : (int?)null,
             autoFilter = sheet.AutoFilter.IsEnabled ? sheet.AutoFilter.Range?.RangeAddress.ToString() : null,
+            // Embedded objects live in raw package parts ClosedXML cannot see;
+            // surface a count so 'get' on a sheet hints at them (polish, M10).
+            embeds = ExcelEmbeds.ListOnSheet(file, sheet.Name).Count,
             pageSetup = PageSetupInfo(sheet),
         };
     }

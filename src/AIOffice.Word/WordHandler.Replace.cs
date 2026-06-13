@@ -215,7 +215,8 @@ public sealed partial class WordHandler
 
                     case Break or TabChar or NoBreakHyphen or SymbolChar or PositionalTab
                         or FootnoteReference or EndnoteReference or FootnoteReferenceMark or EndnoteReferenceMark
-                        or CommentReference or Drawing or FieldChar or FieldCode or EmbeddedObject or Picture:
+                        or CommentReference or Drawing or FieldChar or FieldCode
+                        or DocumentFormat.OpenXml.Wordprocessing.EmbeddedObject or Picture:
                         pieces.Add(new InlinePiece(child, run, sb.Length, 1));
                         sb.Append(InlineObjectChar);
                         break;

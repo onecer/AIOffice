@@ -20,7 +20,8 @@
 | 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至后续窗口） |
 | 📋 M2 | M2 计划但尚未落地的剩余项（顺延至后续窗口） |
 | ✅ M9 已实现 | M9（v0.10.0，pre-1.0 capstone）交付：三格式共享 **`convert` 动词 + `office_convert` MCP 工具（第 17 个工具，MCP 表面从 16 → 17 工具）**—— 跨格式内容互转，按 (源扩展名, 目标扩展名) 路由：同族文本桥 docx↔md / xlsx↔csv（复用既有桥），跨格式经**内容中立模型**（Core 新增 `NeutralDoc`/`NeutralBlock`/`NeutralRun`/`ImportResult` records + `INeutralConvertible` 接口，三 handler 各实现 ExportNeutral/ImportNeutral）docx↔pptx / docx↔xlsx / pptx↔xlsx / 任意↔md（命令层 `NeutralMarkdown` 序列化器），any→pdf/png/svg/html/txt 经 render 层；转换跨格式本质有损，丢失项（动画/图表/精确样式/公式取值/markdown 不支持的颜色）汇入单条 `convert_lossy` warning + `data.dropped`，目标新建（覆盖既有 → `convert_overwrite` warning），同扩展名 → `invalid_args`（「use edit」），未知目标 → `unsupported_feature`（列出受支持目标）；doctor/`office_status` 新增 **capabilities 自省块**（verbs/MCP 工具数、格式、convert 源/目标、render 目标、audit 类别） |
-| 🗺 1.0 之后 | 深水区余项：pptx/xlsx 公式（复用 `AIOffice.Word.Equations` 转换器，跨格式经共享转换器）、OLE 对象、插件机制、API 稳定性承诺、现代 xlsx 批注打磨、动画预设++、多效果动画链/motion path、dump 回放 |
+| ✅ M10 已实现 | M10（v0.11.0，1.0 前最后一个功能里程碑）交付：三格式 **嵌入对象**（`add type:embed` 把任意文件作为 OLE/包对象，docx `/body`·xlsx `/Sheet1`·pptx `/slide[i]`；`read --view embeds` 列出 `{path,name,mediaType,size,container}`；新增 **`extract`** op 把负载**按位**导出（产出型 op，不改源文档）；`/embed[i]`·`/Sheet1/embed[i]`·`/slide[i]/embed[@id=N]`；src + 目标均经沙箱，媒体类型从源文件嗅探）· **pptx 公式**（M6 LaTeX→OMML 引擎迁入 Core `AIOffice.Core.Equations`，纯 `System.Xml.Linq` 生产器无 OpenXml 依赖；Word 与 Pptx 共用同一转换器；pptx 公式原生渲染于幻灯片文本框，寻址 `/slide[i]/shape[@id=N]/omath[k]`，`get` 回报 LaTeX，未知命令 `equation_partial` 警告；xlsx 按设计 N/A——单元格公式而非公式对象，`add type:equation` 返回 `unsupported_feature`）· **1.0 契约准备**：`read --view properties` / `get /properties` 统一为三格式一致的 `data.properties.{core,custom}`，`schema` 与 `doctor` 声明 `surfaceVersion`（`1.0-rc`），冻结契约写入 [CONTRACT.md](../CONTRACT.md)；嵌入与公式搭载 `office_edit`/`office_read`，仍 17 个 MCP 工具 |
+| 🗺 1.0 之后 | 稳定化（非新功能）：最终跨平台回归扫描、API 冻结签收（`surfaceVersion` 1.0-rc → 1.0）、文档打磨；其后候选：插件机制、xlsx sheetView RTL、现代 xlsx 批注打磨、动画预设++、多效果动画链/motion path、dump 回放 |
 | ❌ 不计划 | 与 AIOffice 设计冲突，或属上游生态/语法专有 |
 
 **M0 元素覆盖范围**（诚实声明）：docx = paragraph / run / table / tr / tc（文本 + 基础字符格式 + 内置样式套用）；xlsx = sheet / cell / range（值、公式、基础字符格式）；pptx = slide / shape / textbox（文本、位置、尺寸）+ 标题占位符。其余元素类型在 M0 一律返回 `unsupported_feature`。
@@ -107,13 +108,13 @@
 | 目录 TOC | 插入（`add type:toc`，levels/title/position）：扫描标题样式生成超链接条目 + TOC 域指令；`/toc[1]` get（entryCount/levels/title）/remove；`read --view structure` 暴露 | ✅ M4 已实现 | `SdtBlock` 容器 + `TOC \o \h \z \u` 域 + PAGEREF 占位（WordHandler.Toc.cs）；页码无后端可算 → 写入时报 `toc_pages_unknown` warning（Word 打开/F9 时重算），诚实不估算 |
 | 派生字段重算 | TOC 页码 / PAGE / NUMPAGES / 交叉引用刷新 | 🗺 M3 | 无 Word 后端可依赖：headless 渲染估算页码（上游非 Windows 同样是估算） |
 | 图表 | chart + chart-axis / chart-series 子实体 | 📋 M2 | `ChartPart`（DrawingML charts，与 xlsx/pptx 共享实现） |
-| 公式（equation） | OMML 数学公式读写：`add type:equation`（latex + display），行内 `/body/p[i]/omath[j]` get 回报存档 LaTeX，`read --view text` 显示 `$…$`/`$$…$$` 标记 | ✅ M6 已实现 | 自研 LaTeX → OMML 转换器（无 LaTeX 依赖，`AIOffice.Word.Equations`）：分式/根式/上下标/大型算符/矩阵（pmatrix/bmatrix/…）/`\left\right`/重音/`\text`/希腊字母/算符关系；未知命令降级为字面 run + `equation_partial` warning（文件仍校验通过）；原始 LaTeX 以 `mc:Ignorable` 厂商属性存档，round-trip 字节忠实；pptx/xlsx 公式 → 🗺 M9 |
+| 公式（equation） | OMML 数学公式读写（**docx + pptx**）：`add type:equation`（latex + display），docx 行内 `/body/p[i]/omath[j]`、pptx `/slide[i]/shape[@id=N]/omath[k]`，`get` 回报存档 LaTeX，docx `read --view text` 显示 `$…$`/`$$…$$` 标记；xlsx N/A（单元格公式而非公式对象 → `unsupported_feature`） | ✅ M6（docx）+ ✅ M10（pptx）已实现 | 自研 LaTeX → OMML 转换器（无 LaTeX 依赖）；M10 起引擎迁入 Core `AIOffice.Core.Equations`（纯 `System.Xml.Linq` 生产器 `OmmlMath`，无 `DocumentFormat.OpenXml` 依赖），Word（载入 SDK 数学模型）与 Pptx（`mc:AlternateContent`/`a14:m`/`m:oMathPara` 文本框内 OMML）共用；分式/根式/上下标/大型算符/矩阵/`\left\right`/重音/`\text`/希腊字母/算符关系；未知命令降级为字面 run + `equation_partial` warning（文件仍校验通过）；原始 LaTeX 以 `mc:Ignorable` 厂商属性存档，round-trip 忠实 |
 | 水印 | 文本水印（`add type:watermark`，text/diagonal/color），写入每个页眉；`/watermark[1]` get/remove；无页眉时自动建默认页眉 | ✅ M4 已实现 | 页眉内 VML `v:shape`（WordHandler.Watermark.cs，PowerPlusWaterMarkObject 命名对齐 Word）；图片水印 → 📋 余项 |
 | 表单域 | formfield 读写 + 表单字段清单导出 | 🗺 M3 | `FormFieldData` 系列 |
 | 内容控件（sdt） | `add type:contentControl`：text / dropdown（items + 选中校验）/ date（ISO→yyyy-MM-dd）/ checkbox（checked），title/tag；`/sdt[@tag=X]` 或 `/sdt[i]` set 写值、`read --view fields` 清单（kind/tag/title/value/items）、remove 默认保内容；body 与页眉页脚均可 | ✅ M7 已实现 | `SdtBlock` 块级内容控件（WordHandler.ContentControls.cs）：text=`SdtContentText`、dropdown=`SdtContentDropDownList`、date=`SdtContentDate`、checkbox=w14 `SdtContentCheckBox`（自动声明 w14 mc:Ignorable 保校验）；tag 唯一；行内 sdt run / repeatingSection → 📋 余项 |
 | 修订（track changes） | 文本级 ins/del 写入（`--track --author`）、accept/reject（按 `/revision[@id=N]` 或范围）、`read --view revisions`；M3 起 accept/reject 同样处理**格式修订**（w:rPrChange/w:pPrChange，reject 还原旧格式） | ✅ M2 已实现（M3 + 格式修订处理） | `InsertedRun`/`DeletedRun` + `RunPropertiesChange`/`ParagraphPropertiesChange`（WordHandler.Track.cs）；M4 起 `op:replace` + `track:true` 逐命中生成 w:del+w:ins 修订对（body 作用域）；**写入** tracked 格式变更、moveFrom/moveTo → 🗺 M3 |
 | 编辑权限范围 | permStart/permEnd 区域授权 | 🗺 M3 | `PermStart` / `PermEnd` |
-| OLE 对象 | 嵌入对象读写、二进制导出 | 🗺 M3 | `EmbeddedObjectPart` |
+| OLE 对象（嵌入文件） | 把任意文件作为 OLE/包对象嵌入文档、列出、按位导出：`add type:embed`（`src` 必经沙箱 + `name`/`icon`），`read --view embeds` 列出 `{path,name,mediaType,size,container}`，新增 **`extract`** op 写回 `to`（沙箱解析，产出型——不改源文档），`remove` 删除；寻址 `/embed[i]`，媒体类型从源文件嗅探，负载 round-trip 字节级一致 | ✅ M10 已实现 | `EmbeddedPackagePart`（任意文件作包对象）+ docx `w:object`/`o:OLEObject` VML 外观（WordHandler.Embeds.cs）；Core 新增 `IEmbedHost` 接口 + `EmbeddedObject` record，三 handler 各实现 |
 | 制表位 | tabs 简写、ptab | 📋 M2 | `Tabs` / `PositionalTab` |
 | 文档默认值 | docDefaults 默认字体/字号 | 🔜 M1 | `DocDefaults`（StylesPart 内） |
 | 文档设置 | autoHyphenation、evenAndOddHeaders、docGrid、CJK spacing、protection=forms | 📋 M2 | `SettingsPart`（`Settings` 子元素族） |
@@ -164,7 +165,7 @@
 | CSV/TSV 导入 | `create --from data.csv`（见跨格式「CSV/TSV 导入 xlsx」行）；`read --view csv [--sheet][--range]` 反向导出 | ✅ M5 已实现 | 自研解析 + ClosedXML/SAX 写入（ExcelCsv.cs / ExcelHandler.Csv.cs）；stdin、表头→AutoFilter+冻结、起始单元格 → 📋 余项 |
 | 行按列名查询 | `row[Salary>5000]` 式按表头列名过滤 | 📋 M2 | 自研：表头行映射 + 选择器扩展 |
 | 大工作簿流式读取 | 超过 20 MB（或 `stream:true`）自动走 SAX：`read --view stats/text`、单元格/区域 `get` 不加载 DOM、按需提前停 | ✅ M3 已实现 | `OpenXmlPartReader` 原始扫描（ExcelStreaming.cs）；41 MB / 33 万行 stats ≈ 2 秒；流式**写**通道：批量 2D 写入空白 sheet（M4，ExcelBulkWrites.cs）、csv 导入（M5，同一 SAX 路径），M6 起**既有大 sheet 就地流式写入**（见区域寻址行「就地流式写入」，整批可流式时不再 ClosedXML 全量加载） |
-| OLE 对象 | 嵌入对象、preview 图 | 🗺 M3 | OpenXml `EmbeddedObjectPart` |
+| OLE 对象（嵌入文件） | 把任意文件作为嵌入包对象锚定到工作表、列出、按位导出：`add type:embed`（`/Sheet1`，`src` 沙箱 + `name`），`read --view embeds`，`extract` op 写回 `to`（沙箱、产出型），`remove`；寻址 `/Sheet1/embed[i]`，负载 round-trip 字节级一致 | ✅ M10 已实现 | `EmbeddedPackagePart` 挂工作表 part + 工作簿 custom property 记账（ExcelEmbeds.cs）；实现 Core `IEmbedHost` |
 | RTL | sheetView rightToLeft、cell/comment direction | 🗺 M9 | OpenXml `SheetView.RightToLeft`（M6 RTL 只覆盖 docx；xlsx sheetView RTL 顺延 M9） |
 | 拼音指引（phonetic） | 东亚文本 phonetic runs | 🗺 M3 | OpenXml `PhoneticRun` |
 
@@ -204,7 +205,7 @@
 | 媒体（video/audio） | 嵌入/链接、loop、autoStart | 🗺 M3 | `VideoReferenceRelationship` + `p:nvPr` media |
 | 公式（equation） | OMML 公式形状 | 🗺 M9 | `a14:m` 内嵌 Math（M6 公式已落地 docx；pptx 公式形状顺延 M9，复用 `AIOffice.Word.Equations` 转换器） |
 | zoom | summary / section / slide zoom 跳转对象 | 🗺 M3 | p15 `sectionZoom`/`slideZoom` |
-| OLE 对象 | 嵌入对象 + preview 图 | 🗺 M3 | `graphicFrame` + `p:oleObj` |
+| OLE 对象（嵌入文件） | 把任意文件作为 OLE 对象嵌入幻灯片、列出、按位导出：`add type:embed`（`/slide[i]`，`src` 沙箱 + `name`/`icon`/`x`/`y`/`w`/`h`），`read --view embeds`，`extract` op 写回 `to`（沙箱、产出型），`remove`；寻址 `/slide[i]/embed[@id=N]`，负载 round-trip 字节级一致 | ✅ M10 已实现 | `graphicFrame` + `p:oleObj`（embed）+ `p:pic` fallback + `EmbeddedPackagePart`（PptxEmbeds.cs）；实现 Core `IEmbedHost`，host frame 的 shape id 即稳定 embed id |
 | 3D 模型 | glTF 模型嵌入、rotation=ax,ay,az | 🗺 M3 | am3d 扩展 part |
 | SmartArt | **只读**落地（M5）：`read --view structure` 逐片列出 smartArt、`get /slide[i]/smartart[k]` 输出连接序嵌套节点树（text/children）、宿主 frame 回指 smartArtPath、query 可命中；编辑报 `unsupported_feature` + workaround | ✅ M5 已实现（只读） | `DiagramDataPart` 走查（PptxSmartArt.cs）；写入（data/layout/colors part 组）→ 🗺 深水区 |
 | 超链接 / 动作 | 形状点击动作 `set {hyperlink}`：外链 url / 幻灯片跳转 `#slide:N` / 放映动作 `#first`·`#last`·`#next`·`#prev`·`#end`，空串清除；文本超链接 `set {linkText}`（同目标语法包裹 runs）；`get` 回读规范形式（url / `#slide:N` / `#first…`） | ✅ M8 已实现 | `a:hlinkClick`（url → `r:id` 关系、跳转 → `ppaction://hlinksldjump`、放映 → `ppaction://hlinkshowjump?jump=…`）（PptxHyperlinks.cs）；tooltip → 📋 余项 |
@@ -218,13 +219,13 @@
 
 ## 4. 统计
 
-| 范围 | ✅ 已实现（M0–M9） | 🔜 M1 余项 | 📋 M2 余项 | 🗺 1.0 之后 | ❌ 不计划 | 合计 |
+| 范围 | ✅ 已实现（M0–M10） | 🔜 M1 余项 | 📋 M2 余项 | 🗺 1.0 之后 | ❌ 不计划 | 合计 |
 |---|---|---|---|---|---|---|
 | 跨格式通用 | 30 | 3 | 5 | 2 | 3 | 43 |
-| docx | 24 | 1 | 6 | 5 | 0 | 36 |
-| xlsx | 26 | 4 | 6 | 5 | 0 | 41 |
-| pptx | 21 | 3 | 5 | 10 | 0 | 39 |
-| **合计** | **101** | **11** | **22** | **22** | **3** | **159** |
+| docx | 25 | 1 | 6 | 4 | 0 | 36 |
+| xlsx | 27 | 4 | 6 | 4 | 0 | 41 |
+| pptx | 23 | 3 | 5 | 8 | 0 | 39 |
+| **合计** | **105** | **11** | **22** | **18** | **3** | **159** |
 
 > 解读：M0 的 31 项里有相当一部分是 AI 原生层（envelope、快照、rev、sandbox、schema、MCP）—— 这是 AIOffice 的差异化地基，上游完全没有。格式能力本身（docx 4 / xlsx 5 / pptx 5）在 M0 刻意收窄到"段落、单元格、形状"三个最小核心，换取每一项都带测试、过 `OpenXmlValidator`、守住 round-trip 字节一致律。
 >
@@ -245,3 +246,5 @@
 > M8（v0.9.0，对比与审阅）新增翻绿（含 4 个新行：跨格式**语义对比 diff**、docx**题注/交叉引用**、xlsx**切片器**、pptx**形状超链接/动作**）：三格式共享 **`diff` 动词 + `office_diff` MCP 工具（第 16 个工具，MCP 表面从 15 → 16 工具）** —— 语义对比当前文档与基线（同格式文件 `other` 或自身快照 `--snapshot N`，跨格式 → `invalid_args`），返回**已排序、跨平台确定性**变更清单 `{changes:[{kind:added\|removed\|modified\|moved, path, before?, after?, detail?}], summary, baseline}`（按 `(path, kind)` 序贯排序，LCS/内容哈希区分 moved），变更是数据（`ok:true`/exit 0），`--view summary\|detailed`，快照 diff 工作流（`diff f --snapshot 1` = 上次编辑变更集）；docx **题注（Figure/Table/Equation + SEQ）/交叉引用（REF/PAGEREF + show 模式）** 翻绿，寻址 `/caption[@label=…][i]`；xlsx **切片器（表列 / 透视字段，原始 OpenXml 自研）** 翻绿，寻址 `/Sheet1/slicer[i]`；pptx **形状超链接/动作（url / `#slide:N` / `#first…#end` 放映动作 / linkText）** 翻绿。Core 增量：`IDiffer` 接口 + `DiffChange`/`DiffResult`/`DiffSummary` records（`DiffResult.FromChanges` 序贯排序，三 handler 各实现，命令层共享 `DiffVerb`）。深水区余项整体顺延 M9（跨格式 docx↔pptx 转换已于 M9 交付，见下；pptx/xlsx 公式复用 `AIOffice.Word.Equations`、OLE 对象、插件机制、API 稳定性承诺、动画预设++ 顺延 1.0 之后）。
 
 > M9（v0.10.0，pre-1.0 capstone）新增翻绿（1 个新行：跨格式**互转 convert**，并统一既有 md/csv 桥与 pdf 渲染入口）：三格式共享 **`convert` 动词 + `office_convert` MCP 工具（第 17 个工具，MCP 表面从 16 → 17 工具）** —— 跨格式内容互转，按 (源扩展名, 目标扩展名) 路由：同族文本桥 **docx↔md**（markdown 桥）/ **xlsx↔csv**（csv 桥）复用既有代码，跨格式经**内容中立模型**（`INeutralConvertible`：源 `ExportNeutral` → 目标 `ImportNeutral`）覆盖 **docx↔pptx / docx↔xlsx / pptx↔xlsx / 任意↔md**（md 经命令层 `NeutralMarkdown` 序列化器，故任意 office 格式可转 md），**any→pdf/png/svg/html/txt** 经 render 层；转换跨格式本质有损 —— 丢失项（动画/图表/SmartArt/精确样式/公式取值/markdown 不支持的颜色与下划线）汇入单条 `convert_lossy` warning + `data.dropped`，目标**新建**（覆盖既有 → `convert_overwrite` warning），同扩展名 → `invalid_args`（「use edit」），未知目标 → `unsupported_feature`（列出受支持目标）；envelope `data:{from,to,blocksWritten,dropped:[…],written}`。Core 增量：`NeutralDoc`/`NeutralBlock`/`NeutralRun`/`ImportResult` records + `INeutralConvertible` 接口（与 M7 `IAuditor`、M8 `IDiffer` 同模式：Core 定义、三 handler 各实现）；命令层 `ConvertVerb` + `NeutralMarkdown`（CLI `convert` 与 MCP `office_convert` 同产物）。**1.0 加固**：每个 CLI 动词均有 help 主题并出现在 `schema`（新增 `convert` help 主题：(src→dest) 矩阵 + 有损说明 + 示例）；`doctor` / `office_status` 新增 **capabilities 自省块**（verbs 数 / MCP 工具数 / 支持格式 / convert 源与目标 / render 目标 / audit 类别），一次调用即可自省全表面。**Toward 1.0** 余项：pptx/xlsx 公式（经共享转换器）、OLE 对象、插件机制、API 稳定性承诺。
+
+> M10（v0.11.0，1.0 前最后一个功能里程碑）新增翻绿 4 项（docx/xlsx/pptx 三个 **OLE 对象（嵌入文件）** 行从 🗺 → ✅，pptx **公式** 从 1.0-之后 → ✅；公式 docx 行从「pptx/xlsx → 🗺」改写为「docx + pptx 已实现，xlsx N/A」）：三格式 **嵌入对象**（`add type:embed` 把任意文件作为 OLE/包对象嵌入，`read --view embeds` 列出元数据，新增 **`extract`** op 把负载按位导出——产出型 op，不改源文档，extract-after-roundtrip 字节一致；`remove` 删除；src 与 extract 目标均经沙箱，媒体类型从源文件嗅探）；**pptx 公式**经迁入 Core 的共享 LaTeX→OMML 转换器（`AIOffice.Core.Equations` 的 `OmmlMath`，纯 `System.Xml.Linq` 生产器、无 `DocumentFormat.OpenXml` 依赖；Word 与 Pptx 共用同一引擎，docx 行为不变，全部既有 docx 公式测试保持通过；pptx 公式以 `mc:AlternateContent`/`a14:m`/`m:oMathPara` 原生 OMML 落在幻灯片文本框，validator 全绿，LaTeX 存档可回读，未知命令 `equation_partial` 警告），xlsx 按设计 N/A（单元格公式而非公式对象 → `unsupported_feature` 并指明替代方案）。Core 增量：`IEmbedHost` 接口 + `EmbeddedObject` record（与 `IAuditor`/`IDiffer`/`INeutralConvertible` 同模式：Core 定义、三 handler 各实现 `ListEmbeds`/`ExtractEmbed`），及共享公式引擎 `AIOffice.Core.Equations`（`LatexLexer`/`LatexParser`/`LatexSymbols`/`MathNode`/`OmmlMath`）。**1.0 契约准备**：`read --view properties` / `get /properties` 信封**统一**为三格式一致的 `data.properties.{core,custom}`（此前 docx 嵌套、xlsx/pptx 扁平），新增 `extract` op kind + `embeds` view + 三条嵌入寻址 + pptx `omath` 寻址全部经真实 `EditOp.ParseBatch`/`DocPath`/`PptxAddress` 网关；`schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**（`1.0-rc`）；冻结的面向 AI 契约（信封 / 错误码 / 寻址 / 退出码 / op·view·工具词表）写入 [CONTRACT.md](../CONTRACT.md)。嵌入与公式都搭载在 `office_edit`/`office_read`/`office_get` 上 —— MCP 表面仍为 **17 个工具**。**Toward 1.0** 仅余稳定化：最终跨平台回归扫描、API 冻结签收（`surfaceVersion` 1.0-rc → 1.0）、文档打磨。

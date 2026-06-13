@@ -26,7 +26,8 @@ public static class HelpTopics
                 - audit           accessibility + quality lint codes + --fix semantics (M7)
                 - diff            semantic compare two files / a snapshot: change kinds + the workflow (M8)
                 - bridges         markdown↔docx and csv↔xlsx import/export (M5)
-                - equations       docx LaTeX → Office Math: the supported subset (M6)
+                - equations       LaTeX → Office Math (docx + pptx): the supported subset (M6/M10)
+                - embeds          embed/list/extract files as OLE objects in docx/xlsx/pptx (M10)
                 - rtl             right-to-left paragraph/run/table (M6)
                 - docx/paragraph  paragraph element: settable props (incl. rtl)
                 - docx/table      deep tables: merges, borders, shading, widths, rtl (M5/M6)
@@ -41,6 +42,7 @@ public static class HelpTopics
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins + columns (M3/M6)
                 - docx/equation   inline/display LaTeX equations (M6)
+                - pptx/equation   LaTeX equations in a slide text box (M10)
                 - xlsx/cell       cell element: settable props incl. hyperlink (M5)
                 - xlsx/table      Excel Tables (ListObjects) + totals + structured refs (M6)
                 - xlsx/group      row/column outline grouping (M6)
@@ -556,19 +558,25 @@ public static class HelpTopics
 
             ["equations"] = (
                 """
-                ## equations (M6) — LaTeX in, Office Math out (docx)
-                Add: {"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"E = mc^2","display":false}}
+                ## equations — LaTeX in, Office Math out (docx + pptx)
+                docx add: {"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"E = mc^2","display":false}}
                      display:true -> centered block (m:oMathPara); false (default) -> inline at /body/p[i]/omath[j].
-                Read: office_get /body/p[i]/omath[j] -> {latex, display} (your source, stored verbatim).
-                      office_read {view:"text"} shows $…$ (inline) / $$…$$ (display) markers.
-                Subset: x^2 a_i ; \\frac \\dfrac \\sqrt ; \\sum \\prod \\int \\lim with _/^ ;
+                pptx add: {"op":"add","path":"/slide[1]","type":"equation","props":{"latex":"x = \\frac{1}{2}"}}
+                     -> a text box holding the OMML; or target /slide[i]/shape[@id=N] to append to that box.
+                     pptx path: /slide[i]/shape[@id=N]/omath[k].
+                Read: office_get <omath path> -> {latex, ...} (your source, stored verbatim).
+                      docx office_read {view:"text"} shows $…$ (inline) / $$…$$ (display) markers.
+                Subset (the SAME shared converter for both formats): x^2 a_i ; \\frac \\dfrac \\sqrt ;
+                        \\sum \\prod \\int \\lim with _/^ ;
                         \\begin{pmatrix|bmatrix|Bmatrix|vmatrix|matrix}…&…\\\\…\\end{…} ; \\left( \\right) ;
                         \\bar \\overline ; \\text \\mathrm \\mathbf ; Greek \\alpha..\\omega ;
                         \\pm \\times \\cdot \\leq \\geq \\neq \\infty \\partial \\nabla \\rightarrow ; spacing \\, \\quad.
                 Unknown commands degrade to literal runs + an equation_partial warning (file still validates).
-                docx only in M6 (pptx/xlsx equations are M7). Tracked-changes does not record equation adds.
+                xlsx has NO equation object (Excel carries cell formulas, not OMML math): add type "equation"
+                on xlsx returns unsupported_feature — put the math in a cell formula or embed a rendered image.
+                Tracked-changes (docx) does not record equation adds.
                 """,
-                ["docx/equation", "rtl"]),
+                ["docx/equation", "pptx/equation", "rtl"]),
 
             ["docx/equation"] = (
                 """
@@ -577,6 +585,33 @@ public static class HelpTopics
                 Inline path: /body/p[i]/omath[j]. See office_help {topic:"equations"} for the supported LaTeX subset.
                 """,
                 ["equations", "docx/paragraph"]),
+
+            ["pptx/equation"] = (
+                """
+                ## pptx equations (M10) — add type "equation"
+                props: latex (required, the LaTeX source) ; x,y,w,h (place a new text box) ; fontSize (the fallback run).
+                Target /slide[i] to create a text box for the equation, or /slide[i]/shape[@id=N] to append to one.
+                Canonical path: /slide[i]/shape[@id=N]/omath[k]. office_get returns {latex}. remove drops the equation.
+                Stored as native OMML inside an mc:AlternateContent / a14:m (the form PowerPoint writes), validator-clean.
+                Same LaTeX subset and equation_partial behaviour as docx — see office_help {topic:"equations"}.
+                """,
+                ["equations", "pptx/shape"]),
+
+            ["embeds"] = (
+                """
+                ## embedded objects (M10) — embed/list/extract files in docx/xlsx/pptx
+                Embed any file (a source .xlsx attached to a report, a .pdf, a .zip…) as an OLE/package object.
+                Add: {"op":"add","path":"CONTAINER","type":"embed","props":{"src":"data.xlsx","name":"optional","icon":"optional png/jpeg"}}
+                     docx CONTAINER = /body (or a tc/header/footer); xlsx = /Sheet1 (anchored); pptx = /slide[i].
+                     The media type is sniffed from the file; the op returns the canonical embed path.
+                List: office_read {view:"embeds"} -> every embed's {path, name, mediaType, size, container}.
+                      structure view also includes embeds. office_get on an embed path returns metadata, NOT the bytes.
+                Extract: {"op":"extract","path":"/embed[1]","props":{"to":"out/data.xlsx"}}  (a producing op; does NOT
+                     modify the source document). Paths: docx /embed[i]; xlsx /Sheet1/embed[i]; pptx /slide[i]/embed[j]
+                     or /slide[i]/embed[@id=N]. The extracted bytes are byte-identical to what was embedded.
+                Remove: the normal remove op on the embed path. The src and the extract dest are both sandbox-resolved.
+                """,
+                ["addressing", "edit-ops"]),
 
             ["rtl"] = (
                 """

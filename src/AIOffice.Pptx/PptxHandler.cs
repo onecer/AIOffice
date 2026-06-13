@@ -17,9 +17,9 @@ namespace AIOffice.Pptx;
 /// file is only rewritten when every op succeeded) and snapshot the pre-image
 /// when a <see cref="SnapshotStore"/> is provided.
 /// </summary>
-public sealed partial class PptxHandler : IFormatHandler
+public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
 {
-    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure", "comments", "properties"];
+    private static readonly IReadOnlyList<string> Views = ["outline", "text", "stats", "structure", "comments", "properties", "embeds"];
     private static readonly IReadOnlyList<string> RenderTargets = ["svg", "html", "text"];
 
     [GeneratedRegex(@"^([0-9]+)(?:\.\.([0-9]+))?$")]
@@ -59,7 +59,7 @@ public sealed partial class PptxHandler : IFormatHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}' for pptx.",
-                "Use --view outline, text, stats, structure or comments.",
+                "Use --view outline, text, stats, structure, comments, properties or embeds.",
                 candidates: Views);
         }
 
@@ -81,6 +81,7 @@ public sealed partial class PptxHandler : IFormatHandler
             "text" => BuildTextView(slides),
             "stats" => BuildStats(slides),
             "comments" => PptxComments.CommentsView(presentation, slides.Select(s => (s.Index, s.Part))),
+            "embeds" => BuildEmbedsView(presentation),
             _ => BuildStructure(presentation, slides),
         };
     });
@@ -147,6 +148,16 @@ public sealed partial class PptxHandler : IFormatHandler
             return PptxComments.Detail(presentation, address);
         }
 
+        if (address.IsEmbed)
+        {
+            return PptxEmbeds.Detail(presentation, address);
+        }
+
+        if (address.IsOMath)
+        {
+            return PptxEquations.Detail(presentation, address);
+        }
+
         if (address.IsMaster)
         {
             return address.HasShape
@@ -192,6 +203,7 @@ public sealed partial class PptxHandler : IFormatHandler
 
         var results = new List<object>();
         int slideCount;
+        var mutated = false;
         using var stream = PptxDoc.LoadStream(file);
         using (var doc = PptxDoc.Open(stream, editable: true, file))
         {
@@ -199,6 +211,12 @@ public sealed partial class PptxHandler : IFormatHandler
             foreach (var op in ops)
             {
                 var outcome = PptxEditor.Apply(doc, presentation, op, ctx.Workspace);
+                mutated |= outcome.Mutated;
+                if (outcome.Warnings is { Count: > 0 } opWarnings)
+                {
+                    warnings.AddRange(opWarnings);
+                }
+
                 if (outcome.Replacements is { } replacements)
                 {
                     results.Add(new
@@ -225,9 +243,15 @@ public sealed partial class PptxHandler : IFormatHandler
             slideCount = PptxDoc.Slides(presentation).Count;
         }
 
-        // Every op succeeded: snapshot the pre-image, then write atomically.
-        _snapshots?.Save(file);
-        File.WriteAllBytes(file, stream.ToArray());
+        // Producing-only batches (extract) read the deck but must not rewrite it —
+        // re-serializing could perturb embedded sub-packages and the rev. Only
+        // snapshot + write when at least one op actually mutated the document.
+        if (mutated)
+        {
+            _snapshots?.Save(file);
+            File.WriteAllBytes(file, stream.ToArray());
+        }
+
         return new { Applied = ops.Count, Results = results, Slides = slideCount };
     });
 
@@ -346,6 +370,45 @@ public sealed partial class PptxHandler : IFormatHandler
         File.WriteAllBytes(output, stream.ToArray());
         return new { Replacements = replacements, Output = output };
     });
+
+    // ---- IEmbedHost (M10) ---------------------------------------------------
+
+    /// <summary>Lists every embedded object in the deck, in canonical-path order.</summary>
+    public IReadOnlyList<EmbeddedObject> ListEmbeds(CommandContext ctx)
+    {
+        var file = ctx.File ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            "Listing embeds requires a target file.",
+            "Pass the .pptx path to read from.");
+
+        using var stream = PptxDoc.LoadStream(file);
+        using var doc = PptxDoc.Open(stream, editable: false, file);
+        var presentation = PptxDoc.RequirePresentationPart(doc, file);
+        return PptxEmbeds.List(presentation);
+    }
+
+    /// <summary>Writes the addressed embed's payload to <paramref name="destPath"/> (already sandbox-resolved); the deck is not modified.</summary>
+    public void ExtractEmbed(CommandContext ctx, string embedPath, string destPath)
+    {
+        var file = ctx.File ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            "Extracting an embed requires a target file.",
+            "Pass the .pptx path to read from.");
+
+        var address = PptxAddress.Parse(embedPath);
+        if (!address.IsEmbed)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{embedPath}' is not an embed path.",
+                "Use /slide[i]/embed[k] or /slide[i]/embed[@id=N]; run 'aioffice read <file> --view embeds' to list them.");
+        }
+
+        using var stream = PptxDoc.LoadStream(file);
+        using var doc = PptxDoc.Open(stream, editable: false, file);
+        var presentation = PptxDoc.RequirePresentationPart(doc, file);
+        PptxEmbeds.Extract(presentation, address, destPath);
+    }
 
     // ---- shared plumbing ----------------------------------------------------
 
@@ -588,6 +651,25 @@ public sealed partial class PptxHandler : IFormatHandler
         return new { View = "stats", Slides = slides.Count, Shapes = shapeCount, Words = words, Characters = characters };
     }
 
+    /// <summary>The embedded-objects view: every embed's metadata (path, name, mediaType, size), never bytes.</summary>
+    private static object BuildEmbedsView(PresentationPart presentation)
+    {
+        var embeds = PptxEmbeds.List(presentation);
+        return new
+        {
+            View = "embeds",
+            Count = embeds.Count,
+            Embeds = embeds.Select(e => new
+            {
+                Path = e.Path,
+                Name = e.Name,
+                MediaType = e.MediaType,
+                Size = e.Size,
+                Container = e.Container,
+            }).ToList<object>(),
+        };
+    }
+
     private static object BuildStructure(PresentationPart presentation, List<SlideRef> slides)
     {
         var size = presentation.Presentation?.SlideSize;
@@ -629,6 +711,7 @@ public sealed partial class PptxHandler : IFormatHandler
             {
                 var animations = PptxAnimations.List(s.Part);
                 var smartArts = PptxSmartArt.List(s.Part);
+                var embeds = PptxEmbeds.SlideEmbeds(s.Part, s.Index);
                 return new
                 {
                     Path = Units.Inv($"/slide[{s.Index}]"),
@@ -659,6 +742,15 @@ public sealed partial class PptxHandler : IFormatHandler
                     SmartArt = smartArts.Count == 0
                         ? null
                         : smartArts.Select(d => PptxSmartArt.StructureRow(s.Part, s.Index, d.Index, d.View, d.Part)).ToList(),
+                    Embeds = embeds.Count == 0
+                        ? null
+                        : embeds.Select(e => (object)new
+                        {
+                            Path = e.Path,
+                            Name = e.Name,
+                            MediaType = e.MediaType,
+                            Size = e.Size,
+                        }).ToList(),
                 };
             }).ToList<object>(),
         };

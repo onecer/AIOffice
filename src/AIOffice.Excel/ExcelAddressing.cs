@@ -22,6 +22,7 @@ internal enum ExcelTargetKind
     Comment,
     Table,
     Slicer,
+    Embed,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -75,6 +76,9 @@ internal sealed record ExcelTarget
 
     /// <summary>Slicer name when <see cref="Kind"/> is Slicer and the path used <c>[@name=…]</c>.</summary>
     public string? SlicerName { get; init; }
+
+    /// <summary>1-based per-sheet embed index when <see cref="Kind"/> is Embed.</summary>
+    public int? EmbedIndex { get; init; }
 }
 
 /// <summary>
@@ -316,13 +320,18 @@ internal static partial class ExcelPaths
                 segment.Index is { } slicerIndex:
                 return new ExcelTarget { Kind = ExcelTargetKind.Slicer, Sheet = sheet, SlicerIndex = slicerIndex };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "embed", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } embedIndex:
+                return new ExcelTarget { Kind = ExcelTargetKind.Embed, Sheet = sheet, EmbedIndex = embedIndex };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
                     $"'{segment.ToCanonicalString()}' is not a cell, range, row[n], col[C], chart[n], pivot[n], " +
-                    $"conditionalFormat[n], image[n], dataValidation[n], sparkline[n], slicer[n] or comment[@id=…] in: {pathText}",
+                    $"conditionalFormat[n], image[n], dataValidation[n], sparkline[n], slicer[n], embed[n] or comment[@id=…] in: {pathText}",
                     "After the sheet name use A1, A1:C10, row[3], col[C], chart[1], pivot[1] (or pivot[@name=X]), " +
-                    "conditionalFormat[1], image[1], dataValidation[1], sparkline[1], slicer[1] or comment[@id=GUID]; " +
+                    "conditionalFormat[1], image[1], dataValidation[1], sparkline[1], slicer[1], embed[1] or comment[@id=GUID]; " +
                     "column letters are uppercase.",
                     candidates: ExampleTargets(sheet));
         }
@@ -350,6 +359,9 @@ internal static partial class ExcelPaths
 
     public static string SlicerPath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/slicer[{index}]");
+
+    public static string EmbedPath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/embed[{index}]");
 
     /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
     public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>

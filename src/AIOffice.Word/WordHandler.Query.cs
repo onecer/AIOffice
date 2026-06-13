@@ -121,6 +121,14 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "embed":
+                {
+                    var (embedPath, properties) = GetEmbedProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = embedPath, type = "embed", properties },
+                        meta);
+                }
+
                 case "footnote":
                 {
                     var properties = GetFootnoteProperties(doc, docPath);

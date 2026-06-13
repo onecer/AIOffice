@@ -1,11 +1,11 @@
-namespace AIOffice.Word.Equations;
+namespace AIOffice.Core.Equations;
 
 /// <summary>
 /// The literal-symbol vocabulary of the supported LaTeX subset: Greek letters,
 /// binary/relational operators, arrows and named constants, each mapped to the
-/// Unicode character Word stores in OMML. These are commands that emit a single
-/// math text run (no arguments); structural commands (\frac, \sqrt, …) are
-/// handled by the parser, not this table.
+/// Unicode character OMML stores. These are commands that emit a single math text
+/// run (no arguments); structural commands (\frac, \sqrt, …) are handled by the
+/// parser, not this table.
 /// </summary>
 internal static class LatexSymbols
 {

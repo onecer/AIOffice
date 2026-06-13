@@ -48,7 +48,7 @@ public static class SurfaceSchema
 
         Verb("read", "Read a document as outline, plain text, stats, structure, properties, markdown (docx), csv (xlsx) and more.", "office_read",
             [("file", "document path"),
-             ("--view", "outline|text|stats|structure|properties (default outline; properties = core+custom doc props, all formats); docx adds revisions|comments|styles|fields|markdown (fields = content controls); xlsx adds csv|styles (named cell styles)"),
+             ("--view", "outline|text|stats|structure|properties|embeds (default outline; properties = core+custom doc props under data.properties.{core,custom}, all formats; embeds = embedded OLE/package objects, all formats); docx adds revisions|comments|styles|fields|markdown (fields = content controls); xlsx adds csv|styles (named cell styles)"),
              ("--range", "scope 'a..b' (1-based): paragraphs/slides/rows; csv view also takes A1:C10"),
              ("--sheet", "csv view: sheet name (default first)"),
              ("--max-bytes", "cap payload; truncation flagged in warnings")],
@@ -68,7 +68,7 @@ public static class SurfaceSchema
             [ErrorCodes.InvalidPath, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
             [("aioffice get data.xlsx /Sheet1/B2", "value, valueType, formula, numberFormat")]),
 
-        Verb("edit", "Apply an atomic batch of set/add/remove/move/replace ops: all-or-nothing single save, auto-snapshot, optional rev guard.", "office_edit",
+        Verb("edit", "Apply an atomic batch of set/add/remove/move/replace/accept/reject/extract ops: all-or-nothing single save, auto-snapshot, optional rev guard. add types include embed (any file as an OLE object) and equation (LaTeX→OMML, docx+pptx); extract writes an embedded object's bytes back out.", "office_edit",
             [("file", "document path"),
              ("--ops", "JSON array of ops, or @ops.json"),
              ("--set/--add/--remove", "single-op sugar: --set <path> k=v..., --add <path> --type T k=v..., --remove <path>"),
@@ -180,7 +180,7 @@ public static class SurfaceSchema
     {
         if (string.IsNullOrWhiteSpace(verb))
         {
-            return new { version = Meta.ToolVersion, verbs = Verbs };
+            return new { version = Meta.ToolVersion, surfaceVersion = Meta.SurfaceVersion, verbs = Verbs };
         }
 
         var match = Verbs.FirstOrDefault(v => v.Name.Equals(verb.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -193,6 +193,6 @@ public static class SurfaceSchema
                 candidates: VerbNames);
         }
 
-        return new { version = Meta.ToolVersion, verbs = new[] { match } };
+        return new { version = Meta.ToolVersion, surfaceVersion = Meta.SurfaceVersion, verbs = new[] { match } };
     }
 }

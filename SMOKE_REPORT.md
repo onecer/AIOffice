@@ -1698,3 +1698,88 @@ All three format→md paths (docx via the bridge, xlsx/pptx via NeutralMarkdown)
 - Round-trip law preserved (xlsx core part relocated bytes-verbatim; no exact-byte-size or
   collection-order asserts added; tests normalize line endings).
 - No .sln edits, no git commit/push.
+
+---
+
+# AIOffice 0.11.0 (M10) — Integration Smoke Report
+
+M10 = embedded objects (embed/extract) across all three formats · pptx equations through the shared LaTeX→OMML converter extracted into Core · 1.0 contract prep (unified `data.properties.{core,custom}`, `surfaceVersion`, CONTRACT.md). Tool count unchanged (17).
+
+## 1. Build — PASS
+
+`dotnet build AIOffice.sln -warnaserror` → 0 warnings, 0 errors. Net10.0, Nullable enable, TreatWarningsAsErrors. The Core abstractions (`IEmbedHost` + `EmbeddedObject`) reconciled to one canonical definition; all three handlers implement it.
+
+## 2. Tests — PASS (1585/1585 across 7 projects)
+
+```
+AIOffice.Core.Tests     124   AIOffice.Mcp.Tests       82
+AIOffice.Word.Tests     481   AIOffice.Pptx.Tests     443
+AIOffice.Preview.Tests   24   AIOffice.Render.Tests    31
+AIOffice.Excel.Tests    400
+```
+
+Word +1 (embed media-type-from-src regression), Pptx +10 (new pptx equation suite: validator-clean, latex round-trip, equation_partial warning, placement+fontSize, remove, errors). All deterministic — new tests carry no Environment.NewLine / exact-byte-size / unsorted-order asserts; no real-browser test runs on CI.
+
+## 3. End-to-end CLI smoke (temp workspace, real `EditOp.ParseBatch` / `DocPath` gate) — PASS
+
+```
+[1] DOCX embed report.docx <- data.xlsx
+  add: /embed[1] application/vnd.openxmlformats-officedocument.spreadsheetml.sheet 5804 bytes
+  list --view embeds: [('/embed[1]', 'Q3 model')]
+  extract byte-identical (shasum src == out): PASS
+  validate after remove: True
+[2] XLSX embed book.xlsx <- data.xlsx (sheet /Data)
+  add: /Data/embed[1]
+  extract byte-identical: PASS
+  validate: True
+[3] PPTX embed deck.pptx <- data.xlsx
+  add: /slide[1]/embed[@id=3]
+  extract byte-identical: PASS
+  validate: True
+[4] PPTX equation
+  add: /slide[1]/shape[@id=5]/omath[1]
+  get latex: x = \frac{1}{2}
+  "\foobar x" partial warning: equation_partial   (file still valid)
+  validate: True
+[5] Unified properties shape (data.properties.core.title) on all 3 formats
+  report.docx: T1   book.xlsx: T2   deck.pptx: T3
+[6] surfaceVersion
+  schema.surfaceVersion: 1.0-rc
+  doctor.capabilities.surfaceVersion: 1.0-rc | version 0.11.0 | mcpTools 17
+[7] Sandbox denial
+  embed src escape (../escape.xlsx)  -> sandbox_denied
+  extract dest escape (../escape.bin) -> sandbox_denied
+[8] XLSX equation N/A
+  add type:equation on .xlsx -> unsupported_feature ("Excel has no equation object — spreadsheets use cell formulas, not OMML math")
+```
+
+The extracted bytes equal the embedded source byte-for-byte (verified by `shasum -a 256`), even across an open+save cycle — the round-trip law holds for embedded payloads. The pptx equation OMML is native (`m:oMath` → `m:f` fraction inside `mc:AlternateContent`/`a14:m`/`m:oMathPara`), validator-clean.
+
+## Invariants — held
+- One JSON envelope; every error carries a non-empty suggestion; `unsupported_feature` names the workaround.
+- `--view properties` is now `data.properties.{core,custom}` on docx AND xlsx AND pptx (deliberate pre-1.0 consistency fix; per-format tests updated with a comment).
+- OpenXmlValidator: 0 errors on every mutated file above (embed add/remove, equation add, partial equation).
+- 1-based addressing; new canonical forms `/embed[i]`, `/Sheet1/embed[i]`, `/slide[i]/embed[@id=N]`, `/slide[i]/shape[@id=N]/omath[k]` flow through the real ParseBatch/DocPath/PptxAddress gate.
+- No .sln edits, no git commit/push.
+
+## 4. Published binary — PASS (osx-arm64, 0.11.0)
+
+`dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64`
+
+```
+binary: dist/osx-arm64/aioffice — 38,313,113 bytes (~36 MB), single self-contained file
+doctor: version 0.11.0 | surfaceVersion 1.0-rc | mcpTools 17
+embed+extract loop: report.docx <- data.xlsx, extract -> byte-identical (shasum match): PASS
+pptx equation: add /slide[1]/shape[@id=3]/omath[1], get latex "x = \frac{1}{2}", validate: True
+help embeds: resolves; help equations: now documents pptx; schema.surfaceVersion: 1.0-rc
+```
+
+## 5. Manual-check fixtures (open these in real Office)
+
+- `fixtures/manual-check/embed-demo.docx` — a report carrying an embedded `.xlsx`; double-click the OLE icon in Word to open the source workbook.
+- `fixtures/manual-check/equation-demo.pptx` — a slide with the quadratic formula and E=mc² as native PowerPoint math (Insert → Equation shows them as editable math).
+
+## Invariants — held (binary + fixtures)
+- The published binary returns the SAME envelopes as `dotnet run` (one JSON object, 17 tools, surfaceVersion 1.0-rc).
+- Both fixtures pass `validate` (OpenXmlValidator 0 errors); the embed payload round-trips byte-identical; the equations carry their LaTeX for read-back.
+- No .sln edits, no git commit/push.

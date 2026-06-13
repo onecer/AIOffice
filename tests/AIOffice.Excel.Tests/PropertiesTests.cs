@@ -36,7 +36,8 @@ public sealed class PropertiesTests : ExcelTestBase
         Assert.Contains("title", applied);
         AssertValidatorClean(file);
 
-        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["core"]!;
+        // M10: properties nest under data.properties.{core,custom} (unified shape).
+        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["core"]!;
         Assert.Equal("Q3 Revenue", core["title"]!.GetValue<string>());
         Assert.Equal("Onecer", core["author"]!.GetValue<string>());
         Assert.Equal("Finance", core["subject"]!.GetValue<string>());
@@ -118,7 +119,7 @@ public sealed class PropertiesTests : ExcelTestBase
         Assert.True(envelope.IsOk, envelope.ToJson());
         AssertValidatorClean(file);
 
-        var custom = OkData(Handler.Get(Ctx(file, ("path", "/properties"))))["custom"]!;
+        var custom = OkData(Handler.Get(Ctx(file, ("path", "/properties"))))["properties"]!["custom"]!;
         Assert.Equal("EU", custom["Region"]!.GetValue<string>());
         Assert.True(custom["Reviewed"]!.GetValue<bool>());
         Assert.Equal(9.5, custom["Score"]!.GetValue<double>());
@@ -139,7 +140,7 @@ public sealed class PropertiesTests : ExcelTestBase
         })).IsOk);
         AssertValidatorClean(file);
 
-        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["custom"]!.AsObject();
+        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["custom"]!.AsObject();
         Assert.False(custom.ContainsKey("Temp"));
         Assert.True(custom.ContainsKey("Keep"));
     }
@@ -154,7 +155,7 @@ public sealed class PropertiesTests : ExcelTestBase
             ["custom"] = new JsonObject { ["Reviewed"] = "2026-06-13" },
         })).IsOk);
 
-        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["custom"]!;
+        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["custom"]!;
         Assert.StartsWith("2026-06-13", custom["Reviewed"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
@@ -170,7 +171,7 @@ public sealed class PropertiesTests : ExcelTestBase
             Props = new JsonObject { ["name"] = "S", ["bold"] = true },
         }).IsOk);
 
-        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["custom"]!.AsObject();
+        var custom = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["custom"]!.AsObject();
         Assert.False(custom.ContainsKey("_aioffice_cellStyles"));
     }
 
@@ -242,7 +243,7 @@ public sealed class PropertiesTests : ExcelTestBase
         }
 
         // Read still works (fallback via the relationship).
-        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["core"]!;
+        var core = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["core"]!;
         Assert.Equal("Legacy Title", core["title"]!.GetValue<string>());
         Assert.Equal("OldAuthor", core["author"]!.GetValue<string>());
 
@@ -256,7 +257,7 @@ public sealed class PropertiesTests : ExcelTestBase
             Assert.DoesNotContain(zip.Entries, e => e.FullName.EndsWith(".psmdcp", StringComparison.Ordinal));
         }
 
-        var migrated = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["core"]!;
+        var migrated = OkData(Handler.Read(Ctx(file, ("view", "properties"))))["properties"]!["core"]!;
         Assert.Equal("Legacy Title", migrated["title"]!.GetValue<string>());
         Assert.Equal("OldAuthor", migrated["author"]!.GetValue<string>());
     }

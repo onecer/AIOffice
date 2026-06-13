@@ -8,8 +8,17 @@ using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx;
 
-/// <summary>What one applied op reports back: the canonical target, plus replace counters for replace ops.</summary>
-internal sealed record PptxOpOutcome(string Target, int? Replacements = null, IReadOnlyList<string>? Locations = null);
+/// <summary>
+/// What one applied op reports back: the canonical target, plus replace counters
+/// for replace ops. <see cref="Mutated"/> is false for producing-only ops (extract)
+/// that read the document but must not rewrite it.
+/// </summary>
+internal sealed record PptxOpOutcome(
+    string Target,
+    int? Replacements = null,
+    IReadOnlyList<string>? Locations = null,
+    bool Mutated = true,
+    IReadOnlyList<Warning>? Warnings = null);
 
 /// <summary>
 /// Applies one edit op to an open presentation. Callers batch ops over an
@@ -18,7 +27,7 @@ internal sealed record PptxOpOutcome(string Target, int? Replacements = null, IR
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply"];
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "equation"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle"];
@@ -63,6 +72,8 @@ internal static class PptxEditor
 
         switch (op.Op)
         {
+            case "add" when string.Equals(op.Type?.Trim(), "equation", StringComparison.OrdinalIgnoreCase):
+                return ApplyAddEquation(presentation, op);
             case "add":
                 return new PptxOpOutcome(ApplyAdd(presentation, op, workspace));
             case "set":
@@ -74,12 +85,14 @@ internal static class PptxEditor
             case "replace":
                 var result = PptxReplace.Apply(presentation, op);
                 return new PptxOpOutcome(result.Target, result.Replacements, result.Locations);
+            case "extract":
+                return new PptxOpOutcome(ApplyExtract(presentation, op, workspace), Mutated: false);
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown op '{op.Op}' for pptx.",
-                    "Use set, add, remove, move or replace (accept/reject apply to docx tracked changes).",
-                    candidates: ["set", "add", "remove", "move", "replace"]);
+                    "Use set, add, remove, move, replace or extract (accept/reject apply to docx tracked changes).",
+                    candidates: ["set", "add", "remove", "move", "replace", "extract"]);
         }
     }
 
@@ -144,6 +157,12 @@ internal static class PptxEditor
                 var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "chart");
                 var id = PptxCharts.Add(slidePart, op.Props);
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
+            }
+
+            case "embed":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "embed");
+                return PptxEmbeds.Add(slidePart, address.SlideIndex, op.Props, workspace);
             }
 
             case "table":
@@ -213,14 +232,86 @@ internal static class PptxEditor
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
                     "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture), " +
                     "chart (bar/line/pie), table (with rows/cols), row (on a table path), " +
-                    "animation (on a shape path), comment and reply (on a comment path).",
+                    "animation (on a shape path), comment and reply (on a comment path), embed (a file as an OLE object), " +
+                    "equation (LaTeX -> OMML math in a text box).",
                     candidates: AddTypes);
         }
     }
 
+    /// <summary>
+    /// extract op: writes an embedded object's payload to props.to (sandbox-resolved).
+    /// It does not modify the source deck — the resolved address is returned so the
+    /// op echoes a stable target, but the bytes flow out, not in.
+    /// </summary>
+    private static string ApplyExtract(PresentationPart presentation, EditOp op, Workspace workspace)
+    {
+        var address = PptxAddress.Parse(op.Path);
+        if (!address.IsEmbed)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"extract targets an embedded object, not '{op.Path}'.",
+                "Use an embed path, e.g. {\"op\":\"extract\",\"path\":\"/slide[2]/embed[1]\"," +
+                "\"props\":{\"to\":\"out/data.xlsx\"}} — run 'aioffice read <file> --view embeds' to list embeds.");
+        }
+
+        if (op.Props is null ||
+            !op.Props.TryGetPropertyValue("to", out var toNode) || toNode is null || J.ScalarText(toNode).Trim().Length == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "extract requires props.to (the destination path).",
+                "Pass a workspace destination, e.g. " +
+                "{\"op\":\"extract\",\"path\":\"" + op.Path + "\",\"props\":{\"to\":\"out/data.xlsx\"}}.");
+        }
+
+        foreach (var (key, _) in op.Props)
+        {
+            if (!string.Equals(key, "to", StringComparison.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown extract prop '{key}'.",
+                    "extract takes only 'to' (the sandbox destination path).",
+                    candidates: ["to"]);
+            }
+        }
+
+        // Sandbox the destination: a path outside the workspace is sandbox_denied,
+        // never written. The parent need not exist yet (Extract creates it).
+        var dest = workspace.Resolve(J.ScalarText(toNode).Trim());
+        return PptxEmbeds.Extract(presentation, address, dest);
+    }
+
+    /// <summary>
+    /// add equation: inserts a LaTeX equation as OMML into a slide text body and
+    /// echoes its canonical /omath[k] path. Unknown LaTeX commands degrade to
+    /// literal runs and raise an equation_partial warning — the docx contract.
+    /// </summary>
+    private static PptxOpOutcome ApplyAddEquation(PresentationPart presentation, EditOp op)
+    {
+        var address = PptxAddress.Parse(op.Path);
+        var (path, unknown) = PptxEquations.Add(presentation, address, op.Props);
+
+        IReadOnlyList<Warning>? warnings = null;
+        if (unknown.Count > 0)
+        {
+            warnings =
+            [
+                new Warning(
+                    "equation_partial",
+                    "The equation rendered, but these LaTeX tokens were not recognized and appear literally: " +
+                    string.Join(", ", unknown.Distinct()) + ". " +
+                    "Check the spelling, or split the unsupported part into a \\text{…} run."),
+            ];
+        }
+
+        return new PptxOpOutcome(path, Warnings: warnings);
+    }
+
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment)
+        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment || address.IsEmbed)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -433,6 +524,15 @@ internal static class PptxEditor
                 "and add a new one with the corrected text.");
         }
 
+        if (address.IsEmbed)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Embedded objects cannot be edited in place.",
+                "Remove the embed ({\"op\":\"remove\",\"path\":\"" + op.Path + "\"}) and add it again with the new file, " +
+                "or extract it ({\"op\":\"extract\",...}) to pull its bytes out.");
+        }
+
         if (!address.HasShape)
         {
             return SetSlideProps(presentation, address, op.Props);
@@ -643,6 +743,16 @@ internal static class PptxEditor
             return PptxComments.Remove(presentation, address);
         }
 
+        if (address.IsEmbed)
+        {
+            return PptxEmbeds.Remove(presentation, address);
+        }
+
+        if (address.IsOMath)
+        {
+            return PptxEquations.Remove(presentation, address);
+        }
+
         if (address.RunIndex is not null)
         {
             throw new AiofficeException(
@@ -715,6 +825,14 @@ internal static class PptxEditor
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved.",
                 "Comments are anchored by x/y; reorder animations with move (before/after another animation).");
+        }
+
+        if (address.IsEmbed)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved.",
+                "Embedded objects are anchored by x/y; remove and re-add the embed to reposition it.");
         }
 
         if (address.IsPresentation || address.IsSection || address.IsMaster)

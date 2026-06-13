@@ -15,7 +15,7 @@ public sealed class NativeVerbs
     private static readonly string[] HelpTopics =
     [
         "addressing", "selectors", "properties-docx", "properties-xlsx", "properties-pptx", "errors",
-        "equations", "rtl", "sections", "audit", "diff", "convert",
+        "equations", "embeds", "rtl", "sections", "audit", "diff", "convert",
     ];
 
     private readonly Workspace _workspace;
@@ -161,6 +161,7 @@ public sealed class NativeVerbs
     /// </summary>
     private static object Capabilities() => new
     {
+        surfaceVersion = Meta.SurfaceVersion,
         verbs = CommandSurface.VerbNames.Count,
         verbNames = CommandSurface.VerbNames,
         mcpTools = AIOffice.Mcp.ToolCatalog.Names.Count,
@@ -259,6 +260,7 @@ public sealed class NativeVerbs
         {
             name = "aioffice",
             version = Meta.ToolVersion,
+            surfaceVersion = Meta.SurfaceVersion,
             envelope = new
             {
                 description = "Every command prints exactly one JSON object to stdout: " +
