@@ -43,7 +43,17 @@ public sealed partial class ExcelHandler : INeutralConvertible
 
     // ----- export: xlsx -> neutral model --------------------------------------
 
-    public NeutralDoc ExportNeutral(CommandContext ctx)
+    public NeutralDoc ExportNeutral(CommandContext ctx) => ExportNeutral(ctx, out _);
+
+    /// <summary>
+    /// Projects the workbook to the neutral model and, via <paramref name="dropped"/>,
+    /// names the export-side losses the neutral model cannot carry (charts, pivot
+    /// tables, images, and over-cap rows). The command layer folds these into the
+    /// same <c>convert_lossy</c> report as the import-side
+    /// <see cref="ImportResult.Dropped"/> — mirroring the pptx exporter — so an
+    /// xlsx-source conversion no longer hides its losses behind body-only notes.
+    /// </summary>
+    public NeutralDoc ExportNeutral(CommandContext ctx, out IReadOnlyList<string> dropped)
     {
         var file = RequireFile(ctx, mustExist: true);
         using var workbook = OpenWorkbook(file);
@@ -57,6 +67,7 @@ public sealed partial class ExcelHandler : INeutralConvertible
 
         var chartsBySheet = charts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
         var blocks = new List<NeutralBlock>();
+        var lost = new List<string>();
 
         foreach (var sheet in workbook.Worksheets.OrderBy(ws => ws.Position))
         {
@@ -76,30 +87,39 @@ public sealed partial class ExcelHandler : INeutralConvertible
 
                 if (capped)
                 {
-                    blocks.Add(DropNote(
-                        $"sheet '{sheet.Name}' exceeded {MaxConvertRows} rows; only the first {MaxConvertRows} were converted"));
+                    var note = $"sheet '{sheet.Name}' exceeded {MaxConvertRows} rows; only the first {MaxConvertRows} were converted";
+                    blocks.Add(DropNote(note));
+                    lost.Add(note);
                 }
             }
 
             // Charts/pivots/images are not representable in the neutral model.
-            // Rather than vanish silently, each becomes an honest note block so
-            // the converted document (and convert_lossy) names what was dropped.
+            // Each becomes BOTH an honest note block in the converted body AND a
+            // convert_lossy entry so an agent watching meta.warnings sees the loss.
             foreach (var chart in chartsBySheet[sheet.Name])
             {
                 var label = chart.Title is { Length: > 0 } t ? $"'{t}' ({chart.Kind})" : chart.Kind;
-                blocks.Add(DropNote($"chart {label} on sheet '{sheet.Name}' is not representable in the neutral model"));
+                var note = $"chart {label} on sheet '{sheet.Name}' is not representable in the neutral model";
+                blocks.Add(DropNote(note));
+                lost.Add(note);
             }
 
             foreach (var pivot in sheet.PivotTables)
             {
-                blocks.Add(DropNote($"pivot table '{pivot.Name}' on sheet '{sheet.Name}' is not representable in the neutral model"));
+                var note = $"pivot table '{pivot.Name}' on sheet '{sheet.Name}' is not representable in the neutral model";
+                blocks.Add(DropNote(note));
+                lost.Add(note);
             }
 
             if (sheet.Pictures.Count > 0)
             {
-                blocks.Add(DropNote($"{sheet.Pictures.Count} image(s) on sheet '{sheet.Name}' are not representable in the neutral model"));
+                var note = $"{sheet.Pictures.Count} image(s) on sheet '{sheet.Name}' are not representable in the neutral model";
+                blocks.Add(DropNote(note));
+                lost.Add(note);
             }
         }
+
+        dropped = lost.Distinct(StringComparer.Ordinal).ToList();
 
         var title = NonEmpty(workbook.Properties.Title)
             ?? workbook.Worksheets.OrderBy(ws => ws.Position).FirstOrDefault()?.Name;

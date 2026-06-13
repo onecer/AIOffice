@@ -42,6 +42,80 @@ public static class ErrorCodes
     ];
 }
 
+/// <summary>
+/// The closed set of non-fatal warning codes that ride in <c>meta.warnings</c>.
+/// Unlike <see cref="ErrorCodes"/> these never set a non-zero exit code — the
+/// command still succeeds. Centralizing them here (rather than as scattered
+/// string literals) is the single source of truth: it keeps the wire codes from
+/// drifting (e.g. the truncation code is one name everywhere) and lets
+/// <c>schema</c> advertise the full vocabulary alongside the error codes.
+/// </summary>
+public static class WarningCodes
+{
+    /// <summary>A live preview server was already running for the file; the existing one is reused.</summary>
+    public const string AlreadyRunning = "already_running";
+
+    /// <summary>Caption/cross-reference numbers were served from the cached SEQ values (Word does not recompute fields headlessly).</summary>
+    public const string CaptionNumbersCached = "caption_numbers_cached";
+
+    /// <summary>A cross-format convert dropped content the neutral model cannot carry; see <c>data.dropped</c>.</summary>
+    public const string ConvertLossy = "convert_lossy";
+
+    /// <summary>A csv import/export produced no rows (the source range was empty).</summary>
+    public const string CsvEmpty = "csv_empty";
+
+    /// <summary>A diff change list exceeded its cap and was truncated; narrow the comparison.</summary>
+    public const string DiffTruncated = "diff_truncated";
+
+    /// <summary>An equation carried a LaTeX construct the converter only partially rendered.</summary>
+    public const string EquationPartial = "equation_partial";
+
+    /// <summary>A replace op matched nothing (replacements = 0); the edit still succeeded.</summary>
+    public const string FindNoMatch = "find_no_match";
+
+    /// <summary>A formula could not be evaluated headlessly; its cached value was returned.</summary>
+    public const string FormulaNotEvaluated = "formula_not_evaluated";
+
+    /// <summary>A markdown block had no neutral equivalent and was skipped on import.</summary>
+    public const string MdBlockSkipped = "md_block_skipped";
+
+    /// <summary>Raw HTML in a markdown source was skipped (not rendered into the document).</summary>
+    public const string MdHtmlSkipped = "md_html_skipped";
+
+    /// <summary>An image reference in a markdown source was skipped (not embedded).</summary>
+    public const string MdImageSkipped = "md_image_skipped";
+
+    /// <summary>A link in a markdown source was flattened to plain text.</summary>
+    public const string MdLinkSkipped = "md_link_skipped";
+
+    /// <summary>A response payload exceeded its byte cap and was cut off; narrow the scope or raise --max-bytes.</summary>
+    public const string ResultTruncated = "result_truncated";
+
+    /// <summary>A render/png scope was defaulted (e.g. a multi-slide deck rendered slide 1).</summary>
+    public const string ScopeDefaulted = "scope_defaulted";
+
+    /// <summary>A view that streams (stats/text) fell back to loading the whole workbook.</summary>
+    public const string StreamFallback = "stream_fallback";
+
+    /// <summary>One or more {{placeholders}} in a template were left unresolved by the merge map.</summary>
+    public const string TemplateUnresolved = "template_unresolved";
+
+    /// <summary>A table-of-contents page count is unknown headlessly (Word repaginates on open).</summary>
+    public const string TocPagesUnknown = "toc_pages_unknown";
+
+    /// <summary>A table of contents was refreshed from the current headings.</summary>
+    public const string TocRefreshed = "toc_refreshed";
+
+    /// <summary>The complete, closed set of warning codes, for the schema command.</summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        AlreadyRunning, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
+        EquationPartial, FindNoMatch, FormulaNotEvaluated, MdBlockSkipped, MdHtmlSkipped,
+        MdImageSkipped, MdLinkSkipped, ResultTruncated, ScopeDefaulted, StreamFallback,
+        TemplateUnresolved, TocPagesUnknown, TocRefreshed,
+    ];
+}
+
 /// <summary>Process exit codes for the CLI.</summary>
 public static class ExitCodes
 {

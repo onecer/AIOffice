@@ -60,7 +60,7 @@ public sealed class ReadRenderTests : WordTestBase
         Assert.True(json["data"]!["lines"]!.AsArray().Count < json["data"]!["totalParagraphs"]!.GetValue<int>());
         Assert.Contains(
             json["meta"]!["warnings"]!.AsArray(),
-            w => w!["code"]!.GetValue<string>() == "truncated");
+            w => w!["code"]!.GetValue<string>() == "result_truncated");
     }
 
     [Fact]

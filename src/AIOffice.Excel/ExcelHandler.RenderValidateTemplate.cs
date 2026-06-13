@@ -197,6 +197,7 @@ public sealed partial class ExcelHandler
             new
             {
                 valid = errorCount == 0,
+                count = issues.Count, // parity with docx/pptx validate
                 errors = errorCount,
                 warnings = issues.Count - errorCount,
                 issues,

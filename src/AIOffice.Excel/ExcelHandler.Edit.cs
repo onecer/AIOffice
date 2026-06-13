@@ -181,7 +181,7 @@ public sealed partial class ExcelHandler
         }
 
         return Envelope.Ok(
-            new { applied = details.Count, ops = details },
+            new { applied = details.Count, snapshot = snapshot.Number, ops = details },
             MetaFor(file, sw, warnings));
     });
 
@@ -245,7 +245,7 @@ public sealed partial class ExcelHandler
         }
 
         return Envelope.Ok(
-            new { applied = details.Count, ops = details, streamed = true },
+            new { applied = details.Count, snapshot = snapshot.Number, ops = details, streamed = true },
             MetaFor(file, sw, warnings));
     }
 

@@ -276,7 +276,12 @@ public sealed class NativeVerbs
             {
                 code,
                 exitCode = ExitCodes.ForErrorCode(code),
+                // formula_not_evaluated / find_no_match are warning-level: they ride
+                // in meta.warnings and the command still exits 0. They appear in the
+                // frozen error-code table (CONTRACT §2) but never set an exit code.
+                warningLevel = code is ErrorCodes.FormulaNotEvaluated or ErrorCodes.FindNoMatch,
             }),
+            warningCodes = WarningCodes.All,
             exitCodes = new
             {
                 ok = ExitCodes.Ok,

@@ -43,7 +43,9 @@ public sealed partial class ExcelHandler
             : null;
 
         return Envelope.Ok(
-            new { selector = selector.ToCanonicalString(), total, matches },
+            // count = returned length (parity with docx/pptx); total = full
+            // pre-truncation match count (>= count when the result was capped).
+            new { selector = selector.ToCanonicalString(), count = matches.Count, total, matches },
             MetaFor(file, sw, warnings));
     });
 

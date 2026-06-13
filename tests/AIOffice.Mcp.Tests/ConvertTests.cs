@@ -245,6 +245,39 @@ public sealed class ConvertTests : IDisposable
             w.GetProperty("message").GetString()!.Contains("chart", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Xlsx_source_chart_drop_fires_convert_lossy_and_populates_dropped()
+    {
+        // A workbook with a chart loses the chart converting to docx/md. The
+        // loss must reach BOTH data.dropped and a convert_lossy warning — not be
+        // hidden behind a body-only "[dropped]" note (the M9/M10 regression this
+        // test guards against; xlsx export now mirrors the pptx exporter).
+        EnvelopeAssert.Ok(ToElement(_service.Create(
+            new System.Text.Json.Nodes.JsonObject { ["file"] = "charted.xlsx" })));
+        var ops = """
+            [
+              {"op":"set","path":"/Sheet1/A1:B3","props":{"values":[["Region","Units"],["North","10"],["South","20"]]}},
+              {"op":"add","path":"/Sheet1","type":"chart","props":{"kind":"bar","dataRange":"A1:B3","anchor":"D2"}}
+            ]
+            """;
+        EnvelopeAssert.Ok(ToElement(_service.Edit(new System.Text.Json.Nodes.JsonObject
+        {
+            ["file"] = "charted.xlsx",
+            ["ops"] = System.Text.Json.Nodes.JsonNode.Parse(ops),
+        })));
+
+        var envelope = ToElement(_service.Convert(
+            new System.Text.Json.Nodes.JsonObject { ["src"] = "charted.xlsx", ["dest"] = "charted.docx" }));
+        var data = EnvelopeAssert.Ok(envelope);
+
+        var dropped = data.GetProperty("dropped").EnumerateArray().Select(d => d.GetString()!).ToList();
+        Assert.Contains(dropped, d => d.Contains("chart", StringComparison.OrdinalIgnoreCase));
+
+        var warnings = envelope.GetProperty("meta").GetProperty("warnings").EnumerateArray().ToList();
+        Assert.Contains(warnings, w => w.GetProperty("code").GetString() == "convert_lossy" &&
+            w.GetProperty("message").GetString()!.Contains("chart", StringComparison.OrdinalIgnoreCase));
+    }
+
     // ─────────────────────────────────────────────────── error gates
 
     [Fact]

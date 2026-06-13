@@ -93,7 +93,7 @@ public sealed partial class WordHandler
                 if (budget < 0)
                 {
                     warnings.Add(new Warning(
-                        "truncated",
+                        WarningCodes.ResultTruncated,
                         $"Output truncated at --max-bytes {maxBytes}; {total} paragraph(s) exist. Use --range to page."));
                     break;
                 }

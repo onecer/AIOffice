@@ -43,10 +43,10 @@ public sealed record Meta
     /// envelope shape, the ErrorCode list, the addressing grammar, exit codes, and
     /// the op/view/tool vocabularies (see CONTRACT.md). It is independent of the
     /// tool's package version (<see cref="ToolVersion"/>): the tool can ship many
-    /// releases while the contract stays "1.0-rc". Bumps to this value signal a
+    /// releases while the contract stays "1.0". Bumps to this value signal a
     /// breaking change to the AI surface. Surfaced in office_schema and doctor.
     /// </summary>
-    public const string SurfaceVersion = "1.0-rc";
+    public const string SurfaceVersion = "1.0";
 }
 
 /// <summary>

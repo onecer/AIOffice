@@ -840,7 +840,7 @@ office_edit(改)
 
 OOXML 属性面有几千个属性名，全塞 schema 是预算自杀。三层漏斗：
 
-1. **第 0 层（常驻）**：14 个 tool schema 里只有动词、路径语法和一行示例（≈3020 tokens）；
+1. **第 0 层（常驻）**：17 个 tool schema 里只有动词、路径语法和一行示例（≈3484 tokens）；
 2. **第 1 层（按需）**：动手前 `office_help {topic:"<fmt>/<element>#<verb>"}` 拿该元素该动词的准确属性表——**一次 help 查询胜过 guess-fail-retry 三轮**；`office_schema` 给整个命令面的机器可读自省；
 3. **第 2 层（自愈）**：错误路径也接进漏斗——`invalid_path` 自动回填 `candidates[]`；`invalid_args`（坏 selector / 未知主题）的 suggestion 直接指向对应的 help 主题；`unsupported_feature` 的 suggestion 必须给出当前可用的 workaround。
 

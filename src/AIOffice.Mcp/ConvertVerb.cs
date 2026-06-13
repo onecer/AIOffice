@@ -419,12 +419,19 @@ public static class ConvertVerb
             var fromHandler = RequireConvertible(byKind, fromKind, "read from");
             var exportCtx = new CommandContext { Workspace = workspace, File = src, Args = new JsonObject() };
 
-            // The pptx exporter has an overload that names its export-side losses
-            // (animations/charts/SmartArt) — capture them when present.
+            // The pptx and xlsx exporters each have an overload that names their
+            // export-side losses (pptx: animations/charts/SmartArt/embeds; xlsx:
+            // charts/pivots/images/over-cap rows) — capture them so convert_lossy
+            // fires regardless of the source format.
             if (fromHandler is AIOffice.Pptx.PptxHandler pptx)
             {
                 neutral = pptx.ExportNeutral(exportCtx, out var pptxDropped);
                 dropped.AddRange(pptxDropped);
+            }
+            else if (fromHandler is AIOffice.Excel.ExcelHandler xlsx)
+            {
+                neutral = xlsx.ExportNeutral(exportCtx, out var xlsxDropped);
+                dropped.AddRange(xlsxDropped);
             }
             else
             {

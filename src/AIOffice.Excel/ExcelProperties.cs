@@ -45,6 +45,7 @@ internal static class ExcelProperties
         var p = workbook.Properties;
         return new
         {
+            view = "properties",
             path = "/properties",
             kind = "properties",
             properties = new

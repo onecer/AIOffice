@@ -50,7 +50,7 @@ OfficeCLI 的**能力清单**是我们长期对齐的北极星（台账见 `docs
 
 ## 2. 命令面规范（v0）
 
-CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。M10 的嵌入对象（`embed`/`extract`）与 pptx 公式搭载在既有 `office_edit`/`office_read`/`office_get` 上，工具数维持 **17**。M10 起 `schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**（`1.0-rc`）——面向 AI 的契约版本，独立于工具包版本（见 [CONTRACT.md](../CONTRACT.md)）。
+CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。M10 的嵌入对象（`embed`/`extract`）与 pptx 公式搭载在既有 `office_edit`/`office_read`/`office_get` 上，工具数维持 **17**。M10 起 `schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**——面向 AI 的契约版本，独立于工具包版本（见 [CONTRACT.md](../CONTRACT.md)）；1.0.0 起其值为 **`1.0`**（M10 期间为 `1.0-rc`）。
 
 ### 2.1 全局约定
 
@@ -672,8 +672,17 @@ public sealed record EmbeddedObject(string Path, string Name, string MediaType, 
 
 - 三格式**嵌入对象**（`add type:embed` 任意文件作 OLE/包对象，`read --view embeds`，新增 `extract` op 按位导出；Core 增量 `IEmbedHost` + `EmbeddedObject`）。
 - **pptx 公式**经迁入 Core 的共享 LaTeX→OMML 引擎（`AIOffice.Core.Equations` 的纯 `System.Xml.Linq` `OmmlMath`，Word 与 Pptx 共用；xlsx N/A）。
-- **1.0 契约准备**：`properties` 视图统一为 `data.properties.{core,custom}`；`schema`/`doctor` 声明 `surfaceVersion`（`1.0-rc`）；冻结契约写入 [CONTRACT.md](../CONTRACT.md)。
-- **Toward 1.0**：仅余稳定化——最终跨平台回归扫描、API 冻结签收（`surfaceVersion` 1.0-rc → 1.0）、文档打磨；其后候选插件机制。
+- **1.0 契约准备**：`properties` 视图统一为 `data.properties.{core,custom}`；`schema`/`doctor` 声明 `surfaceVersion`（M10 期间 `1.0-rc`）；冻结契约写入 [CONTRACT.md](../CONTRACT.md)。
+
+### 1.0.0 — API 稳定性版本（已交付）
+
+稳定化，非新功能：
+
+- `surfaceVersion` 升为 **`1.0`**；[CONTRACT.md](../CONTRACT.md) 定稿为冻结的 v1.0 命令面，新增**稳定性承诺**与**已知限制**两节。
+- CLI（`CommandSurface`）与 MCP（`SurfaceSchema`/`ToolCatalog`）自省面在共享词表（动词集、`read --view` 枚举、`edit` op 列表）上锁定一致，由 `SchemaConsistencyTests` 守卫；两面均暴露 `embeds` view 与 `extract` op。
+- xlsx 读视图回显 `data.view`；xlsx convert 经 `data.dropped` + `convert_lossy` 报告图表/透视/图片丢失（不再静默）。
+- 警告码集中到 `WarningCodes`（单一真源），经 `schema` 的 `data.warningCodes` 暴露并写入契约；寻址 help 补齐 M8–M10 的 `embed`/`omath` 形式。
+- **1.0 之后（候选，未承诺）**：插件机制、更高 convert 保真、xlsx/pptx 打磨。
 
 ---
 

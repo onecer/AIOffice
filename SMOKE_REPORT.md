@@ -1783,3 +1783,96 @@ help embeds: resolves; help equations: now documents pptx; schema.surfaceVersion
 - The published binary returns the SAME envelopes as `dotnet run` (one JSON object, 17 tools, surfaceVersion 1.0-rc).
 - Both fixtures pass `validate` (OpenXmlValidator 0 errors); the embed payload round-trips byte-identical; the equations carry their LaTeX for read-back.
 - No .sln edits, no git commit/push.
+
+---
+
+# 1.0.0 release — stabilization sign-off (osx-arm64) — PASS
+
+The 1.0.0 stabilization pass: `Version` bumped to 1.0.0, `surfaceVersion` promoted
+`1.0-rc` → `1.0`, the CONTRACT finalized, the surface/contract/doc drift the six
+auditors found fixed, and the surface re-verified end-to-end against a freshly
+published single-file binary.
+
+## Build & tests — PASS (1590/1590 across 7 projects)
+
+`dotnet build AIOffice.sln -c Release -warnaserror` → **0 warnings, 0 errors**.
+`dotnet test AIOffice.sln -c Release`:
+
+| project | tests |
+|---|---|
+| AIOffice.Core.Tests | 124 |
+| AIOffice.Word.Tests | 481 |
+| AIOffice.Excel.Tests | 400 |
+| AIOffice.Pptx.Tests | 443 |
+| AIOffice.Mcp.Tests | 87 |
+| AIOffice.Preview.Tests | 24 |
+| AIOffice.Render.Tests | 31 |
+| **total** | **1590** |
+
+0 failures, 0 skipped (browser tests skip only on CI; locally Chromium present).
+The +5 over the 0.11.0 baseline (1585) are 4 new `SchemaConsistencyTests` (the CLI
+vs MCP surface guard) and 1 new xlsx `convert_lossy` test.
+
+## Publish — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice
+-rwxr-xr-x  38315481  dist/osx-arm64/aioffice   # 36.5 MB
+$ dist/osx-arm64/aioffice version
+{"ok":true,"data":{"name":"aioffice","version":"1.0.0","runtime":".NET 10.0.8"},...}
+```
+
+## End-to-end CLI smoke (fresh temp workspace, published binary) — PASS
+
+One command per verb, every one `ok:true` / exit 0:
+
+```
+create r.docx · create b.xlsx · create d.pptx · read r.docx outline ·
+edit b.xlsx set range · query b.xlsx cells · get b.xlsx /Sheet1/A1 ·
+render r.docx html · validate b.xlsx · template t.docx -o o.docx ·
+audit r.docx · diff r.docx --snapshot 1 · convert b.xlsx b.docx ·
+snapshot list r.docx · doctor · schema · help addressing · version   (all exit 0)
+
+doctor: version 1.0.0 | surfaceVersion 1.0 | verbs 18 | mcpTools 17
+schema.warningCodes: 18 codes   (new in 1.0: warning vocabulary surfaced)
+```
+
+Stabilization fixes verified live on the published binary:
+
+- **schema consistency** — CLI `schema` and MCP `office_schema` now agree on the
+  shared vocabularies: `read --view` enum includes `embeds` on both; `edit` op list
+  includes `extract` on both.
+- **xlsx read view echo** — `read b.xlsx --view outline` → `view=outline kind=xlsx`
+  (previously `kind` only).
+- **xlsx convert_lossy** — `convert b.xlsx b.docx` (workbook with a chart) →
+  `data.dropped=1` + a `convert_lossy` warning (previously silent; the loss only
+  showed as a body `[dropped]` note).
+- **edit snapshot parity** — xlsx and pptx edits now surface `snapshot=<n>` like docx.
+- **query/validate parity** — xlsx `query` carries `count` (+ `total`); xlsx
+  `validate` carries `count` (+ `errors`/`warnings`).
+- **comments view** — works on docx/xlsx/pptx (CONTRACT §6 corrected to "universal").
+- **addressing help** — documents the M8–M10 `/embed[…]` and pptx `…/omath[…]` forms.
+
+## Sandbox & security — PASS (every escape DENIED, exit 4, nothing leaked)
+
+```
+read /etc/hosts                  -> exit 4 (sandbox_denied)
+read ../../../../etc/hosts       -> exit 4 (sandbox_denied)
+read <canary outside ws>         -> exit 4 (sandbox_denied)
+convert <ws>.docx /tmp/esc.md    -> exit 4; /tmp/esc.md NOT created
+template --data @/etc/hosts      -> exit 4 (sandbox_denied)
+canary file intact (never read/written)
+```
+
+## MCP — PASS
+
+`tools/list` over stdio returns exactly **17** tools, including `file_snapshot`
+(the snapshot tool's real name; CONTRACT §7 corrected from 16 → 17 names).
+
+## Invariants — held (1.0.0)
+- Published binary == `dotnet run` envelopes (one JSON object per call); **17 MCP
+  tools**, **surfaceVersion `1.0`**, package version **1.0.0**.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- CONTRACT.md §§1–7 match the code exactly (verified by smoke + `SchemaConsistencyTests`).
+- No git commit/push, no tags (left for the human release engineer).

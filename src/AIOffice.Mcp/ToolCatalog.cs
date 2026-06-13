@@ -42,7 +42,7 @@ public static class ToolCatalog
             {"type":"object","properties":{
               "file":{"type":"string"},
               "view":{"type":"string","enum":["outline","text","stats","structure","properties","embeds","revisions","comments","styles","fields","markdown","csv"],"default":"outline",
-                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; properties: core + custom doc properties under data.properties.{core,custom} (all formats); embeds: embedded OLE/package objects (all formats); revisions/comments/markdown/fields: docx (fields = content controls); styles: docx style defs or xlsx named cell styles; csv: one xlsx sheet as RFC-4180 csv"},
+                "description":"outline: headings/slides/sheets skeleton with paths; text: plain text; stats: counters; structure: full element tree with paths+types; properties: core + custom doc properties under data.properties.{core,custom} (all formats); embeds: embedded OLE/package objects (all formats); comments: comment threads (all formats); revisions/markdown/fields: docx (fields = content controls); styles: docx style defs or xlsx named cell styles; csv: one xlsx sheet as RFC-4180 csv"},
               "range":{"type":"string","description":"Scope limit 'a..b' (1-based): paragraphs for docx, slides for pptx, rows for xlsx; csv view also takes 'A1:C10'"},
               "sheet":{"type":"string","description":"csv view: sheet name (default: first sheet)"},
               "max_bytes":{"type":"integer","description":"Cap payload size; truncation reported in meta.warnings and data.truncated"}},
@@ -68,15 +68,15 @@ public static class ToolCatalog
             """),
         Make(
             "office_edit",
-            "ALL mutations: apply an atomic batch of set/add/remove/move/replace/accept/reject ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
+            "ALL mutations: apply an atomic batch of set/add/remove/move/replace/accept/reject/extract ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
               "ops":{"type":"array","minItems":1,
                 "description":"Atomic batch, applied in order. Use office_help {topic:\"<fmt>/<element>\"} for exact prop names and element types — do NOT guess.",
                 "items":{"type":"object","properties":{
-                  "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject"],
-                    "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning"},
+                  "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject","extract"],
+                    "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does NOT modify the source"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\""},
                   "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx)"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},

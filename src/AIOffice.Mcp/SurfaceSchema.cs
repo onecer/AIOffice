@@ -3,8 +3,13 @@ using AIOffice.Core;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The machine-readable description of the whole aioffice command surface —
-/// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
+/// The machine-readable description of the whole aioffice command surface that
+/// backs <c>office_schema</c> (the MCP introspection tool). The CLI
+/// <c>aioffice schema</c> renders a parallel, richer view from
+/// <c>CommandSurface</c> (usage strings, positionals/options, error+exit-code
+/// tables). The two are kept in lock-step on the shared vocabularies — the verb
+/// set, the <c>read --view</c> enum and the <c>edit</c> op list — by
+/// <c>SchemaConsistencyTests</c>, which reddens CI if they ever drift.
 /// 17 verbs, mirroring the 17 MCP tools (the <c>preview</c> verb carries
 /// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
 /// verb itself. M9 added <c>convert</c> / <c>office_convert</c>; M8 added <c>diff</c>.
@@ -145,7 +150,7 @@ public static class SurfaceSchema
             [("aioffice doctor", "run when commands start failing oddly")]),
 
         Verb("schema", "Machine-readable JSON of this whole command surface.", "office_schema",
-            [("verb", "optional filter: one of the 16 verb names")],
+            [("verb", "optional filter: one of the 17 verb names")],
             [ErrorCodes.InvalidArgs],
             [("aioffice schema edit", "just the edit verb")]),
 

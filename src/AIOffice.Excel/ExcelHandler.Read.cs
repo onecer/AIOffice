@@ -62,7 +62,7 @@ public sealed partial class ExcelHandler
             "comments" => ReadComments(workbook, file, sw),
             "properties" => Envelope.Ok(ExcelProperties.Describe(workbook), MetaFor(file, sw, fallback)),
             "styles" => Envelope.Ok(
-                new { kind = "xlsx", styles = ExcelCellStyles.ListAll(workbook) }, MetaFor(file, sw, fallback)),
+                new { view = "styles", kind = "xlsx", styles = ExcelCellStyles.ListAll(workbook) }, MetaFor(file, sw, fallback)),
             _ => ReadText(ctx, workbook, file, sw),
         };
     });
@@ -93,6 +93,7 @@ public sealed partial class ExcelHandler
         var embeds = ExcelEmbeds.ReadAll(file);
         return new
         {
+            view = "embeds",
             kind = "xlsx",
             embeds = embeds
                 .Select(e => new
@@ -131,6 +132,7 @@ public sealed partial class ExcelHandler
 
         return new
         {
+            view = "stats",
             kind = "xlsx",
             sheets,
             totals = new
@@ -144,6 +146,7 @@ public sealed partial class ExcelHandler
 
     private static object ReadOutline(XLWorkbook workbook) => new
     {
+        view = "outline",
         kind = "xlsx",
         sheets = workbook.Worksheets
             .OrderBy(ws => ws.Position)
@@ -179,6 +182,7 @@ public sealed partial class ExcelHandler
         var embedsBySheet = allEmbeds.ToLookup(e => e.SheetName, StringComparer.OrdinalIgnoreCase);
         return new
         {
+            view = "structure",
             kind = "xlsx",
             sheets = workbook.Worksheets
                 .OrderBy(ws => ws.Position)

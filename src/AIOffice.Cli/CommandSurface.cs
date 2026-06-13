@@ -54,12 +54,12 @@ public static class CommandSurface
             "office_create"),
 
         new("read",
-            "Read a document as outline, plain text, stats, structure or properties (docx adds revisions/comments/styles/markdown/fields; xlsx adds csv/styles).",
-            "aioffice read <file> [--view outline|text|stats|structure|properties|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]",
+            "Read a document as outline, plain text, stats, structure, properties or embeds (docx adds revisions/comments/styles/markdown/fields; xlsx adds csv/styles).",
+            "aioffice read <file> [--view outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]",
             [new("file", true, "Document to read.")],
             [
-                new("view", "outline|text|stats|structure|properties|revisions|comments|styles|fields|markdown|csv",
-                    "Projection to return (default: outline). properties = core + custom document properties (docx/xlsx/pptx). revisions/comments/markdown/fields are docx views (fields = content controls); styles is docx (style defs) or xlsx (named cell styles); csv is xlsx-only (one sheet, RFC 4180)."),
+                new("view", "outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv",
+                    "Projection to return (default: outline). properties = core + custom document properties (docx/xlsx/pptx); embeds = embedded OLE/package objects (docx/xlsx/pptx); comments works on all three formats. revisions/markdown/fields are docx views (fields = content controls); styles is docx (style defs) or xlsx (named cell styles); csv is xlsx-only (one sheet, RFC 4180)."),
                 new("range", "a..b", "Limit to an element range, e.g. paragraphs 3..10 or slides 1..4; the csv view also takes a cell range like A1:C10."),
                 new("sheet", "<name>", "csv view: which sheet to emit (default: the first sheet)."),
                 new("max-bytes", "N", "Truncate the response payload to at most N bytes."),
@@ -87,14 +87,14 @@ public static class CommandSurface
             "office_get"),
 
         new("edit",
-            "Apply an atomic batch of operations (set/add/remove/move/replace/accept/reject). Auto-snapshots the pre-image.",
+            "Apply an atomic batch of operations (set/add/remove/move/replace/accept/reject/extract). Auto-snapshots the pre-image.",
             "aioffice edit <file> --ops <json|@file> | --set <path> k=v... | --add <path> --type T k=v... | --remove <path> | --find X --replace Y [--regex] [--match-case] [--whole-word] [--track] [--author NAME] [--dry-run] [--expect-rev R]",
             [
                 new("file", true, "Document to edit."),
                 new("k=v", false, "Property assignments for the --set/--add sugar forms."),
             ],
             [
-                new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject, path, type?, props?, position?}]."),
+                new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject|extract, path, type?, props?, position?}]. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does not modify the source."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
                 new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx)."),
@@ -202,7 +202,7 @@ public static class CommandSurface
         new("help",
             "Progressive documentation: addressing grammar, selectors, per-format properties, errors.",
             "aioffice help [topic]",
-            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors.")],
+            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert (or any verb name). Omit for the index.")],
             [],
             "office_help"),
 
@@ -282,16 +282,20 @@ public static class GrammarPointers
     public static readonly object Addressing = new
     {
         summary = "Slash-separated 1-based paths. docx: /body/p[3], /body/table[1]/tr[2]/tc[1], /header[1]/p[1], " +
-                  "/revision[@id=3], /comment[@id=1], /style[@id=Callout], /caption[@label=Figure][1]. " +
+                  "/revision[@id=3], /comment[@id=1], /style[@id=Callout], /caption[@label=Figure][1], " +
+                  "/body/p[3]/omath[1], /embed[1], /properties. " +
                   "xlsx: /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /'Q3 Data'/B2, /Pivot/pivot[@name=SalesPivot], " +
-                  "/Sheet1/conditionalFormat[1], /Sheet1/image[1], /Sheet1/slicer[1]. " +
-                  "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1], /slide[2]/notes.",
+                  "/Sheet1/conditionalFormat[1], /Sheet1/image[1], /Sheet1/slicer[1], /Sheet1/embed[1], /properties. " +
+                  "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1], /slide[2]/notes, " +
+                  "/slide[2]/shape[@id=9]/omath[1], /slide[2]/embed[@id=7], /properties.",
         helpTopic = "addressing",
         examples = new[]
         {
             "/body/p[3]", "/revision[@id=3]", "/comment[@id=1]", "/style[@id=Callout]",
-            "/caption[@label=Figure][1]", "/Sheet1/A1:C10", "/Pivot/pivot[@name=SalesPivot]",
-            "/Sheet1/conditionalFormat[1]", "/Sheet1/slicer[1]", "/slide[2]/shape[3]", "/slide[2]/notes",
+            "/caption[@label=Figure][1]", "/body/p[3]/omath[1]", "/embed[1]", "/Sheet1/A1:C10",
+            "/Pivot/pivot[@name=SalesPivot]", "/Sheet1/conditionalFormat[1]", "/Sheet1/slicer[1]",
+            "/Sheet1/embed[1]", "/slide[2]/shape[3]", "/slide[2]/notes",
+            "/slide[2]/shape[@id=9]/omath[1]", "/slide[2]/embed[@id=7]",
         },
     };
 

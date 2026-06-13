@@ -246,13 +246,14 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
         // Producing-only batches (extract) read the deck but must not rewrite it —
         // re-serializing could perturb embedded sub-packages and the rev. Only
         // snapshot + write when at least one op actually mutated the document.
+        int? snapshotNumber = null;
         if (mutated)
         {
-            _snapshots?.Save(file);
+            snapshotNumber = _snapshots?.Save(file)?.Number;
             File.WriteAllBytes(file, stream.ToArray());
         }
 
-        return new { Applied = ops.Count, Results = results, Slides = slideCount };
+        return new { Applied = ops.Count, Snapshot = snapshotNumber, Results = results, Slides = slideCount };
     });
 
     public Envelope Render(CommandContext ctx) => Execute(ctx, file =>

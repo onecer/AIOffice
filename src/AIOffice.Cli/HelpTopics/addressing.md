@@ -17,6 +17,9 @@ paths that `get` and `edit` accept unchanged.
     /section[1]                 page setup + columns (set/get)
     /body/p[3]/omath[1]         M6: an inline equation in a paragraph (get/remove)
     /caption[@label=Figure][1]  M8: a Figure/Table/Equation caption (1-based per label; get)
+    /embed[1]                   M10: an embedded OLE/package object (read --view embeds lists
+                                them; get/remove; extract op writes the bytes out)
+    /properties                 core + custom document properties (get; set /properties)
 
 ## xlsx
 
@@ -34,8 +37,11 @@ paths that `get` and `edit` accept unchanged.
     /Sheet1/image[1]            1st anchored picture on the sheet
     /Sheet1/slicer[1]           M8: 1st slicer on the sheet (table-column / pivot-field)
     /Sheet1/slicer[@name=X]     M8: the same slicer by name (canonical form in results)
+    /Sheet1/embed[1]            M10: an embedded OLE/package object on the sheet
+                                (read --view embeds lists them; get/remove; extract op)
     /'Q3 Data'/B2               sheet names with spaces use single quotes
                                 (escape a quote by doubling it: 'O''Brien')
+    /properties                 core + custom workbook properties (get; set /properties)
 
 ## pptx
 
@@ -45,11 +51,16 @@ paths that `get` and `edit` accept unchanged.
     /slide[2]/shape[@id=7]      same shape by stable id (canonical form in results)
     /slide[2]/shape[3]/p[1]     1st paragraph inside that shape
     /slide[2]/notes             the slide's speaker notes (whole body; no /p[j] beneath)
+    /slide[2]/shape[@id=9]/omath[1]  M10: an equation inside a slide text box
+                                (get reports the LaTeX; add type:equation creates it)
+    /slide[2]/embed[@id=7]      M10: an embedded OLE/package object on the slide, by id
+                                (read --view embeds lists them; get/remove; extract op)
     /slide[2]/animation[1]      M6: an animation in the slide timeline (set/move/remove)
     /section[1]                 M6: a slide section (set name / get / remove)
     /master[1]                  1st slide master (M6: editable — background, accents)
     /master[1]/layout[2]        2nd layout under that master (M6: editable; add clones)
     /master[1]/shape[1]         shape on the master (M6: editable — set/add/remove)
+    /properties                 core + custom presentation properties (get; set /properties)
 
 Masters, layouts and their shapes are editable since M6 (background, theme
 accent colors, shapes, cloned layouts).
