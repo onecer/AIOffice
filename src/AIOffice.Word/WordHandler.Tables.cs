@@ -9,7 +9,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] TableProps =
-        ["borders", "borderColor", "borderWidthPt", "shading", "headerRow", "columnWidths", "width", "alignment", "cellPaddingCm"];
+        ["borders", "borderColor", "borderWidthPt", "shading", "headerRow", "columnWidths", "width", "alignment", "cellPaddingCm", "rtl"];
 
     private static readonly string[] CellProps =
         ["text", "mergeRight", "mergeDown", "shading", "valign"];
@@ -69,6 +69,12 @@ public sealed partial class WordHandler
 
                 case "cellPaddingCm":
                     ApplyCellPadding(table, NodeToString(value));
+                    break;
+
+                case "rtl":
+                    EnsureTblPr(table).BiDiVisual = WordFormatting.ParseBool(name, NodeToString(value))
+                        ? new BiDiVisual()
+                        : new BiDiVisual { Val = OnOffOnlyValues.Off };
                     break;
 
                 default:
@@ -772,6 +778,7 @@ public sealed partial class WordHandler
                     ? TwipsToCm(twips)
                     : null,
             ["headerRow"] = firstRow?.GetFirstChild<TableRowProperties>()?.GetFirstChild<TableHeader>() is not null,
+            ["rtl"] = tblPr?.BiDiVisual is { } bidi && (bidi.Val?.Value ?? OnOffOnlyValues.On) == OnOffOnlyValues.On,
             ["columnWidthsCm"] = grid is { Count: > 0 }
                 ? grid.Select(c => c.Width?.Value is { } cw &&
                     long.TryParse(cw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t)

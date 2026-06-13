@@ -101,7 +101,16 @@ public sealed partial class WordHandler
 
     private static object ApplyOp(WordprocessingDocument doc, string file, EditOp op, EditSession session)
     {
-        var rootName = DocPath.Parse(op.Path).Segments[0].Name;
+        var parsedPath = DocPath.Parse(op.Path);
+        if (parsedPath.IsRoot)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "docx has no document-root edit target ('/').",
+                "Edit page setup on /section[1], body content under /body, or use 'replace' with path '/' for document-wide find/replace.");
+        }
+
+        var rootName = parsedPath.Segments[0].Name;
         return op.Op switch
         {
             "accept" or "reject" => ApplyAcceptOrReject(doc, op),
@@ -132,6 +141,9 @@ public sealed partial class WordHandler
             "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op),
             "add" when op.Type == "sectionBreak" && session.Track => throw TrackedStructureUnsupported("sectionBreak"),
             "add" when op.Type == "sectionBreak" => ApplyAddSectionBreak(doc, op),
+            "add" when op.Type == "equation" && session.Track => throw TrackedStructureUnsupported("equation"),
+            "add" when op.Type == "equation" => ApplyAddEquation(doc, op, session),
+            "add" when op.Type == "columnBreak" => ApplyAddColumnBreak(doc, op, session),
             "add" => ApplyAdd(doc, op, session),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
@@ -141,6 +153,7 @@ public sealed partial class WordHandler
             "remove" when rootName == "toc" => ApplyRemoveToc(doc, op),
             "remove" when rootName == "watermark" => ApplyRemoveWatermark(doc, op),
             "remove" when rootName == "section" => ApplyRemoveSection(doc, op),
+            "remove" when DocPath.Parse(op.Path).Segments[^1].Name == "omath" => ApplyRemoveEquation(doc, op),
             "remove" when rootName == "revision" => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 "Revisions are not removed; they are accepted or rejected.",
@@ -241,10 +254,11 @@ public sealed partial class WordHandler
                 "table (props.rows/columns), image (props.src), link (props.url), bookmark (props.name), " +
                 "footnote/endnote (props.text), comment/reply, style, toc (props.levels), watermark (props.text), " +
                 "sectionBreak (props.kind), field (props.kind=pageNumber|numPages|date|docTitle), " +
+                "equation (props.latex, props.display), columnBreak, " +
                 "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
-                    "style", "header", "footer", "toc", "watermark", "sectionBreak", "field"]),
+                    "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

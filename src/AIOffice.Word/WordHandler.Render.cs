@@ -336,10 +336,38 @@ public sealed partial class WordHandler
 
                     break;
 
+                case DocumentFormat.OpenXml.Math.OfficeMath inlineMath:
+                    AppendEquation(sb, inlineMath, display: false);
+                    break;
+
+                case DocumentFormat.OpenXml.Math.Paragraph displayMath: // m:oMathPara
+                    foreach (var oMath in displayMath.ChildElements.OfType<DocumentFormat.OpenXml.Math.OfficeMath>())
+                    {
+                        AppendEquation(sb, oMath, display: true);
+                    }
+
+                    break;
+
                 default: // DeletedRun, comment markers, pPr, …
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// One equation as MathML (<c>&lt;math&gt;</c>), the native browser shape. The
+    /// element carries the equation's canonical path via a data-aio-path wrapper
+    /// span and keeps the source LaTeX in a title for accessibility/fallback.
+    /// </summary>
+    private static void AppendEquation(StringBuilder sb, DocumentFormat.OpenXml.Math.OfficeMath oMath, bool display)
+    {
+        var latex = EquationLatex(oMath);
+        var mathml = Equations.OmmlToMathml.ToMathml(oMath, display);
+        sb.Append("<span class=\"equation\" title=\"")
+          .Append(Escape(latex).Replace("\"", "&quot;", StringComparison.Ordinal))
+          .Append("\">")
+          .Append(mathml)
+          .Append("</span>");
     }
 
     /// <summary>One hyperlink as &lt;a href&gt;: external relationship url or #bookmark anchor.</summary>

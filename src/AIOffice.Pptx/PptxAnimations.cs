@@ -113,6 +113,282 @@ internal static class PptxAnimations
         return Units.Inv($"/slide[{address.SlideIndex}]/animation[{index}]");
     }
 
+    // ----- set (retime) ----------------------------------------------------------
+
+    /// <summary>
+    /// set /slide[i]/animation[k] {trigger?, delay?, duration?}: retimes one effect in place.
+    /// trigger rewrites the effect cTn's node type (and, when it crosses the click boundary, rebuilds the
+    /// click-group structure so playback grouping stays consistent); delay rewrites its start condition;
+    /// duration rewrites its first timed behavior. The p:timing tree stays schema-valid.
+    /// </summary>
+    public static string Set(PresentationPart presentation, PptxAddress address, JsonObject props)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var view = Resolve(slidePart, address);
+        var node = view.TimeNode;
+
+        string? trigger = view.Trigger;
+        long? delayMs = null;
+        long? durationMs = null;
+
+        foreach (var (key, value) in props)
+        {
+            switch (key)
+            {
+                case "trigger":
+                    var token = J.ScalarText(value ?? string.Empty).Trim();
+                    if (!Triggers.Contains(token, StringComparer.OrdinalIgnoreCase))
+                    {
+                        throw new AiofficeException(
+                            ErrorCodes.InvalidArgs,
+                            $"Unknown animation trigger '{token}'.",
+                            "Use click (starts on click), afterPrevious or withPrevious.",
+                            candidates: Triggers);
+                    }
+
+                    trigger = Triggers.First(t => string.Equals(t, token, StringComparison.OrdinalIgnoreCase));
+                    break;
+                case "delay":
+                    delayMs = ParseSecondsMs("delay", value, max: 600, allowZero: true);
+                    break;
+                case "duration":
+                    durationMs = ParseSecondsMs("duration", value, max: 600);
+                    break;
+                default:
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown animation prop '{key}' for set.",
+                        "Retimable animation props: trigger, delay, duration. " +
+                        "Re-add the animation to change its effect/direction/color.",
+                        candidates: ["trigger", "delay", "duration"]);
+            }
+        }
+
+        if (durationMs is { } d)
+        {
+            if (string.Equals(view.Effect, "appear", StringComparison.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "Prop 'duration' does not apply to 'appear' (it is instantaneous).",
+                    "Drop duration, or re-add the animation as fade for a timed entrance.");
+            }
+
+            RetimeDuration(view.Par, d);
+        }
+
+        if (delayMs is { } delay)
+        {
+            SetEffectDelay(node, delay);
+        }
+
+        // Trigger changes the cTn node type; when it crosses the click boundary the group layout changes,
+        // so rebuild the whole mainSeq from the (unchanged) effect order with the new trigger applied.
+        if (!string.Equals(trigger, view.Trigger, StringComparison.Ordinal))
+        {
+            node.NodeType = TriggerNodeType(trigger!);
+            RebuildGroups(slidePart, applyTriggerToIndex: (view.Index, trigger!));
+        }
+
+        return address.CanonicalAnimationPath;
+    }
+
+    // ----- move (reorder) --------------------------------------------------------
+
+    /// <summary>
+    /// move /slide[i]/animation[k] before/after another animation: reorders the effect in the timeline,
+    /// then rebuilds the click-group structure from the new order (each effect keeps its own trigger).
+    /// Returns the moved animation's new canonical path.
+    /// </summary>
+    public static string Move(PresentationPart presentation, PptxAddress address, string? position)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var animations = List(slidePart);
+        var from = address.AnimationIndex!.Value;
+        if (from < 1 || from > animations.Count)
+        {
+            _ = Resolve(slidePart, address); // throws invalid_path with candidates
+        }
+
+        // Reorder by anchor reference so indices never go stale mid-shuffle.
+        var pars = animations.Select(a => a.Par).ToList();
+        var moving = pars[from - 1];
+        var (anchorIndex, before) = ParseAnimationMoveTarget(position, address, animations);
+        var anchorPar = pars[anchorIndex - 1];
+        if (ReferenceEquals(anchorPar, moving))
+        {
+            return Units.Inv($"/slide[{address.SlideIndex}]/animation[{from}]"); // anchored to itself: a no-op
+        }
+
+        pars.Remove(moving);
+        var at = pars.IndexOf(anchorPar) + (before ? 0 : 1);
+        pars.Insert(at, moving);
+
+        RebuildGroups(slidePart, orderedPars: pars);
+
+        var newIndex = List(slidePart).FindIndex(a => ReferenceEquals(a.Par, moving)) + 1;
+        return Units.Inv($"/slide[{address.SlideIndex}]/animation[{newIndex}]");
+    }
+
+    /// <summary>Parses "before /slide[i]/animation[j]" / "after ..." into (anchor index, isBefore).</summary>
+    private static (int AnchorIndex, bool Before) ParseAnimationMoveTarget(
+        string? position, PptxAddress address, List<AnimationView> animations)
+    {
+        const string usage =
+            "Use \"before /slide[i]/animation[j]\" or \"after /slide[i]/animation[j]\".";
+        if (string.IsNullOrWhiteSpace(position))
+        {
+            throw new AiofficeException(ErrorCodes.InvalidArgs, "move requires a position.", usage);
+        }
+
+        var (keyword, rest) = SplitKeyword(position.Trim());
+        if (keyword is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown move position '{position}'.",
+                usage + " Animations reorder relative to another animation, not by absolute index.");
+        }
+
+        var anchor = PptxAddress.Parse(rest);
+        if (!anchor.IsAnimation || anchor.SlideIndex != address.SlideIndex)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"The move anchor must be another animation on slide {address.SlideIndex}: '{rest}'.",
+                usage);
+        }
+
+        var anchorIndex = anchor.AnimationIndex!.Value;
+        if (anchorIndex < 1 || anchorIndex > animations.Count)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"Anchor animation {anchorIndex} is out of range 1..{animations.Count}."),
+                usage);
+        }
+
+        return (anchorIndex, keyword == "before");
+    }
+
+    private static (string? Keyword, string Remainder) SplitKeyword(string text)
+    {
+        foreach (var keyword in new[] { "before", "after" })
+        {
+            if (text.StartsWith(keyword, StringComparison.OrdinalIgnoreCase) &&
+                text.Length > keyword.Length &&
+                (text[keyword.Length] == ' ' || text[keyword.Length] == ':'))
+            {
+                return (keyword, text[(keyword.Length + 1)..].Trim());
+            }
+        }
+
+        return (null, text);
+    }
+
+    /// <summary>
+    /// Rebuilds the mainSeq click-group structure from the current (or given) effect order. Each effect's
+    /// own trigger decides grouping: a click effect (or the first effect) opens a new group; with/after
+    /// effects join the open group. Effect pars are reused (their behaviors/ids are untouched).
+    /// </summary>
+    private static void RebuildGroups(
+        SlidePart slidePart,
+        List<P.ParallelTimeNode>? orderedPars = null,
+        (int Index, string Trigger)? applyTriggerToIndex = null)
+    {
+        var slide = slidePart.Slide!;
+        var pars = orderedPars ?? List(slidePart).Select(a => a.Par).ToList();
+
+        var mainSequenceChildren = EnsureMainSequence(slide);
+
+        // Detach every effect par from its current group, then drop the now-empty groups.
+        foreach (var par in pars)
+        {
+            par.Remove();
+        }
+
+        foreach (var group in mainSequenceChildren.Elements<P.ParallelTimeNode>().ToList())
+        {
+            group.Remove();
+        }
+
+        var nextId = NextTimeNodeId(slide.Timing!);
+        P.ChildTimeNodeList? openGroup = null;
+        var index = 0;
+        foreach (var par in pars)
+        {
+            index++;
+            var effectNode = par.CommonTimeNode!;
+            var trigger = applyTriggerToIndex is { } at && at.Index == index
+                ? at.Trigger
+                : TriggerOf(effectNode);
+
+            if (trigger == "click" || openGroup is null)
+            {
+                openGroup = NewClickGroup(mainSequenceChildren, ref nextId);
+            }
+
+            openGroup.Append(par);
+        }
+    }
+
+    private static string TriggerOf(P.CommonTimeNode node) => node.NodeType?.Value switch
+    {
+        { } t when t == P.TimeNodeValues.WithEffect => "withPrevious",
+        { } t when t == P.TimeNodeValues.AfterEffect => "afterPrevious",
+        _ => "click",
+    };
+
+    private static P.TimeNodeValues TriggerNodeType(string trigger) => trigger switch
+    {
+        "withPrevious" => P.TimeNodeValues.WithEffect,
+        "afterPrevious" => P.TimeNodeValues.AfterEffect,
+        _ => P.TimeNodeValues.ClickEffect,
+    };
+
+    /// <summary>Rewrites the effect's start-condition delay (in ms).</summary>
+    private static void SetEffectDelay(P.CommonTimeNode node, long delayMs)
+    {
+        var conditions = node.GetFirstChild<P.StartConditionList>();
+        if (conditions is null)
+        {
+            conditions = new P.StartConditionList();
+            node.InsertAt(conditions, 0);
+        }
+
+        var condition = conditions.GetFirstChild<P.Condition>();
+        if (condition is null)
+        {
+            condition = new P.Condition();
+            conditions.Append(condition);
+        }
+
+        condition.Delay = delayMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Rewrites the first user-facing timed behavior's duration (skipping the 1ms visibility set).</summary>
+    private static void RetimeDuration(P.ParallelTimeNode par, long durationMs)
+    {
+        foreach (var behavior in par.Descendants<P.CommonBehavior>())
+        {
+            if (behavior.Parent is P.SetBehavior)
+            {
+                continue;
+            }
+
+            if (behavior.GetFirstChild<P.CommonTimeNode>() is { } timeNode)
+            {
+                timeNode.Duration = durationMs.ToString(CultureInfo.InvariantCulture);
+                return;
+            }
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.UnsupportedFeature,
+            "This animation has no timed behavior to retime.",
+            "Instantaneous effects (e.g. appear) take no duration; re-add the animation as a timed effect (e.g. fade).");
+    }
+
     private sealed record EffectSpec(
         string Class, string Effect, string Trigger, long DurationMs, long DelayMs, string Direction, string ColorHex);
 

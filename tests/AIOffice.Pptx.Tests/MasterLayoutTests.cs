@@ -11,8 +11,8 @@ namespace AIOffice.Pptx.Tests;
 
 /// <summary>
 /// M1 master/layout read addressing: /master[1], /master[1]/layout[2] and
-/// shapes beneath are gettable/queryable/listable, while every edit on them
-/// stays a typed unsupported_feature until M2.
+/// shapes beneath are gettable/queryable/listable. (M6 promoted these paths to
+/// editable — see MasterEditTests; rendering a master directly stays unsupported.)
 /// </summary>
 public sealed class MasterLayoutTests : IDisposable
 {
@@ -189,13 +189,14 @@ public sealed class MasterLayoutTests : IDisposable
     }
 
     [Fact]
-    public void Get_ParagraphUnderMaster_IsUnsupportedPlannedM2()
+    public void Get_ParagraphUnderMaster_IsUnsupported()
     {
         Create();
+        AddMasterTitleShape();
         var envelope = _handler.Get(_ws.Ctx("deck.pptx", ("path", "/master[1]/shape[1]/p[1]")));
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Contains("M2", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Paragraph", error.Message, StringComparison.Ordinal);
         Assert.Contains("/slide[", error.Suggestion, StringComparison.Ordinal);
     }
 
@@ -282,34 +283,33 @@ public sealed class MasterLayoutTests : IDisposable
         Assert.Contains("shape", error.Candidates!);
     }
 
-    // ---- edits stay closed until M2 -------------------------------------------
+    // ---- masters/layouts are editable from M6 ---------------------------------
+    // Full coverage lives in MasterEditTests; this just confirms the M1 read-only
+    // gate is gone — a master shape edit now succeeds and stays validator-clean.
 
     [Fact]
-    public void Edit_AnyOpOnMasterOrLayoutPaths_IsUnsupportedPlannedM2AndNoWrite()
+    public void Edit_MasterShapeText_IsNowSupported_AndStaysValid()
     {
-        var file = Create();
-        AddTitleOnlyLayout();
-        var before = File.ReadAllBytes(file);
+        Create();
+        AddMasterTitleShape();
+        TestEnv.AssertValid(_ws, "deck.pptx");
 
-        EditOp[] ops =
-        [
-            TestEnv.Op("set", "/master[1]/shape[1]", props: TestEnv.Props(("text", JsonValue.Create("nope")))),
-            TestEnv.Op("set", "/master[1]/layout[2]/shape[1]", props: TestEnv.Props(("fill", JsonValue.Create("FF0000")))),
-            TestEnv.Op("add", "/master[1]", type: "shape"),
-            TestEnv.Op("remove", "/master[1]/layout[2]"),
-            TestEnv.Op("move", "/master[1]", position: "1"),
-        ];
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", "/master[1]/shape[1]", props: TestEnv.Props(("text", JsonValue.Create("Edited master title")))),
+        ]));
 
-        foreach (var op in ops)
-        {
-            var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [op]);
-            var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-            Assert.Equal(ExitCodes.UnsupportedFeature, envelope.ExitCode);
-            Assert.Contains("M2", error.Message, StringComparison.Ordinal);
-            Assert.Contains("add slide", error.Suggestion, StringComparison.Ordinal);
-        }
+        var data = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/master[1]/shape[1]"))));
+        Assert.Equal("Edited master title", data["text"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
 
-        Assert.Equal(before, File.ReadAllBytes(file));
+    [Fact]
+    public void Move_MasterPath_IsInvalidArgs()
+    {
+        Create();
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("move", "/master[1]", position: "1")]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
     }
 
     [Fact]
@@ -326,7 +326,7 @@ public sealed class MasterLayoutTests : IDisposable
     }
 
     [Fact]
-    public void Render_MasterScope_IsUnsupportedPlannedM2()
+    public void Render_MasterScope_IsUnsupported()
     {
         Create();
         var envelope = _handler.Render(_ws.Ctx("deck.pptx", ("to", "svg"), ("scope", "/master[1]")));

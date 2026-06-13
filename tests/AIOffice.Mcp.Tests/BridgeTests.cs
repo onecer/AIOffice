@@ -245,4 +245,45 @@ public sealed class BridgeTests : IDisposable
         var content = EnvelopeAssert.Ok(read).GetProperty("content").GetString()!;
         Assert.Contains("007", content, StringComparison.Ordinal);
     }
+
+    // M6: add a docx equation over MCP, then read its stored LaTeX back. Exercises
+    // the new "equation" op type and the /body/p[i]/omath[j] addressing form
+    // through the real server + EditOp.ParseBatch gate (tool count stays 14).
+    [Fact]
+    public async Task Office_edit_adds_a_docx_equation_over_the_wire()
+    {
+        await using var srv = await McpTestServer.StartAsync(_service);
+
+        Assert.Equal(14, (await srv.Client.ListToolsAsync()).Count);
+
+        EnvelopeAssert.Ok(await srv.CallAsync("office_create", new Dictionary<string, object?>
+        {
+            ["file"] = "eq.docx",
+        }));
+
+        var edited = await srv.CallAsync("office_edit", new Dictionary<string, object?>
+        {
+            ["file"] = "eq.docx",
+            ["ops"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["op"] = "add",
+                    ["path"] = "/body/p[1]",
+                    ["type"] = "equation",
+                    ["props"] = new Dictionary<string, object?> { ["latex"] = "E = mc^2" },
+                },
+            },
+        });
+        var op = EnvelopeAssert.Ok(edited).GetProperty("ops")[0];
+        Assert.Equal("/body/p[1]/omath[1]", op.GetProperty("path").GetString());
+
+        var got = await srv.CallAsync("office_get", new Dictionary<string, object?>
+        {
+            ["file"] = "eq.docx",
+            ["path"] = "/body/p[1]/omath[1]",
+        });
+        Assert.Equal("E = mc^2",
+            EnvelopeAssert.Ok(got).GetProperty("properties").GetProperty("latex").GetString());
+    }
 }

@@ -24,8 +24,10 @@ public static class HelpTopics
                 - envelope        the {ok,data,error,meta} result shape
                 - errors          all error codes and how to recover
                 - bridges         markdown↔docx and csv↔xlsx import/export (M5)
-                - docx/paragraph  paragraph element: settable props
-                - docx/table      deep tables: merges, borders, shading, widths (M5)
+                - equations       docx LaTeX → Office Math: the supported subset (M6)
+                - rtl             right-to-left paragraph/run/table (M6)
+                - docx/paragraph  paragraph element: settable props (incl. rtl)
+                - docx/table      deep tables: merges, borders, shading, widths, rtl (M5/M6)
                 - docx/field      PAGE/NUMPAGES/DATE/TITLE fields (M5)
                 - docx/header     default/firstPage/even header+footer variants (M5)
                 - docx/revisions  tracked changes: track:true, accept/reject ops
@@ -34,20 +36,26 @@ public static class HelpTopics
                 - docx/image      inline pictures: add type "image"
                 - docx/list       numbered/bulleted/nested list items (M3)
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
-                - docx/section    page size/orientation/margins (M3)
+                - docx/section    page size/orientation/margins + columns (M3/M6)
+                - docx/equation   inline/display LaTeX equations (M6)
                 - xlsx/cell       cell element: settable props incl. hyperlink (M5)
+                - xlsx/table      Excel Tables (ListObjects) + totals + structured refs (M6)
+                - xlsx/group      row/column outline grouping (M6)
                 - xlsx/dataValidation  list dropdowns + wholeNumber/decimal/date/textLength rules (M5)
                 - xlsx/sparkline  line/column/winLoss sparklines (M5)
                 - xlsx/comment    threaded comments + replies (M5)
                 - xlsx/pivot      pivot tables: add type "pivot"
                 - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
                 - xlsx/image      anchored pictures: add type "image"
-                - xlsx/sheet      freeze/autoFilter/print setup, defined names, streaming (M3)
+                - xlsx/sheet      freeze/autoFilter/print setup, names, streaming read+write (M3/M6)
                 - pptx/shape      shape element: settable props incl. preset geometry/z-order
                 - pptx/table      native tables: merges, looks, columnWidths (M5)
-                - pptx/animation  entrance/emphasis/exit effects (M4/M5)
+                - pptx/animation  entrance/emphasis/exit effects + timeline reorder (M4/M5/M6)
                 - pptx/comment    slide comments + threaded replies (M5)
                 - pptx/slide      slide props incl. background + transition
+                - pptx/section    slide sections grouping the outline (M6)
+                - pptx/master     editable masters/layouts + cloned layouts (M6)
+                - pptx/slideSize  slide dimensions / aspect ratio (M6)
                 - pptx/notes      speaker notes: /slide[i]/notes
                 - pptx/image      pictures: add type "image"
                 - pptx/chart      native charts + cross-doc dataFrom (M3)
@@ -163,10 +171,43 @@ public static class HelpTopics
                  "duration":"0.5s"?,"delay"?,"direction"?,"color"?}}
                 entrance: appear, fade, flyIn, wipe   emphasis: pulse, grow, spin, colorPulse (takes color)
                 exit:     fadeOut, flyOut, wipeOut    direction: flyIn/wipe/flyOut/wipeOut only (left|right|top|bottom)
-                triggers: click | withPrevious | afterPrevious. read {view:"structure"} lists per-slide animation order;
-                get the shape to see its animations; remove /slide[i]/animation[k] to drop one.
+                triggers: click | withPrevious | afterPrevious. read {view:"structure"} lists per-slide animation order.
+                M6 timeline: move /slide[i]/animation[2] before/after /slide[i]/animation[1] reorders; set retunes props;
+                remove /slide[i]/animation[k] drops one.
                 """,
                 ["pptx/shape", "pptx/slide"]),
+
+            ["pptx/section"] = (
+                """
+                ## pptx slide sections (M6) — add type "section" on the "/" root
+                {"op":"add","path":"/","type":"section","props":{"name":"Intro","afterSlide":0}}
+                afterSlide is 0-based: 0 = before slide 1, N = after slide N; the section claims the still-unsectioned
+                slides from there up to the next section. set /section[i] {name} renames; remove /section[i] drops it
+                (slides survive, just unsectioned). read {view:"outline"} groups slides by section; get /section[i]
+                returns its name + slides. Sections track slides by sldId, so they survive reordering.
+                """,
+                ["pptx/slide", "pptx/slideSize"]),
+
+            ["pptx/master"] = (
+                """
+                ## pptx master/layout editing (M6) — the M1 read-only debt is paid
+                set /master[m]            {background (hex), accent1..accent6 (theme color scheme)}
+                set /master[m]/layout[l]  {background}
+                add /master[m] {type:layout, props:{name, basedOn?}}  clones an existing layout (basedOn 1-based)
+                set/add/remove /master[m]/shape[i], /master[m]/layout[l]/shape[i]  reuse the slide shape ops
+                Use a cloned layout on a new slide: add type:slide props:{layout:N} (1-based). remove a layout only
+                when no slide references it. get /master[m] lists layouts (name, type, usedBySlides).
+                """,
+                ["pptx/slide", "pptx/shape"]),
+
+            ["pptx/slideSize"] = (
+                """
+                ## pptx slide size (M6) — set on the "/" root
+                {"op":"set","path":"/","props":{"slideSize":"16:9|4:3|16:10|A4|letter"}}  (a named preset)
+                or explicit {"width":"33.87cm","height":"19.05cm"} (cm/in/emu) — not both. Rewrites p:sldSz; existing
+                shapes keep their coordinates. get / reports slideSize, widthCm, heightCm, slideCount, sectionCount.
+                """,
+                ["pptx/section", "pptx/slide"]),
 
             ["pptx/comment"] = (
                 """
@@ -185,8 +226,11 @@ public static class HelpTopics
                 docx:  /body/p[3]   /body/table[1]/tr[2]/tc[1]   /body/p[3]/run[2]   /header[1]/p[1]   /footer[1]/p[1]
                 xlsx:  /Sheet1/A1   /Sheet1/A1:C10   /Sheet1/row[3]   /Sheet1/chart[1]   sheet names with spaces or specials are quoted: /'Q3 Data'/B2 (escape ' as '')
                 pptx:  /slide[2]   /slide[2]/shape[3]   /slide[2]/shape[@id=7] (stable-id form, canonical in results)   /slide[2]/shape[3]/p[1]
-                       /master[1]   /master[1]/layout[2]   /master[1]/shape[1]   (masters/layouts are read-only: get/query; editing them is M2)
-                "/" alone addresses document-level properties (office_get and office_edit set only).
+                       /master[1]   /master[1]/layout[2]   /master[1]/shape[1]   (M6: editable — background, accents, shapes, cloned layouts)
+                       /section[i] (slide section)   /slide[i]/animation[k] (timeline)
+                docx M6:  /body/p[i]/omath[j] (inline equation)   /section[i] (page setup + columns)
+                xlsx M6:  /Sheet1/table[@name=X] (Excel Table)   /Sheet1/row[a]:row[b], /Sheet1/col[a]:col[b] (outline group spans)
+                "/" alone is the document root: pptx slide size + sections, and document-level office_get.
                 office_query returns canonical paths; office_get / office_edit accept them verbatim.
                 Positional indices DRIFT after inserts/removes — re-run office_query instead of reusing old indices.
                 """,
@@ -422,14 +466,51 @@ public static class HelpTopics
 
             ["docx/section"] = (
                 """
-                ## docx page setup (M3) — set on /section[1]
+                ## docx page setup + columns (M3/M6) — set on /section[1]
                 pageSize     A4 | Letter | Legal | A3 | A5
                 orientation  portrait | landscape (width/height swap automatically)
                 marginTop / marginBottom / marginLeft / marginRight   unit-qualified, e.g. "2cm"
+                columns (M6) newspaper column count (1 clears)   columnGap (M6) gap between columns, e.g. "1.25cm"
                 {"op":"set","path":"/section[1]","props":{"pageSize":"A4","orientation":"landscape"}}
-                office_get /section[1] reflects everything (cm). Inserting NEW sections is not supported yet.
+                two columns: {"op":"set","path":"/section[1]","props":{"columns":2}}
+                office_get /section[1] reflects everything (cm, columns, columnGapCm). New section breaks:
+                {"op":"add","type":"sectionBreak"}; push text to the next column: {"op":"add","type":"columnBreak"}.
                 """,
                 ["docx/paragraph", "addressing"]),
+
+            ["equations"] = (
+                """
+                ## equations (M6) — LaTeX in, Office Math out (docx)
+                Add: {"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"E = mc^2","display":false}}
+                     display:true -> centered block (m:oMathPara); false (default) -> inline at /body/p[i]/omath[j].
+                Read: office_get /body/p[i]/omath[j] -> {latex, display} (your source, stored verbatim).
+                      office_read {view:"text"} shows $…$ (inline) / $$…$$ (display) markers.
+                Subset: x^2 a_i ; \\frac \\dfrac \\sqrt ; \\sum \\prod \\int \\lim with _/^ ;
+                        \\begin{pmatrix|bmatrix|Bmatrix|vmatrix|matrix}…&…\\\\…\\end{…} ; \\left( \\right) ;
+                        \\bar \\overline ; \\text \\mathrm \\mathbf ; Greek \\alpha..\\omega ;
+                        \\pm \\times \\cdot \\leq \\geq \\neq \\infty \\partial \\nabla \\rightarrow ; spacing \\, \\quad.
+                Unknown commands degrade to literal runs + an equation_partial warning (file still validates).
+                docx only in M6 (pptx/xlsx equations are M7). Tracked-changes does not record equation adds.
+                """,
+                ["docx/equation", "rtl"]),
+
+            ["docx/equation"] = (
+                """
+                ## docx equations (M6) — add type "equation"
+                props: latex (required, the LaTeX source) ; display (bool: true = centered block, false = inline).
+                Inline path: /body/p[i]/omath[j]. See office_help {topic:"equations"} for the supported LaTeX subset.
+                """,
+                ["equations", "docx/paragraph"]),
+
+            ["rtl"] = (
+                """
+                ## right-to-left / bidi (M6) — docx, prop "rtl" (bool)
+                paragraph: {"op":"set","path":"/body/p[5]","props":{"rtl":true}} (w:bidi; also right-aligns).
+                run:       {"op":"set","path":"/body/p[5]/run[2]","props":{"rtl":true}} (w:rtl, mixed-direction span).
+                table:     {"op":"set","path":"/body/table[1]","props":{"rtl":true}} (w:bidiVisual; mirrors columns).
+                office_get reports rtl on each. aioffice never reshapes glyphs; it sets the OOXML direction only.
+                """,
+                ["docx/paragraph", "docx/table"]),
 
             ["xlsx/sheet"] = (
                 """
@@ -441,9 +522,35 @@ public static class HelpTopics
                             then formulas just use it: {"op":"set","path":"/Sheet1/D6","props":{"value":"=SUM(SalesData)"}} (evaluates).
                             get /name[@name=X] or /Sheet1/name[@name=X].
                 Streaming reads: files over 20 MB (or args.stream:true) answer read stats/text and cell/range get
-                via a SAX scan (no DOM). Reads only — edits still load the whole workbook.
+                via a SAX scan (no DOM). M6 streaming WRITES: with stream:true (or a >20 MB file) an all-streamable
+                batch (set value / set values / set a formula) rewrites the workbook in place via the SAX writer —
+                see xlsx/sheet streaming and office_help {topic:"xlsx/table"}/{topic:"xlsx/group"}.
                 """,
-                ["xlsx/cell", "edit-ops"]),
+                ["xlsx/cell", "xlsx/table", "xlsx/group"]),
+
+            ["xlsx/table"] = (
+                """
+                ## xlsx Excel Tables / ListObjects (M6) — add type "table" (path = the range, first row = headers)
+                {"op":"add","path":"/Sheet1/A1:D20","type":"table","props":{"name":"Sales","style":"medium2",
+                 "headerRow":true,"totalsRow":false,"totals":{"Amount":"sum"},"bandedRows":true}}
+                style: none | light1-21 | medium1-28 | dark1-11 (e.g. "medium2"), or the full "TableStyleMedium2".
+                totals: column->function map (sum/average/count/countNumbers/min/max/stdDev/var); turns the totals row on.
+                Structured references evaluate (the table exists before save): {"value":"=SUM(Sales[Amount])"}.
+                get /Sheet1/table[@name=Sales] describes range/style/columns/totals. remove drops the ListObject but
+                KEEPS the cell data.
+                """,
+                ["xlsx/cell", "xlsx/group"]),
+
+            ["xlsx/group"] = (
+                """
+                ## xlsx outline grouping (M6) — add type "group" over a row/column span
+                rows: {"op":"add","path":"/Sheet1/row[2]:row[6]","type":"group","props":{"collapsed":true}}
+                cols: {"op":"add","path":"/Sheet1/col[B]:col[E]","type":"group"}
+                The span is ONE path segment: row[a]:row[b] or col[a]:col[b]. collapsed:true collapses the new group;
+                nesting raises the outline level. remove over the same span ungroups one level.
+                A row/column get and read {view:"structure"} report outlineLevel/collapsed; Excel draws the symbols.
+                """,
+                ["xlsx/sheet", "edit-ops"]),
 
             ["pptx/chart"] = (
                 """

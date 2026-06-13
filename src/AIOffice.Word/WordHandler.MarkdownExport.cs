@@ -299,6 +299,18 @@ public sealed partial class WordHandler
 
                 break;
 
+            case DocumentFormat.OpenXml.Math.OfficeMath inlineMath: // GFM inline math
+                sb.Append('$').Append(EquationLatex(inlineMath)).Append('$');
+                break;
+
+            case DocumentFormat.OpenXml.Math.Paragraph displayMath: // m:oMathPara → block math
+                foreach (var oMath in displayMath.ChildElements.OfType<DocumentFormat.OpenXml.Math.OfficeMath>())
+                {
+                    sb.Append("$$").Append(EquationLatex(oMath)).Append("$$");
+                }
+
+                break;
+
             default: // DeletedRun, comment markers, pPr, bookmarks, …
                 break;
         }

@@ -12,6 +12,7 @@ listing the supported set; capabilities not built yet answer
 | text      | string | plain text; replaces all runs on `set`           |
 | style     | string | named paragraph style, e.g. Heading1, Normal     |
 | align     | string | left · center · right · justify                  |
+| rtl       | bool   | M6: right-to-left flow (`w:bidi`); turning it on also right-aligns the paragraph. `get` reports `rtl` |
 
 ## run
 
@@ -24,6 +25,7 @@ listing the supported set; capabilities not built yet answer
 | size      | number | points                      |
 | color     | string | hex RGB, e.g. FF0000        |
 | font      | string | font family name            |
+| rtl       | bool   | M6: right-to-left mark (`w:rtl`) for mixed-direction text |
 
 ## table / tr / tc
 
@@ -45,6 +47,7 @@ Deep tables (M5) — `set` on the table:
 | columnWidths  | array    | one per column, e.g. `["3cm","auto","2.5cm"]`|
 | alignment     | string   | left · center · right                       |
 | cellPaddingCm | number   | uniform cell padding                        |
+| rtl           | bool     | M6: right-to-left table (`w:bidiVisual` — mirrors column order). `get` reports `rtl` |
 
 and `set` on a cell (`/body/table[1]/tr[1]/tc[1]`): `mergeRight: N`
 (gridSpan), `mergeDown: N` (vMerge chain; 1 unmerges), `shading`, `valign:
@@ -107,16 +110,45 @@ shows `1.` / `•` markers; `render --to html` emits real `<ol>`/`<ul>`.
 `{op:"add", path:"/body/p[3]", type:"link", props:{text:"site", url:"https://…"}}`;
 internal jump: `props:{text:"see intro", anchor:"Intro"}` (a bookmark name).
 
-## section (M3, `/section[1]`)
+## section (M3 page setup + M6 columns, `/section[1]`)
 
 | prop                       | type   | notes                              |
 |----------------------------|--------|------------------------------------|
 | pageSize                   | string | A4 · Letter · Legal · A3 · A5      |
 | orientation                | string | portrait · landscape               |
 | marginTop/Bottom/Left/Right| length | e.g. "2cm", "72pt"                 |
+| columns                    | number | M6: newspaper-style column count (1 clears) |
+| columnGap                  | length | M6: space between columns, e.g. "1.25cm" |
 
 `{op:"set", path:"/section[1]", props:{pageSize:"A4", orientation:"landscape"}}`;
-`get /section[1]` reflects everything (sizes in cm).
+two-column layout: `{op:"set", path:"/section[1]", props:{columns:2}}`.
+`get /section[1]` reflects everything (sizes in cm, incl. `columns`,
+`columnGapCm`). Inserting NEW section breaks: `{op:"add", type:"sectionBreak"}`.
+
+## equation (M6, docx LaTeX → Office Math)
+
+`add` an equation with a LaTeX `latex` prop; `display:true` makes a centered
+equation block, `display:false` (default) an inline one.
+
+| prop    | type   | notes                                                  |
+|---------|--------|--------------------------------------------------------|
+| latex   | string | required; the LaTeX source (stored for faithful read-back) |
+| display | bool   | true = centered block (`m:oMathPara`); false = inline (default) |
+
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"E = mc^2"}}]'
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"equation","props":{"latex":"\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}","display":true}}]'
+
+Inline equations are addressed `/body/p[i]/omath[j]`; `get` returns the stored
+`latex` and `display`. `read --view text` shows `$…$` (inline) / `$$…$$`
+(display) markers. Unrecognized LaTeX commands degrade to literal runs and
+raise an `equation_partial` warning (the file still validates). See
+`aioffice help equations` for the supported LaTeX subset.
+
+## columnBreak (M6)
+
+`{op:"add", path:"/body/p[3]", type:"columnBreak"}` inserts a `w:br
+w:type="column"` so the following text flows into the next column of a
+multi-column section.
 
 ## tracked changes (M2)
 

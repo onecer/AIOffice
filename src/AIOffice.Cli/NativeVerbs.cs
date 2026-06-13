@@ -15,6 +15,7 @@ public sealed class NativeVerbs
     private static readonly string[] HelpTopics =
     [
         "addressing", "selectors", "properties-docx", "properties-xlsx", "properties-pptx", "errors",
+        "equations", "rtl", "sections",
     ];
 
     private readonly Workspace _workspace;

@@ -149,8 +149,13 @@ public sealed partial class ExcelHandler
                     tables = ws.Tables
                         .Select(t => new
                         {
+                            path = ExcelPaths.TablePath(ws, t.Name),
                             name = t.Name,
                             range = t.RangeAddress.ToString(),
+                            style = t.Theme == ClosedXML.Excel.XLTableTheme.None ? "none" : t.Theme.Name,
+                            headerRow = t.ShowHeaderRow,
+                            totalsRow = t.ShowTotalsRow,
+                            bandedRows = t.ShowRowStripes,
                             columns = t.Fields.Select(f => f.Name).ToList(),
                         })
                         .ToList(),
@@ -179,10 +184,65 @@ public sealed partial class ExcelHandler
                     notes = NoteList(ws),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
                     autoFilter = ws.AutoFilter.IsEnabled ? ws.AutoFilter.Range?.RangeAddress.ToString() : null,
+                    outline = OutlineInfo(ws),
                 })
                 .ToList(),
             definedNames = ExcelNames.ListAll(workbook),
         };
+    }
+
+    /// <summary>
+    /// Outline groups on a sheet: the row/column spans that carry an outline
+    /// level &gt; 0, contracted from consecutive same-level rows/columns. Null
+    /// when the sheet has no grouping (the common case pays nothing extra).
+    /// </summary>
+    private static object? OutlineInfo(IXLWorksheet ws)
+    {
+        var rowGroups = GroupSpans(
+            ws,
+            ws.RowsUsed(XLCellsUsedOptions.All).Select(r => (r.RowNumber(), r.OutlineLevel)),
+            (first, last) => string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{ExcelPaths.SheetPath(ws)}/row[{first}]:row[{last}]"));
+        var columnGroups = GroupSpans(
+            ws,
+            ws.ColumnsUsed(XLCellsUsedOptions.All).Select(c => (c.ColumnNumber(), c.OutlineLevel)),
+            (first, last) => string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{ExcelPaths.SheetPath(ws)}/col[{ExcelCharts.ColumnLetters(first)}]:col[{ExcelCharts.ColumnLetters(last)}]"));
+
+        if (rowGroups.Count == 0 && columnGroups.Count == 0)
+        {
+            return null;
+        }
+
+        return new { rowGroups, columnGroups };
+    }
+
+    /// <summary>Contracts consecutive same-level indices into {path, level} spans.</summary>
+    private static List<object> GroupSpans(
+        IXLWorksheet ws, IEnumerable<(int Index, int Level)> levels, Func<int, int, string> path)
+    {
+        var spans = new List<object>();
+        var ordered = levels.Where(l => l.Level > 0).OrderBy(l => l.Index).ToList();
+        var i = 0;
+        while (i < ordered.Count)
+        {
+            var level = ordered[i].Level;
+            var first = ordered[i].Index;
+            var last = first;
+            var j = i + 1;
+            while (j < ordered.Count && ordered[j].Level == level && ordered[j].Index == last + 1)
+            {
+                last = ordered[j].Index;
+                j++;
+            }
+
+            spans.Add(new { path = path(first, last), outlineLevel = level });
+            i = j;
+        }
+
+        return spans;
     }
 
     private Envelope ReadText(CommandContext ctx, XLWorkbook workbook, string file, System.Diagnostics.Stopwatch sw)

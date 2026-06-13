@@ -603,10 +603,25 @@ public sealed class AiofficeError : Exception
 - ✅ pptx：原生表格（a:tbl 手写——rows×cols/headerRow/columnWidths + light/medium/dark 直绘样式 + mergeRight/mergeDown，SVG 渲染真网格）、强调动画（pulse/grow/spin/colorPulse）与退出动画（fadeOut/flyOut/wipeOut，尾帧 hide set）、批注回复线程（p15 threadingInfo/parentCm）、SmartArt 只读（structure/get 输出连接序节点树）。
 - ⏭ 留给 M6 的种子：大工作簿**就地写入**流式、插件机制（外部格式 handler）、公式（OMML）、RTL 深化、现代 pptx 线程批注 part、动画时间轴编辑（效果链/motion path）、连接线/组合。
 
-### M6 — 能力深化（规划）
+### M6 — 深水区攻坚（已交付，v0.7.0）
 
-- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M6 窗口），或显式标记"不做 + 理由"。
-- docx 移动修订、xlsx 其余 7 类条件格式与透视表深化（layout/topN/calculatedField）、pptx 渐变/图片背景与母版编辑。
+- ✅ **docx 公式**（AI 原生旗舰）：自研 LaTeX → OOXML Math（OMML）转换器（`AIOffice.Word.Equations`，**无 LaTeX 依赖**）——词法器 + 递归下降解析器 + OMML 发射器，覆盖分式（frac/dfrac/tfrac/cfrac）、根式、上下标、大型算符（sum/prod/int/lim 带 `_`/`^`）、矩阵环境（pmatrix/bmatrix/Bmatrix/vmatrix/Vmatrix/matrix，`&` 分列 `\\` 分行）、`\left…\right` 定界、重音（bar/overline）、文本 run（text/mathrm/mathbf/mathit/operatorname）、希腊字母与算符关系符号。`add type:equation`（latex + display）：行内追加 `m:oMath`（`/body/p[i]/omath[j]`），display 出居中 `m:oMathPara` 块。**未知命令降级为字面 run + `equation_partial` warning**（文件仍过校验）。原始 LaTeX 以 `mc:Ignorable` 厂商属性（`urn:aioffice:equation`）存档，`get` 忠实回读、round-trip 字节一致（命名空间在根 `w:document` 一次声明，按 SDK 规范化序，保证首存即匹配重存形态）。`read --view text` 出 `$…$`/`$$…$$` 标记。
+- ✅ **docx RTL/双向**：段落 `w:bidi`（同时右对齐）、run `w:rtl`、表格 `w:bidiVisual`（镜像列序），`rtl` bool prop，get 回报。
+- ✅ **docx 多栏分节**：`/section[1]` 的 `columns`/`columnGap`（等宽多栏），`add type:columnBreak`（`w:br w:type="column"`）。
+- ✅ **xlsx 就地流式写入**（旗舰）：`ExcelStreamingWrite.cs`——`stream:true` 或 >20 MB 文件触发；`TryPlan` 判定整批均为可流式 op（`set value` / `set values` 批量 / 公式串）时，经 SAX writer **原地改写**既有大工作簿目标 sheet part，否则整批回退 ClosedXML DOM；公式写入无缓存值（Excel 打开重算）；50 MB+ 工作簿就地改写实测秒级、内存有界。
+- ✅ **xlsx Excel 表（ListObject）**：`IXLRange.CreateTable` / `IXLTable`（ExcelTables.cs）——name + 内置样式（XLTableTheme，短名 medium2 映射）+ 汇总行（XLTotalsRowFunction）+ bandedRows/Columns；结构化引用 `=SUM(Sales[Amount])` 求值（表先于保存入模型）；`/Sheet1/table[@name=X]` get；remove 撤销表对象但**保留单元格数据**。
+- ✅ **xlsx 大纲分组**：`IXLRows.Group`/`Collapse`/`Ungroup`（ExcelGroups.cs）——`add type:group` 套 `row[a]:row[b]`/`col[a]:col[b]` 跨段、`collapsed`、嵌套抬升大纲级；remove 反分组一级；行/列 get 与 structure 回报 outlineLevel/collapsed。
+- ✅ **pptx 母版/版式编辑**：`PptxMasters.cs`——`set /master[m]`（background + accent1..6 主题强调色）、`set /master[m]/layout[l]`（background）、`add type:layout`（克隆既有版式，props.basedOn/name）、母版/版式形状复用 slide 形状 op；克隆版式经 `add type:slide props:{layout:N}` 套用。
+- ✅ **pptx 幻灯片分节**：`p14:sectionLst`（presentation.xml extLst，`PptxSections.cs`）——`add type:section`（`/` 根，name + afterSlide 0-based）、`set`/`remove`（片留存）、按 sldId 跟踪抗重排；`read --view outline` 按节分组。
+- ✅ **pptx 幻灯片尺寸**：`PptxSlideSize.cs`——`set /` `{slideSize}` 命名预设（16:9/4:3/16:10/A4/letter）或显式 `{width,height}`，改写 `p:sldSz`；`get /` 回报尺寸 + slideCount/sectionCount。
+- ✅ **pptx 动画时间轴**：`move /slide[i]/animation[k] before/after …` 重排、`set` 重调既有动画 props。
+- ✅ **Core 寻址扩展**（接到真实命令面的关键一步）：`DocPath` 新增 `/`（零段根路径，`IsRoot`）与元素跨段 `ElementSpan`（`row[a]:row[b]`/`col[a]:col[b]`）。M6 能力在格式层已实现并测试，但 `EditOp.ParseBatch` → `DocPath.Parse` 网关此前拒收这两种新形式（仅直构 EditOp 的格式层测试可达）；本次让它们通过网关，CLI/MCP 命令面直达，且 docx/xlsx 对 `/` 根 op 诚实返回 `unsupported_feature` 而非崩溃。
+- ⏭ 留给 M7 的种子：pptx/xlsx 公式（幻灯片/单元格内 OMML，复用本转换器）、插件机制（外部格式 handler）、现代 xlsx 批注打磨、动画预设++（完整强调/退出全集、效果链、motion path）、OLE 对象、无障碍/alt-text 审计。
+
+### M7 — 能力深化（规划）
+
+- 以 `docs/PARITY.md` 为账本继续清零（M1/M2 余项合并进 M7 窗口），或显式标记"不做 + 理由"。
+- pptx/xlsx 公式、插件机制、动画预设扩容、OLE 对象、无障碍审计。
 
 ---
 

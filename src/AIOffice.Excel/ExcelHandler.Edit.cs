@@ -20,7 +20,7 @@ public sealed partial class ExcelHandler
     private static readonly IReadOnlyList<string> AddTypes =
     [
         "sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note",
-        "dataValidation", "sparkline", "comment", "reply",
+        "dataValidation", "sparkline", "comment", "reply", "group",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -38,6 +38,15 @@ public sealed partial class ExcelHandler
                     $"The file changed since it was read: expected rev {expectRev}, but it is now {current}.",
                     "Re-run 'aioffice read' or 'aioffice query' to refresh paths, then retry with the new rev.");
             }
+        }
+
+        // In-place streaming write (M6 flagship): a large file (or stream=true)
+        // whose batch is ENTIRELY streamable cell/range writes is edited without
+        // a DOM load. Any other batch (or any op the SAX path can't handle)
+        // transparently falls through to the ClosedXML path below — same result.
+        if (TryStreamingEdit(ctx, file, ops, sw) is { } streamedEnvelope)
+        {
+            return streamedEnvelope;
         }
 
         using var workbook = OpenWorkbook(file);
@@ -141,6 +150,70 @@ public sealed partial class ExcelHandler
             new { applied = details.Count, ops = details },
             MetaFor(file, sw, warnings));
     });
+
+    /// <summary>
+    /// Attempts the M6 in-place streaming write. Returns a non-null envelope
+    /// only when the whole batch was handled by the SAX path; otherwise null,
+    /// and the caller runs the normal ClosedXML DOM pipeline (transparent
+    /// fallback — the user is never told which path ran, because both produce
+    /// the same workbook). dryRun is honored without touching the file.
+    /// </summary>
+    private Envelope? TryStreamingEdit(
+        CommandContext ctx, string file, IReadOnlyList<EditOp> ops, System.Diagnostics.Stopwatch sw)
+    {
+        // Explicit stream=false forces the DOM path even on a big file (the
+        // documented escape hatch; also how the equality gate routes its twin).
+        if (ArgIsExplicitlyFalse(ctx, "stream"))
+        {
+            return null;
+        }
+
+        if (!ExcelStreamingWrite.ShouldConsider(file, ArgBool(ctx, "stream")))
+        {
+            return null;
+        }
+
+        var plan = ExcelStreamingWrite.TryPlan(file, ops);
+        if (plan is null)
+        {
+            return null; // not a fully-streamable batch → DOM fallback
+        }
+
+        var details = new List<object>(ops.Count);
+        foreach (var op in ops)
+        {
+            details.Add(new
+            {
+                op = "set",
+                path = DocPath.Parse(op.Path).ToCanonicalString(),
+                applied = op.Props?.ContainsKey("values") == true ? new List<string> { "values" } : ["value"],
+                streamed = true,
+            });
+        }
+
+        if (ArgBool(ctx, "dryRun"))
+        {
+            return Envelope.Ok(
+                new { dryRun = true, wouldApply = details.Count, ops = details, streamed = true },
+                MetaFor(file, sw));
+        }
+
+        var snapshot = _snapshots.Save(file); // pre-image: streamed edits are undoable too
+        List<Warning>? warnings;
+        try
+        {
+            warnings = ExcelStreamingWrite.Apply(file, plan);
+        }
+        catch (Exception)
+        {
+            File.Copy(snapshot.Path, file, overwrite: true); // keep the file intact on any SAX failure
+            throw;
+        }
+
+        return Envelope.Ok(
+            new { applied = details.Count, ops = details, streamed = true },
+            MetaFor(file, sw, warnings));
+    }
 
     private static bool HasAnyFormula(XLWorkbook workbook) =>
         workbook.Worksheets.Any(ws => ws.CellsUsed().Any(c => c.HasFormula));
@@ -251,6 +324,17 @@ public sealed partial class ExcelHandler
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
         ChartOpBatch charts, PostSaveWork post, List<Warning> warnings)
     {
+        // "/" (document root) is meaningful only as a replace scope (expanded
+        // upstream into per-sheet ops). Any other root-targeted op has no xlsx
+        // surface — address a sheet/cell/range instead.
+        if (op.Op != "replace" && op.Path == "/")
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"ops[{index}]: xlsx has no document-root edit target ('/').",
+                "Address a sheet (/Sheet1), cell (/Sheet1/A1) or range; document-wide find/replace uses 'replace' with path '/'.");
+        }
+
         switch (op.Op)
         {
             case "set":
@@ -315,7 +399,8 @@ public sealed partial class ExcelHandler
         var target = ExcelPaths.Resolve(workbook, op.Path);
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
             or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image
-            or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment)
+            or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment
+            or ExcelTargetKind.Table)
         {
             var kindName = target.Kind switch
             {
@@ -839,13 +924,16 @@ public sealed partial class ExcelHandler
                 AddSheet(workbook, op, index, details);
                 break;
             case "table":
-                AddTable(workbook, op, index, details);
+                details.Add(ExcelTables.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
                 break;
             case "row":
                 AddRow(workbook, op, index, details);
                 break;
             case "col":
                 AddColumn(workbook, op, index, details);
+                break;
+            case "group":
+                details.Add(ExcelGroups.Add(workbook, op, index));
                 break;
             case "note":
                 details.Add(AddNote(ExcelPaths.Resolve(workbook, op.Path), op, index));
@@ -946,42 +1034,6 @@ public sealed partial class ExcelHandler
         details.Add(new { op = "add", type = "sheet", path = path.ToCanonicalString() });
     }
 
-    private static void AddTable(XLWorkbook workbook, EditOp op, int index, List<object> details)
-    {
-        var target = ExcelPaths.Resolve(workbook, op.Path);
-        if (target.Kind != ExcelTargetKind.Range)
-        {
-            throw new AiofficeException(
-                ErrorCodes.InvalidArgs,
-                $"ops[{index}]: add table needs a range path like /Sheet1/A1:C10 (first row = headers).",
-                "Address the data including its header row.");
-        }
-
-        var name = op.Props?.TryGetPropertyValue("name", out var nameNode) == true && nameNode is not null
-            ? nameNode.GetValue<string>()
-            : null;
-        try
-        {
-            var table = name is null ? target.Range!.CreateTable() : target.Range!.CreateTable(name);
-            details.Add(new
-            {
-                op = "add",
-                type = "table",
-                path = DocPath.Parse(op.Path).ToCanonicalString(),
-                name = table.Name,
-                columns = table.Fields.Select(f => f.Name).ToList(),
-            });
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-        {
-            throw new AiofficeException(
-                ErrorCodes.InvalidArgs,
-                $"ops[{index}]: could not create the table: {exception.Message}",
-                "Table names must be unique in the workbook and the range must not overlap an existing table.",
-                innerException: exception);
-        }
-    }
-
     private static void AddRow(XLWorkbook workbook, EditOp op, int index, List<object> details)
     {
         var target = ExcelPaths.Resolve(workbook, op.Path);
@@ -1058,6 +1110,15 @@ public sealed partial class ExcelHandler
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
         ChartOpBatch charts, PostSaveWork post)
     {
+        // Group spans (row[a]:row[b] / col[a]:col[b]) are an element-range form
+        // the shared grammar cannot parse; peel them off first (precedent:
+        // pivot[@name=…]).
+        if (ExcelGroups.TryResolveSpan(workbook, op.Path, out _))
+        {
+            details.Add(ExcelGroups.Remove(workbook, op, index));
+            return;
+        }
+
         // Defined-name paths use an id form the shared grammar cannot parse;
         // peel them off before path resolution (precedent: pivot[@name=…]).
         if (ExcelNames.TryParsePath(op.Path, out var nameSheetPath, out var definedName))
@@ -1137,6 +1198,10 @@ public sealed partial class ExcelHandler
 
             case ExcelTargetKind.Comment:
                 details.Add(RemoveComment(ctx, target, index, post));
+                return;
+
+            case ExcelTargetKind.Table:
+                details.Add(ExcelTables.Remove(target));
                 return;
         }
 

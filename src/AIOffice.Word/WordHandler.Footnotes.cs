@@ -198,7 +198,8 @@ public sealed partial class WordHandler
 
     /// <summary>
     /// InnerText-compatible paragraph text with list markers prefixed, [^n]
-    /// footnote markers and [^eN] endnote markers where the references sit.
+    /// footnote markers, [^eN] endnote markers, and equations rendered as their
+    /// stored LaTeX (<c>$latex$</c> inline, <c>$$latex$$</c> for a display block).
     /// </summary>
     private static string DisplayText(WordprocessingDocument doc, OpenXmlElement element)
     {
@@ -208,10 +209,30 @@ public sealed partial class WordHandler
             sb.Append(ListMarker(doc, paragraph));
         }
 
-        foreach (var node in element.Descendants())
+        // Equations carry their own LaTeX leaves; render them as $…$/$$…$$ and skip
+        // their descendant math text so the glyphs don't leak in twice.
+        AppendDisplayText(sb, element);
+        return sb.ToString();
+    }
+
+    private static void AppendDisplayText(System.Text.StringBuilder sb, OpenXmlElement element)
+    {
+        foreach (var child in element.ChildElements)
         {
-            switch (node)
+            switch (child)
             {
+                case DocumentFormat.OpenXml.Math.OfficeMath inlineMath:
+                    sb.Append('$').Append(EquationLatex(inlineMath)).Append('$');
+                    break;
+
+                case DocumentFormat.OpenXml.Math.Paragraph displayMath:
+                    foreach (var oMath in displayMath.ChildElements.OfType<DocumentFormat.OpenXml.Math.OfficeMath>())
+                    {
+                        sb.Append("$$").Append(EquationLatex(oMath)).Append("$$");
+                    }
+
+                    break;
+
                 case FootnoteReference reference:
                     sb.Append("[^").Append(reference.Id?.Value ?? 0).Append(']');
                     break;
@@ -225,10 +246,9 @@ public sealed partial class WordHandler
                     break;
 
                 default:
+                    AppendDisplayText(sb, child);
                     break;
             }
         }
-
-        return sb.ToString();
     }
 }

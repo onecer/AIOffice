@@ -192,6 +192,22 @@ public sealed partial class ExcelHandler : IFormatHandler
         };
     }
 
+    /// <summary>True only when the arg is present AND parses to a literal false (vs. simply absent).</summary>
+    private static bool ArgIsExplicitlyFalse(CommandContext ctx, string key)
+    {
+        if (!ctx.Args.TryGetPropertyValue(key, out var node) || node is not JsonValue value)
+        {
+            return false;
+        }
+
+        return value.GetValueKind() switch
+        {
+            JsonValueKind.False => true,
+            JsonValueKind.String => string.Equals(value.GetValue<string>(), "false", StringComparison.OrdinalIgnoreCase),
+            _ => false,
+        };
+    }
+
     private static int? ArgInt(CommandContext ctx, string key)
     {
         if (!ctx.Args.TryGetPropertyValue(key, out var node) || node is not JsonValue value)

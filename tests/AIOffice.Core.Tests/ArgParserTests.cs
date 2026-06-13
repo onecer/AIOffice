@@ -149,6 +149,22 @@ public class ArgParserTests
         Assert.False(string.IsNullOrWhiteSpace(ex.Suggestion));
     }
 
+    // Regression: M6 added the xlsx outline-group span form and the pptx "/"
+    // root form. ParseBatch validates every op path through DocPath.Parse, so
+    // these must survive the gate for the CLI/MCP surface to reach the handlers
+    // (the format-project tests build EditOps directly and bypass this gate).
+    [Theory]
+    [InlineData("[{\"op\":\"add\",\"path\":\"/Sheet1/row[2]:row[6]\",\"type\":\"group\"}]")]
+    [InlineData("[{\"op\":\"add\",\"path\":\"/Sheet1/col[B]:col[E]\",\"type\":\"group\"}]")]
+    [InlineData("[{\"op\":\"add\",\"path\":\"/\",\"type\":\"section\",\"props\":{\"name\":\"Intro\"}}]")]
+    [InlineData("[{\"op\":\"set\",\"path\":\"/\",\"props\":{\"slideSize\":\"4:3\"}}]")]
+    public void EditOp_batch_accepts_M6_span_and_root_paths(string json)
+    {
+        var ops = EditOp.ParseBatch(json);
+
+        Assert.Single(ops);
+    }
+
     [Fact]
     public void HandlerRegistry_resolves_by_extension_and_rejects_unknown()
     {

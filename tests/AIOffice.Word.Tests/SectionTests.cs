@@ -155,8 +155,10 @@ public sealed class SectionTests : WordTestBase
     {
         var file = CreateDoc(title: "Props");
 
+        // "columns"/"columnGap" are real section props since M6; use a genuinely
+        // unknown one to exercise the unsupported_feature path.
         var ex = Assert.Throws<AiofficeException>(() =>
-            Edit(file, """[{"op":"set","path":"/section[1]","props":{"columns":2}}]"""));
+            Edit(file, """[{"op":"set","path":"/section[1]","props":{"gutter":2}}]"""));
 
         Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
         Assert.Contains("orientation", ex.Candidates!);

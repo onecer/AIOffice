@@ -9,6 +9,12 @@ internal enum PptxRootKind
 {
     Slide,
     Master,
+
+    /// <summary>The presentation itself ("/"): slide size and section management.</summary>
+    Presentation,
+
+    /// <summary>A named slide section ("/section[i]").</summary>
+    Section,
 }
 
 /// <summary>
@@ -38,7 +44,8 @@ internal sealed partial record PptxAddress
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
         "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
-        "/master[1], /master[1]/layout[2] or /master[1]/shape[1]; " +
+        "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
+        "/section[1] (a slide section) or / (the presentation: slide size and sections); " +
         "indices are 1-based, @id is the stable id from query/get.";
 
     [GeneratedRegex(@"^slide\[([0-9]+)\]$")]
@@ -46,6 +53,9 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^master\[([0-9]+)\]$")]
     private static partial Regex MasterSegment();
+
+    [GeneratedRegex(@"^section\[([0-9]+)\]$")]
+    private static partial Regex SectionSegment();
 
     [GeneratedRegex(@"^layout\[([0-9]+)\]$")]
     private static partial Regex LayoutSegment();
@@ -98,6 +108,9 @@ internal sealed partial record PptxAddress
     /// <summary>1-based layout index beneath the master; null for the master itself.</summary>
     public int? LayoutIndex { get; init; }
 
+    /// <summary>1-based slide-section index ("/section[i]"); 0 when <see cref="Root"/> is not Section.</summary>
+    public int SectionIndex { get; init; }
+
     public int? ShapeOrdinal { get; init; }
 
     public uint? ShapeId { get; init; }
@@ -149,15 +162,42 @@ internal sealed partial record PptxAddress
 
     public bool IsMaster => Root == PptxRootKind.Master;
 
+    /// <summary>True when the path is the presentation root ("/").</summary>
+    public bool IsPresentation => Root == PptxRootKind.Presentation;
+
+    /// <summary>True when the path addresses a slide section ("/section[i]").</summary>
+    public bool IsSection => Root == PptxRootKind.Section;
+
     /// <summary>Parses an address or throws a typed <c>invalid_path</c>/<c>unsupported_feature</c>.</summary>
     public static PptxAddress Parse(string raw)
     {
+        // "/" is the presentation root (slide size and sections); every other path is at least "/x".
+        if (raw == "/")
+        {
+            return new PptxAddress { Raw = raw, Root = PptxRootKind.Presentation };
+        }
+
         if (string.IsNullOrWhiteSpace(raw) || raw[0] != '/' || raw.Length < 2 || raw[^1] == '/')
         {
-            throw Invalid(raw, "Paths start with '/' and must not end with one.");
+            throw Invalid(raw, "Paths start with '/' and must not end with one ('/' alone is the presentation root).");
         }
 
         var segments = raw[1..].Split('/');
+        if (SectionSegment().Match(segments[0]) is { Success: true } sectionMatch)
+        {
+            if (segments.Length > 1)
+            {
+                throw Invalid(raw, "Nothing can follow section[i]; assign slides by range when adding/moving sections.");
+            }
+
+            return new PptxAddress
+            {
+                Raw = raw,
+                Root = PptxRootKind.Section,
+                SectionIndex = ParseIndex(sectionMatch.Groups[1].Value, raw),
+            };
+        }
+
         var rootName = segments[0].Split('[')[0].ToLowerInvariant();
         if (ReservedRoots.Contains(rootName, StringComparer.Ordinal))
         {
@@ -341,8 +381,9 @@ internal sealed partial record PptxAddress
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"Paragraph/run addressing under masters and layouts is not supported yet (planned M2): {raw}",
-                "Get the shape itself (e.g. /master[1]/shape[1]) — its full text is included — or address slide content via /slide[i]/shape[j]/p[k].");
+                $"Paragraph/run addressing under masters and layouts is not supported: {raw}",
+                "Set the whole shape's text with a 'text' prop on the shape path (e.g. /master[1]/shape[1]), " +
+                "or address slide content via /slide[i]/shape[j]/p[k].");
         }
 
         return address;
@@ -384,6 +425,15 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical comment path (/slide[i]/comment[@id=N]) of the addressed comment.</summary>
     public string CanonicalCommentPath => Units.Inv($"/slide[{SlideIndex}]/comment[@id={CommentId}]");
+
+    /// <summary>The canonical slide-section path (/section[i]) of the addressed section.</summary>
+    public string CanonicalSectionPath => Units.Inv($"/section[{SectionIndex}]");
+
+    /// <summary>The canonical master path (/master[m]) of the addressed master.</summary>
+    public string CanonicalMasterPath => Units.Inv($"/master[{MasterIndex}]");
+
+    /// <summary>The canonical layout path (/master[m]/layout[l]) of the addressed layout.</summary>
+    public string CanonicalLayoutPath => Units.Inv($"/master[{MasterIndex}]/layout[{LayoutIndex}]");
 
     /// <summary>The container the address points into: /slide[i], /master[m] or /master[m]/layout[l].</summary>
     public string CanonicalContainerPath => Root == PptxRootKind.Master

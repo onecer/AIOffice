@@ -114,6 +114,73 @@ public class AddressingTests
         Assert.Equal(28, path.Segments[1].End!.Value.ColumnNumber);
     }
 
+    // --- M6: element spans (xlsx outline groups) ---
+
+    [Fact]
+    public void Parses_row_span_segment()
+    {
+        var path = DocPath.Parse("/Sheet1/row[2]:row[6]");
+
+        Assert.Equal(2, path.Segments.Count);
+        var span = path.Segments[1];
+        Assert.Equal(PathSegmentKind.ElementSpan, span.Kind);
+        Assert.Equal("row", span.Name);
+        Assert.Equal("2", span.SpanFrom);
+        Assert.Equal("6", span.SpanTo);
+        Assert.Equal("/Sheet1/row[2]:row[6]", path.ToCanonicalString());
+    }
+
+    [Fact]
+    public void Parses_column_span_segment()
+    {
+        var path = DocPath.Parse("/Sheet1/col[B]:col[E]");
+
+        var span = path.Segments[1];
+        Assert.Equal(PathSegmentKind.ElementSpan, span.Kind);
+        Assert.Equal("col", span.Name);
+        Assert.Equal("B", span.SpanFrom);
+        Assert.Equal("E", span.SpanTo);
+        Assert.Equal("/Sheet1/col[B]:col[E]", path.ToCanonicalString());
+    }
+
+    [Theory]
+    [InlineData("/Sheet1/row[2]:col[6]")] // mismatched element names
+    [InlineData("/Sheet1/row[2]:row[B]")] // numeric : letter bounds
+    [InlineData("/Sheet1/col[B]:col[6]")] // letter : numeric bounds
+    public void Mismatched_span_bounds_are_rejected(string text)
+    {
+        Assert.False(DocPath.TryParse(text, out _, out var error));
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
+
+    // --- M6: the document root "/" ---
+
+    [Fact]
+    public void Parses_document_root()
+    {
+        var path = DocPath.Parse("/");
+
+        Assert.True(path.IsRoot);
+        Assert.Empty(path.Segments);
+        Assert.Equal("/", path.ToCanonicalString());
+    }
+
+    [Fact]
+    public void Document_root_round_trips()
+    {
+        var once = DocPath.Parse("/");
+        var twice = DocPath.Parse(once.ToCanonicalString());
+
+        Assert.True(twice.IsRoot);
+        Assert.Equal("/", twice.ToCanonicalString());
+    }
+
+    [Fact]
+    public void Non_root_paths_are_not_marked_root()
+    {
+        Assert.False(DocPath.Parse("/slide[2]").IsRoot);
+    }
+
     // --- pptx paths ---
 
     [Fact]

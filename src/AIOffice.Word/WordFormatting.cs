@@ -14,10 +14,10 @@ namespace AIOffice.Word;
 internal static class WordFormatting
 {
     public static readonly IReadOnlyList<string> ParagraphProps =
-        ["text", "style", "bold", "italic", "underline", "color", "alignment", "fontSize"];
+        ["text", "style", "bold", "italic", "underline", "color", "alignment", "fontSize", "rtl"];
 
     public static readonly IReadOnlyList<string> RunProps =
-        ["text", "style", "bold", "italic", "underline", "color", "fontSize"];
+        ["text", "style", "bold", "italic", "underline", "color", "fontSize", "rtl"];
 
     // ----------------------------------------------------------------- read
 
@@ -34,6 +34,7 @@ internal static class WordFormatting
             ["underline"] = firstRun is null ? null : IsUnderlined(firstRun.RunProperties),
             ["fontSize"] = firstRun is null ? null : FontSizePoints(firstRun.RunProperties),
             ["color"] = firstRun?.RunProperties?.Color?.Val?.Value,
+            ["rtl"] = IsParagraphRtl(p),
             ["runs"] = p.ChildElements.OfType<Run>().Count(),
         };
     }
@@ -47,6 +48,7 @@ internal static class WordFormatting
         ["underline"] = IsUnderlined(run.RunProperties),
         ["fontSize"] = FontSizePoints(run.RunProperties),
         ["color"] = run.RunProperties?.Color?.Val?.Value,
+        ["rtl"] = IsOn(run.RunProperties?.RightToLeftText) ?? false,
     };
 
     /// <summary>w:b style toggles: presence means on unless val says off.</summary>
@@ -106,6 +108,10 @@ internal static class WordFormatting
                 EnsurePPr(p).Justification = new Justification { Val = ParseAlignment(value) };
                 break;
 
+            case "rtl":
+                SetParagraphRtl(p, ParseBool(name, value));
+                break;
+
             case "bold" or "italic" or "underline" or "color" or "fontSize":
                 foreach (var run in EnsureRun(p))
                 {
@@ -157,6 +163,10 @@ internal static class WordFormatting
                 EnsureRPr(run).FontSize = new FontSize { Val = ParseFontSizeHalfPoints(value) };
                 break;
 
+            case "rtl":
+                SetRunRtl(run, ParseBool(name, value));
+                break;
+
             default:
                 throw UnsupportedProp(name, "run", RunProps);
         }
@@ -180,6 +190,34 @@ internal static class WordFormatting
         run.AppendChild(WordHandler.NewText(text));
         p.AppendChild(run);
     }
+
+    /// <summary>
+    /// Sets paragraph right-to-left flow: w:bidi on/off. Turning it on also
+    /// right-aligns the paragraph unless it already carries an explicit
+    /// alignment (Word's New ▸ RTL paragraph behavior); turning it off clears
+    /// the bidi flag and any right alignment we added.
+    /// </summary>
+    public static void SetParagraphRtl(Paragraph p, bool rtl)
+    {
+        var pPr = EnsurePPr(p);
+        if (rtl)
+        {
+            pPr.BiDi = new BiDi();
+            pPr.Justification ??= new Justification { Val = JustificationValues.Right };
+        }
+        else
+        {
+            pPr.BiDi = new BiDi { Val = OnOffValue.FromBoolean(false) };
+        }
+    }
+
+    /// <summary>Sets a run's right-to-left mark (w:rtl) for mixed-direction content.</summary>
+    public static void SetRunRtl(Run run, bool rtl) =>
+        EnsureRPr(run).RightToLeftText = new RightToLeftText { Val = OnOffValue.FromBoolean(rtl) };
+
+    /// <summary>Reads a paragraph's direction: true when w:bidi is on.</summary>
+    public static bool IsParagraphRtl(Paragraph p) =>
+        IsOn(p.ParagraphProperties?.BiDi) == true;
 
     private static IEnumerable<Run> EnsureRun(Paragraph p)
     {

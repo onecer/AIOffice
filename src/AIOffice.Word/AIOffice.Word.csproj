@@ -6,6 +6,12 @@
     <ProjectReference Include="../AIOffice.Core/AIOffice.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The LaTeX->OMML equation engine (Equations/*) is an internal subsystem;
+         its M6 unit tests exercise the parser and emitter directly rather than
+         only through the public edit surface. -->
+    <InternalsVisibleTo Include="AIOffice.Word.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
     <!-- Markdig (MIT): markdown AST for the M5 markdown bridge; hand-rolling GFM
          (tables, nested lists, emphasis edge cases) would be strictly worse. -->

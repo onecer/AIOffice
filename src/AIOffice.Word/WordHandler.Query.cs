@@ -24,6 +24,25 @@ public sealed partial class WordHandler
             var docPath = DocPath.Parse(pathArg);
             var meta = MetaFor(file, Rev.OfBytes(bytes));
 
+            // "/" (document root) carries no docx surface — page setup lives on
+            // /section[1], document title in core properties.
+            if (docPath.IsRoot)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    "docx has no document-root properties to get.",
+                    "Get page setup from /section[1], or a paragraph with /body/p[1]; set the title via 'aioffice create --title'.");
+            }
+
+            // Inline equations are addressed by their full path ending /omath[j].
+            if (docPath.Segments[^1].Name == "omath")
+            {
+                var properties = GetEquationProperties(doc, docPath);
+                return Envelope.Ok(
+                    new { path = (string)properties["path"]!, type = "equation", properties },
+                    meta);
+            }
+
             // The id-addressed roots that live outside body content.
             switch (docPath.Segments[0].Name)
             {

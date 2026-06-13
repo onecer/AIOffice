@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using AIOffice.Core;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -9,7 +10,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] SectionProps =
-        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight"];
+        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap"];
 
     /// <summary>Known page sizes as portrait (width, height) in twentieths of a point.</summary>
     private static readonly Dictionary<string, (uint Width, uint Height)> PageSizes = new(StringComparer.OrdinalIgnoreCase)
@@ -95,12 +96,22 @@ public sealed partial class WordHandler
         string? orientation = null;
         string? sizeName = null;
         var margins = new List<(string Key, uint Twips)>();
+        JsonNode? columnsNode = null;
+        uint? columnGapTwips = null;
 
         foreach (var (key, node) in props)
         {
             var value = NodeToString(node);
             switch (key)
             {
+                case "columns":
+                    columnsNode = node;
+                    break;
+
+                case "columnGap":
+                    columnGapTwips = (uint)Math.Max(0, Math.Round(ParseLengthEmu(key, value) * TwipsPerEmu));
+                    break;
+
                 case "orientation":
                     orientation = value.ToLowerInvariant();
                     if (orientation is not ("portrait" or "landscape"))
@@ -165,8 +176,107 @@ public sealed partial class WordHandler
             }
         }
 
+        if (columnsNode is not null || columnGapTwips is not null)
+        {
+            ApplyColumns(sectPr, columnsNode, columnGapTwips);
+        }
+
         var canonical = path.ToCanonicalString();
         return new { op = "set", path = canonical, type = "section" };
+    }
+
+    /// <summary>Default gap between equal-width columns (Word's 0.5"): 720 twips.</summary>
+    private const uint DefaultColumnGapTwips = 720;
+
+    /// <summary>
+    /// Builds the section's <c>w:cols</c>. <c>columns</c> as an integer N gives N
+    /// equal columns separated by <c>columnGap</c> (or Word's 0.5" default); as an
+    /// array of <c>{width[,gap]}</c> objects it gives explicit per-column widths
+    /// (<c>equalWidth=0</c> plus one <c>w:col</c> each). Passing only
+    /// <c>columnGap</c> retunes the gap of the existing layout.
+    /// </summary>
+    private static void ApplyColumns(SectionProperties sectPr, JsonNode? columnsNode, uint? gapTwips)
+    {
+        var existing = sectPr.GetFirstChild<Columns>();
+
+        // columnGap alone: adjust the running layout (default to 1 column if none).
+        if (columnsNode is null)
+        {
+            var cols = existing ?? new Columns { ColumnCount = 1 };
+            cols.Space = (gapTwips ?? DefaultColumnGapTwips).ToString(CultureInfo.InvariantCulture);
+            if (existing is null)
+            {
+                InsertSectionChild(sectPr, cols);
+            }
+
+            return;
+        }
+
+        existing?.Remove();
+
+        if (columnsNode is JsonArray widths)
+        {
+            ApplyExplicitColumns(sectPr, widths, gapTwips);
+            return;
+        }
+
+        var count = int.TryParse(NodeToString(columnsNode), out var n) ? n : 0;
+        if (count < 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"columns must be a positive integer or an array of column widths, got '{NodeToString(columnsNode)}'.",
+                "Use columns:2 for two equal columns, or columns:[{\"width\":\"6cm\"},{\"width\":\"4cm\"}] for explicit widths.");
+        }
+
+        var equalCols = new Columns
+        {
+            ColumnCount = (short)count,
+            EqualWidth = OnOffValue.FromBoolean(true),
+            Space = (gapTwips ?? DefaultColumnGapTwips).ToString(CultureInfo.InvariantCulture),
+        };
+        InsertSectionChild(sectPr, equalCols);
+    }
+
+    private static void ApplyExplicitColumns(SectionProperties sectPr, JsonArray widths, uint? gapTwips)
+    {
+        if (widths.Count < 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "columns array needs at least one column with a width.",
+                "Example: columns:[{\"width\":\"6cm\"},{\"width\":\"4cm\"}].");
+        }
+
+        var gap = (gapTwips ?? DefaultColumnGapTwips);
+        var cols = new Columns
+        {
+            ColumnCount = (short)widths.Count,
+            EqualWidth = OnOffValue.FromBoolean(false),
+            Space = gap.ToString(CultureInfo.InvariantCulture),
+        };
+
+        for (var i = 0; i < widths.Count; i++)
+        {
+            var entry = widths[i] as JsonObject;
+            var widthRaw = entry?["width"] is { } w ? NodeToString(w) : NodeToString(widths[i]);
+            var widthTwips = (long)Math.Max(1, Math.Round(ParseLengthEmu($"columns[{i}].width", widthRaw) * TwipsPerEmu));
+            var colGap = entry?["gap"] is { } g
+                ? (uint)Math.Max(0, Math.Round(ParseLengthEmu($"columns[{i}].gap", NodeToString(g)) * TwipsPerEmu))
+                : gap;
+
+            var col = new Column { Width = widthTwips.ToString(CultureInfo.InvariantCulture) };
+
+            // The last column carries no trailing space (Word omits it).
+            if (i < widths.Count - 1)
+            {
+                col.Space = colGap.ToString(CultureInfo.InvariantCulture);
+            }
+
+            cols.AppendChild(col);
+        }
+
+        InsertSectionChild(sectPr, cols);
     }
 
     /// <summary>Applies size and/or orientation, swapping dimensions for landscape like Word does.</summary>
@@ -320,6 +430,73 @@ public sealed partial class WordHandler
             kind,
             sections = sections.Count,
         };
+    }
+
+    /// <summary>
+    /// <c>{"op":"add","path":"/body/p[3]","type":"columnBreak"}</c>: a hard column
+    /// break (<c>w:br w:type="column"</c>). By default the break is appended to the
+    /// end of the target paragraph's content (text flows to the next column there);
+    /// position before puts the break at the paragraph's start instead. Honors the
+    /// --track flag like other text-content mutations by inserting the break in an
+    /// w:ins run when tracking is on.
+    /// </summary>
+    private static object ApplyAddColumnBreak(WordprocessingDocument doc, EditOp op, EditSession session)
+    {
+        var anchor = WordAddress.Resolve(doc, DocPath.Parse(op.Path));
+        if (anchor.Element is not Paragraph paragraph)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"A column break attaches to a paragraph, not '{anchor.Type}' at {anchor.CanonicalPath}.",
+                "Target a paragraph (e.g. /body/p[3]); the break sends following text to the next column.");
+        }
+
+        var position = op.Position;
+        if (position is not (null or "before" or "after"))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"columnBreak position '{position}' is not valid.",
+                "Use position before (break at the paragraph start) or after (the default, break at its end).",
+                candidates: ["before", "after"]);
+        }
+
+        var breakRun = new Run(new Break { Type = BreakValues.Column });
+
+        if (session.Track)
+        {
+            var author = session.ResolveAuthor(op.Props?.DeepClone().AsObject());
+            var ins = NewTrackChange(new InsertedRun(), author, DateTime.UtcNow, NextRevisionId(doc));
+            ins.AppendChild(breakRun);
+            InsertBreak(paragraph, ins, position);
+        }
+        else
+        {
+            InsertBreak(paragraph, breakRun, position);
+        }
+
+        return new { op = "add", type = "columnBreak", path = anchor.CanonicalPath, placement = position ?? "after" };
+    }
+
+    /// <summary>Places a column-break run at the paragraph start (before) or end (after), after pPr.</summary>
+    private static void InsertBreak(Paragraph paragraph, OpenXmlElement breakElement, string? position)
+    {
+        if (position == "before")
+        {
+            var pPr = paragraph.ParagraphProperties;
+            if (pPr is not null)
+            {
+                pPr.InsertAfterSelf(breakElement);
+            }
+            else
+            {
+                paragraph.InsertAt(breakElement, 0);
+            }
+        }
+        else
+        {
+            paragraph.AppendChild(breakElement);
+        }
     }
 
     /// <summary>The sectPr that governs the target paragraph: the first one at or after it in document order.</summary>
@@ -528,6 +705,7 @@ public sealed partial class WordHandler
 
         var pgSz = sectPr?.GetFirstChild<PageSize>();
         var pgMar = sectPr?.GetFirstChild<PageMargin>();
+        var cols = sectPr?.GetFirstChild<Columns>();
 
         var width = pgSz?.Width?.Value;
         var height = pgSz?.Height?.Value;
@@ -547,7 +725,47 @@ public sealed partial class WordHandler
             ["marginBottomCm"] = pgMar?.Bottom?.Value is { } b ? TwipsToCm(b) : null,
             ["marginLeftCm"] = pgMar?.Left?.Value is { } l ? TwipsToCm((long)l) : null,
             ["marginRightCm"] = pgMar?.Right?.Value is { } r ? TwipsToCm((long)r) : null,
+            ["columns"] = ColumnCountOf(cols),
+            ["columnGapCm"] = ColumnGapCm(cols),
+            ["columnWidthsCm"] = ColumnWidthsCm(cols),
         };
+    }
+
+    /// <summary>The number of columns the section declares (1 when absent — single column).</summary>
+    private static int ColumnCountOf(Columns? cols)
+    {
+        if (cols is null)
+        {
+            return 1;
+        }
+
+        if (cols.ColumnCount?.Value is { } n && n > 0)
+        {
+            return n;
+        }
+
+        var explicitCols = cols.Elements<Column>().Count();
+        return explicitCols > 0 ? explicitCols : 1;
+    }
+
+    private static double? ColumnGapCm(Columns? cols) =>
+        cols?.Space?.Value is { } space &&
+        long.TryParse(space, NumberStyles.Integer, CultureInfo.InvariantCulture, out var twips)
+            ? TwipsToCm(twips)
+            : null;
+
+    private static List<double>? ColumnWidthsCm(Columns? cols)
+    {
+        var explicitCols = cols?.Elements<Column>().ToList();
+        if (explicitCols is not { Count: > 0 })
+        {
+            return null; // equal-width columns have no per-column widths
+        }
+
+        return [.. explicitCols.Select(c =>
+            c.Width?.Value is { } w && long.TryParse(w, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t)
+                ? TwipsToCm(t)
+                : 0.0)];
     }
 
     /// <summary>The size name whose portrait dimensions match (either orientation), else "custom"/null.</summary>

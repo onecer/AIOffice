@@ -14,9 +14,10 @@
 | ✅ M3 已实现 | M3（v0.4.0，功能第一）交付：docx 列表/链接/书签/脚注/页面设置/格式修订处理/批注回复、xlsx 流式读取/散点+面积图/命名区域/冻结/筛选/打印设置、pptx 图表/切换/几何/z 序、跨文档 dataFrom、PDF 渲染、大小上限 opt-in |
 | ✅ M4 已实现 | M4（v0.5.0）交付：三格式共享 find/replace 契约（`op:replace`，零命中 = `find_no_match` warning；文档级 `"/"` 作用域展开 + CLI `--find/--replace` 糖 + 聚合 `{replacements, locations}`，docx `--track` 生成 del+ins 修订对）；docx TOC/水印/尾注/插入分节符；xlsx 批量 2D 写入（锚点/区域两形态 + >50k 空白 sheet SAX 流式写）、行列插删/行高列宽/隐藏（`col[C]` 字母寻址）、单元格批注；pptx 进入动画（appear/fade/flyIn/wipe）、经典批注、嵌入式图表工作簿（PowerPoint「编辑数据」可用 + `embedData:true` 退化改造）；tag 触发的 GitHub release 自动化 |
 | ✅ M5 已实现 | M5（v0.6.0，markdown/csv 桥）交付：`create --from`（.md → .docx Markdig 全结构导入 / .csv → .xlsx 类型化导入）+ `read --view markdown`（docx → GFM 导出，与导入结构 round-trip）/ `--view csv`（单 sheet RFC 4180 导出）；docx 深表格（合并/边框/底纹/列宽/headerRow）、域（PAGE/NUMPAGES/DATE/TITLE + leadingText）、首页/奇偶页眉页脚变体；xlsx 数据验证（list 下拉 + wholeNumber/decimal/date/textLength）、迷你图（line/column/winLoss）、线程批注（xl/threadedComments + 回复）、单元格超链接（外链/`#Sheet!A1` 内链）；pptx 原生表格（合并 + light/medium/dark 样式）、强调/退出动画（pulse/grow/spin/colorPulse + fadeOut/flyOut/wipeOut）、批注回复线程（p15 threadingInfo）、SmartArt 只读 |
-| 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至 M6 窗口） |
-| 📋 M2 | M2 计划但尚未落地的剩余项（顺延至 M6 窗口） |
-| 🗺 M3 | 深水区：多效果动画链/motion path、OLE/3D、SmartArt 编辑、RTL、公式（OMML）、dump 回放、就地写入流式、现代 pptx 线程批注 part |
+| ✅ M6 已实现 | M6（v0.7.0，深水区攻坚）交付：docx **公式**（LaTeX → OMML 自研转换器，行内 `$…$` / 显示 `$$…$$`、矩阵/分式/根式/上下标/希腊字母/大型算符，未知命令降级为 `equation_partial` warning，原始 LaTeX 存档可忠实回读）、**右到左/双向**（段落 `w:bidi` / run `w:rtl` / 表格 `w:bidiVisual`）、**多栏分节**（columns/columnGap + columnBreak）；xlsx **就地流式写入**（`stream:true` 或 >20 MB 文件，整批可流式时经 SAX writer 原地改写大工作簿，深单元格/批量写秒级完成）、**Excel 表（ListObject）**（命名 + 内置样式 + 汇总行 + 结构化引用 `=SUM(Sales[Amount])` 求值）、**大纲分组**（`row[a]:row[b]` / `col[a]:col[b]` 行列折叠分组）；pptx **母版/版式编辑**（背景 + 主题强调色 + 克隆版式 + 母版/版式形状）、**幻灯片分节**（p14:sectionLst，按 sldId 跟踪）、**幻灯片尺寸/宽高比**（16:9/4:3/自定义）、**动画时间轴重排**（move/set 重排重调）；新增寻址形式 `/`（演示文稿根）、`/body/p[i]/omath[j]`、`/section[i]`、`row[a]:row[b]` 跨段、可编辑 `/master[1]/layout[i]` |
+| 🔜 M1 | M1 计划但尚未落地的剩余项（顺延至 M7 窗口） |
+| 📋 M2 | M2 计划但尚未落地的剩余项（顺延至 M7 窗口） |
+| 🗺 M7 | 深水区余项：pptx/xlsx 公式、插件机制、现代 xlsx 批注打磨、动画预设++、OLE 对象、无障碍/alt-text 审计、多效果动画链/motion path、dump 回放 |
 | ❌ 不计划 | 与 AIOffice 设计冲突，或属上游生态/语法专有 |
 
 **M0 元素覆盖范围**（诚实声明）：docx = paragraph / run / table / tr / tc（文本 + 基础字符格式 + 内置样式套用）；xlsx = sheet / cell / range（值、公式、基础字符格式）；pptx = slide / shape / textbox（文本、位置、尺寸）+ 标题占位符。其余元素类型在 M0 一律返回 `unsupported_feature`。
@@ -87,8 +88,8 @@
 | 图片 | 插入（PNG/JPEG）、尺寸（width/height，缺省守纵横比）、before/after 定位 | ✅ M2 已实现 | `ImagePart` + inline `Drawing`（WordHandler.Images.cs）；src 必经 workspace 沙箱；alt 文本/二进制导出 → 📋 M2 余项 |
 | 文本框 / 形状 | 几何、填充、线条、环绕、锚定 | 📋 M2 | DrawingML `wps:wsp` |
 | 页眉 / 页脚 | 增删改，寻址 `/header[1]/p[1]`；M5 起**首页/奇偶页变体**：`/header[firstPage]`、`/header[even]`（footer 同形），add 自动接线 `w:titlePg` / `w:evenAndOddHeaders`，三变体共存、get 回报 variant | ✅ M1 已实现（M5 + 变体） | `HeaderPart` / `FooterPart` + `SectionProperties` 引用（WordHandler.HeaderFooter.cs）；read structure / render 同步暴露 |
-| 节属性 | 纸张（A4/Letter/Legal…）/方向/边距 set + get（`/section[1]`），全部节枚举；M4 起**插入分节符**（`add type:sectionBreak`，kind=nextPage/continuous）+ 删除节（合并回邻节），多节文档逐节独立页面设置 | ✅ M3 已实现（M4 + 分节符） | `SectionProperties`（WordHandler.Sections.cs）：`PageSize`/`PageMargin`，横竖转换守恒宽高互换；分栏/页码格式/页面边框 → 📋 余项 |
-| 分页符 / 换行符 | page break、line break、column break | 🔜 M1 | `Break`（`BreakValues`） |
+| 节属性 | 纸张（A4/Letter/Legal…）/方向/边距 set + get（`/section[1]`），全部节枚举；M4 起**插入分节符**（`add type:sectionBreak`，kind=nextPage/continuous）+ 删除节（合并回邻节），多节文档逐节独立页面设置；M6 起**多栏排版**（columns 栏数 + columnGap 栏间距，get 回报 columns/columnGapCm） | ✅ M3 已实现（M4 分节符 + M6 分栏） | `SectionProperties`（WordHandler.Sections.cs）：`PageSize`/`PageMargin`，横竖转换守恒宽高互换；`Columns`（M6，等宽多栏）；页码格式/页面边框 → 📋 余项 |
+| 分页符 / 换行符 | page break、line break、column break | ✅ M6 已实现（column break） | `Break`（`BreakValues`）：`add type:columnBreak` 写 `w:br w:type="column"`，配合多栏分节让后续文本流入下一栏；page/line break 通用糖 → 📋 余项 |
 | 列表与多级编号 | 项目符号、编号、多级嵌套（level）、重新编号（listRestart）；text 视图带 `1.`/`•` 标记，HTML 渲染真 `<ol>/<ul>` | ✅ M3 已实现 | `NumberingDefinitionsPart`（WordHandler.Lists.cs）：add p 的 `list`/`level`/`listRestart` props；num/abstractNum 按需创建 |
 | 超链接 | 外链（url）+ 书签锚点（anchor）行内插入 | ✅ M3 已实现 | `Hyperlink` + `HyperlinkRelationship`（WordHandler.Links.cs）；Hyperlink 样式自动接线 |
 | 书签 | bookmarkStart/End 包裹目标段落，供锚点链接跳转 | ✅ M3 已实现 | `BookmarkStart`/`BookmarkEnd`（WordHandler.Bookmarks.cs）；Word 命名规则校验（字母/下划线开头、≤40 字符） |
@@ -98,7 +99,7 @@
 | 目录 TOC | 插入（`add type:toc`，levels/title/position）：扫描标题样式生成超链接条目 + TOC 域指令；`/toc[1]` get（entryCount/levels/title）/remove；`read --view structure` 暴露 | ✅ M4 已实现 | `SdtBlock` 容器 + `TOC \o \h \z \u` 域 + PAGEREF 占位（WordHandler.Toc.cs）；页码无后端可算 → 写入时报 `toc_pages_unknown` warning（Word 打开/F9 时重算），诚实不估算 |
 | 派生字段重算 | TOC 页码 / PAGE / NUMPAGES / 交叉引用刷新 | 🗺 M3 | 无 Word 后端可依赖：headless 渲染估算页码（上游非 Windows 同样是估算） |
 | 图表 | chart + chart-axis / chart-series 子实体 | 📋 M2 | `ChartPart`（DrawingML charts，与 xlsx/pptx 共享实现） |
-| 公式（equation） | OMML 数学公式读写 | 🗺 M3 | `DocumentFormat.OpenXml.Math` |
+| 公式（equation） | OMML 数学公式读写：`add type:equation`（latex + display），行内 `/body/p[i]/omath[j]` get 回报存档 LaTeX，`read --view text` 显示 `$…$`/`$$…$$` 标记 | ✅ M6 已实现 | 自研 LaTeX → OMML 转换器（无 LaTeX 依赖，`AIOffice.Word.Equations`）：分式/根式/上下标/大型算符/矩阵（pmatrix/bmatrix/…）/`\left\right`/重音/`\text`/希腊字母/算符关系；未知命令降级为字面 run + `equation_partial` warning（文件仍校验通过）；原始 LaTeX 以 `mc:Ignorable` 厂商属性存档，round-trip 字节忠实；pptx/xlsx 公式 → 🗺 M7 |
 | 水印 | 文本水印（`add type:watermark`，text/diagonal/color），写入每个页眉；`/watermark[1]` get/remove；无页眉时自动建默认页眉 | ✅ M4 已实现 | 页眉内 VML `v:shape`（WordHandler.Watermark.cs，PowerPlusWaterMarkObject 命名对齐 Word）；图片水印 → 📋 余项 |
 | 表单域 | formfield 读写 + 表单字段清单导出 | 🗺 M3 | `FormFieldData` 系列 |
 | 内容控件（sdt） | 结构化文档标签读写 | 🗺 M3 | `SdtBlock` / `SdtRun` |
@@ -108,7 +109,7 @@
 | 制表位 | tabs 简写、ptab | 📋 M2 | `Tabs` / `PositionalTab` |
 | 文档默认值 | docDefaults 默认字体/字号 | 🔜 M1 | `DocDefaults`（StylesPart 内） |
 | 文档设置 | autoHyphenation、evenAndOddHeaders、docGrid、CJK spacing、protection=forms | 📋 M2 | `SettingsPart`（`Settings` 子元素族） |
-| RTL 与 locale | direction=rtl（段/run/表/节）、rtlGutter、按 locale 设分文种默认字体与自动 RTL | 🗺 M3 | `BiDi` / `RightToLeftText` + locale→字体映射表 |
+| RTL 与 locale | direction=rtl（段/run/表/节）、rtlGutter、按 locale 设分文种默认字体与自动 RTL | ✅ M6 已实现（段/run/表 RTL） | `BiDi`（段落 `w:bidi`，同时右对齐）/ `RightToLeftText`（run `w:rtl`）/ `BiDiVisual`（表格 `w:bidiVisual`，镜像列序）（WordFormatting.cs / WordHandler.Tables.cs）；`rtl` bool prop，get 回报；节级 rtlGutter / locale→字体映射表 → 📋 余项 |
 
 ---
 
@@ -121,7 +122,8 @@
 | 打印设置 | 方向/纸张（A4/Letter…）/fitToWidth/fitToHeight/printArea set + get 反映 | ✅ M3 已实现 | `IXLPageSetup`（ExcelHandler.SheetProps.cs）；printTitleRows/Cols、手动分页符 → 📋 余项 |
 | 单元格读写 | 值（类型推断：数字/日期/布尔/文本）、公式写入（`=` 自动识别） | ✅ M0 已实现 | `IXLCell.Value` / `FormulaA1` |
 | 查找替换（find/replace） | 共享 M4 契约 `{op:replace, props:{find, replace, regex?, matchCase?, wholeWord?, inFormulas?}}`；作用域 = sheet / 区域 / 单元格；只匹配**文本**单元格值（数字/布尔/日期不参与），`inFormulas:true` 才进公式文本（含 `=` 形态），替换后公式经正常管线重求值；regex 走 .NET Regex + 2 秒超时（超时→invalid_args）；零命中 = ok + `find_no_match` warning；逐 op 回报 `replacements` 计数 + ≤20 个单元格路径 | ✅ M4 已实现 | 自研（ExcelHandler.Replace.cs）；替换结果一律落为字面文本（不再自动改型）；wholeWord 用前后向断言（兼容首尾非词字符的 pattern） |
-| 区域寻址与批量赋值 | `/Sheet1/A1:C10`、`/Sheet1/row[3]`、`/Sheet1/col[C]`（M4）、带空格表名 `/'Q3 Data'/B2`；M4 起 2D 批量写入两种形态：**锚点式**（`set /Sheet1/A2` + `values:[[…]]`，范围按数组推断、行可参差）与**区域式**（`set /Sheet1/A2:D101`，形状必须精确匹配，错配报 invalid_args 并写明两侧形状）；类型推断与单格 set 一致（数字/布尔/日期/公式串） | ✅ M0 已实现（M4 + 批量 2D 写入） | `IXLRange`；自研寻址解析；>50k 单元格写入**空白 sheet** 走 OpenXml SAX 流式写（ExcelBulkWrites.cs，等值律测试钉死两条路径产物内容一致）；既有大 sheet 的就地流式编辑 → M6 种子 |
+| 区域寻址与批量赋值 | `/Sheet1/A1:C10`、`/Sheet1/row[3]`、`/Sheet1/col[C]`（M4）、带空格表名 `/'Q3 Data'/B2`；M4 起 2D 批量写入两种形态：**锚点式**（`set /Sheet1/A2` + `values:[[…]]`，范围按数组推断、行可参差）与**区域式**（`set /Sheet1/A2:D101`，形状必须精确匹配，错配报 invalid_args 并写明两侧形状）；类型推断与单格 set 一致（数字/布尔/日期/公式串） | ✅ M0 已实现（M4 批量 2D 写入 + M6 就地流式写入） | `IXLRange`；自研寻址解析；>50k 单元格写入**空白 sheet** 走 OpenXml SAX 流式写（ExcelBulkWrites.cs，等值律测试钉死两条路径产物内容一致）；M6：**既有大 sheet 就地流式写入**（ExcelStreamingWrite.cs，见下行「就地流式写入」） |
+| 就地流式写入（M6 旗舰） | `edit … stream:true`（或 >20 MB 文件）：整批均为可流式 op（`set value` / `set values` 批量 / 公式串）时，经 SAX writer **原地改写**既有大工作簿目标 sheet part，深单元格/批量写秒级、内存有界；任一 op 非流式（bold/fill/numberFormat/merge…）则整批回退 DOM；响应标 `streamed:true` | ✅ M6 已实现 | `ExcelStreamingWrite.cs`：`TryPlan` 判定整批可流式 → SAX 流式改写，否则 DOM 回退；公式写入无缓存值（Excel 打开时重算）；50 MB+ 工作簿就地改写实测秒级 |
 | 字符格式基础 | 粗/斜/字号/字色/填充色 | ✅ M0 已实现 | `IXLStyle.Font` / `Fill` |
 | 数字格式 / 对齐 / 边框 | 内置与自定义 number format、对齐、边框样式 | 🔜 M1 | `IXLStyle.NumberFormat` / `Alignment` / `Border` |
 | 富文本单元格 | 单元格内多 run 异格式 | 🔜 M1 | `IXLCell.GetRichText()` |
@@ -146,13 +148,15 @@
 | 形状 / 文本框 | 浮动 shape/textbox；选择器需枚举 grpSp 内叶子 | 🗺 M3 | ClosedXML 不支持：OpenXml `DrawingsPart`（xdr:sp） |
 | 切片器 | 表/透视表切片器 | 🗺 M3 | OpenXml `SlicerPart`（ClosedXML 无） |
 | 数据透视表 | rows/columns/filters + values（sum/average/count/min/max）、targetSheet 自动建、`pivot[@name=X]` 寻址、refreshOnLoad | ✅ M2 已实现 | `IXLPivotTable`（ExcelPivots.cs）+ OpenXml 原始断言测试；layout/topN/calculatedField/showDataAs/日期分组/缓存共享 → 🗺 M3 |
+| Excel 表（ListObject） | `add type:table`（op path = 区域，首行表头）：name + 内置样式（none/light1-21/medium1-28/dark1-11，如 `medium2`）+ headerRow/totalsRow + totals（列名→函数 sum/average/count/min/max/stdDev/var）+ bandedRows/Columns；结构化引用 `=SUM(Sales[Amount])` 求值（表先于保存入模型）；`/Sheet1/table[@name=Sales]` get 回报 range/style/columns/totals；remove 撤销表对象但**保留单元格数据** | ✅ M6 已实现 | `IXLRange.CreateTable` / `IXLTable`（ExcelTables.cs）；样式映射 `XLTableTheme.FromName`，汇总函数 `XLTotalsRowFunction`；未知样式/函数/列名 → invalid_args 列候选 |
+| 大纲分组（outline） | `add type:group` 行/列跨段折叠分组：`/Sheet1/row[a]:row[b]` 或 `/Sheet1/col[a]:col[b]`，`collapsed:true` 折叠新组，嵌套抬升大纲级；remove 同跨段反分组一级；行/列 get 与 `read --view structure` 回报 outlineLevel/collapsed | ✅ M6 已实现 | `IXLRows.Group` / `Collapse` / `Ungroup`（ExcelGroups.cs）；`row[a]:row[b]`/`col[a]:col[b]` 跨段在 Core DocPath 新增 ElementSpan 形式解析，CLI/MCP 命令面直达 |
 | 超链接 | 单元格超链接读写删：`hyperlink` prop（`https://…` 外链 / `#Sheet!A1` 内链）+ `hyperlinkTooltip`；get 回显，空串清除 | ✅ M5 已实现 | `IXLCell.SetHyperlink`（ExcelHandler.Edit.cs cell props 路径） |
 | 工作簿级属性 | password、calc.mode=manual、calc.refMode=r1c1 | 📋 M2 | `Protect` / `CalculateMode` / OpenXml `WorkbookProperties` |
 | CSV/TSV 导入 | `create --from data.csv`（见跨格式「CSV/TSV 导入 xlsx」行）；`read --view csv [--sheet][--range]` 反向导出 | ✅ M5 已实现 | 自研解析 + ClosedXML/SAX 写入（ExcelCsv.cs / ExcelHandler.Csv.cs）；stdin、表头→AutoFilter+冻结、起始单元格 → 📋 余项 |
 | 行按列名查询 | `row[Salary>5000]` 式按表头列名过滤 | 📋 M2 | 自研：表头行映射 + 选择器扩展 |
-| 大工作簿流式读取 | 超过 20 MB（或 `stream:true`）自动走 SAX：`read --view stats/text`、单元格/区域 `get` 不加载 DOM、按需提前停 | ✅ M3 已实现 | `OpenXmlPartReader` 原始扫描（ExcelStreaming.cs）；41 MB / 33 万行 stats ≈ 2 秒；流式仍以只读为主：流式**写**通道是"批量 2D 写入空白 sheet"（M4，ExcelBulkWrites.cs）与 csv 导入（M5，同一 SAX 路径）；既有内容的就地流式编辑 → M6 种子（诚实声明：此类编辑仍走 ClosedXML 全量加载） |
+| 大工作簿流式读取 | 超过 20 MB（或 `stream:true`）自动走 SAX：`read --view stats/text`、单元格/区域 `get` 不加载 DOM、按需提前停 | ✅ M3 已实现 | `OpenXmlPartReader` 原始扫描（ExcelStreaming.cs）；41 MB / 33 万行 stats ≈ 2 秒；流式**写**通道：批量 2D 写入空白 sheet（M4，ExcelBulkWrites.cs）、csv 导入（M5，同一 SAX 路径），M6 起**既有大 sheet 就地流式写入**（见区域寻址行「就地流式写入」，整批可流式时不再 ClosedXML 全量加载） |
 | OLE 对象 | 嵌入对象、preview 图 | 🗺 M3 | OpenXml `EmbeddedObjectPart` |
-| RTL | sheetView rightToLeft、cell/comment direction | 🗺 M3 | OpenXml `SheetView.RightToLeft` |
+| RTL | sheetView rightToLeft、cell/comment direction | 🗺 M7 | OpenXml `SheetView.RightToLeft`（M6 RTL 只覆盖 docx；xlsx sheetView RTL 顺延 M7） |
 | 拼音指引（phonetic） | 东亚文本 phonetic runs | 🗺 M3 | OpenXml `PhoneticRun` |
 
 ---
@@ -161,7 +165,9 @@
 
 | 能力 | 说明 | AIOffice 状态 | 实现备注 |
 |---|---|---|---|
-| 幻灯片增删改移 | 新建（基于默认版式）、删除、重排 | ✅ M0 已实现 | `SlidePart` + `SlideIdList` 维护 |
+| 幻灯片增删改移 | 新建（基于默认版式或 `props:{layout:N}` 指定版式）、删除、重排 | ✅ M0 已实现（M6 指定版式） | `SlidePart` + `SlideIdList` 维护；M6 `add type:slide props:{layout:N}` 套用克隆版式 |
+| 幻灯片分节（section） | `add type:section`（path = `/` 根，name + afterSlide 0-based 起始）把幻灯片分组到大纲节；`set /section[i] {name}` 改名、`remove /section[i]` 删节（片留存）；`read --view outline` 按节分组、`get /section[i]` 回报名与所属片；按 sldId 跟踪，抗重排 | ✅ M6 已实现 | `p14:sectionLst`（presentation.xml extLst，`{521415D9-…}` 扩展，PptxSections.cs）；新增 `/section[i]` 寻址与 `/` 根 op 路由 |
+| 幻灯片尺寸 / 宽高比 | `set /` `{slideSize:"16:9\|4:3\|16:10\|A4\|letter"}` 命名预设或显式 `{width,height}`（cm/in/emu）；改写 `p:sldSz`，既有形状坐标不变；`get /` 回报 slideSize/widthCm/heightCm/slideCount/sectionCount | ✅ M6 已实现 | `PptxSlideSize.cs`：预设 EMU 表 + `SlideSizeValues`（4:3=Screen4x3，其余 Custom）；新增 `/` 演示文稿根 get/set 路由 |
 | 隐藏幻灯片 | show=false | 🔜 M1 | `Slide.Show` |
 | 幻灯片克隆 | 复制 slide 含全部跨 part 关系（图片/图表/媒体） | 📋 M2 | `AddPart` + 关系 id 重映射 |
 | 形状 / 文本框 | 新建、位置/尺寸（EMU 及 cm/pt/px 单位换算）、文本读写 | ✅ M0 已实现 | `P.Shape` + `a:txBody`；`Transform2D` |
@@ -171,8 +177,8 @@
 | 形状外观基础 | 纯色填充、线条颜色、预设几何（rect/roundRect/ellipse/triangle/diamond/arrow + line 连接线）、翻转（flipH/flipV） | ✅ M3 已实现 | `a:prstGeom` + `P.ConnectionShape`（PptxEditor.cs）；渐变/效果/旋转 → 📋 余项 |
 | 形状外观高级 | 渐变/图片填充、阴影/发光效果、旋转、图片亮度对比度 | 📋 M2 | `a:gradFill` / `a:effectLst` / `xfrm@rot` |
 | effective 继承值溯源 | 读出属性的最终生效值及来源（shape→layout→master 链） | 🗺 M3 | 自研继承解析器（上游 effective.X.src 为行为参考） |
-| 母版 / 版式寻址 | `/master[1]`、`/master[1]/layout[2]` 路径，get/query 只读 | ✅ M1 已实现 | `SlideMasterPart` / `SlideLayoutPart` 枚举；编辑仍 `unsupported_feature`（→ M2） |
-| 母版 / 版式编辑 | 对 master/layout 上元素 add/set/remove | 📋 M2 | 同 slide 编辑管线复用 |
+| 母版 / 版式寻址 | `/master[1]`、`/master[1]/layout[2]` 路径，get/query | ✅ M1 已实现（M6 转可编辑） | `SlideMasterPart` / `SlideLayoutPart` 枚举；M6 起编辑落地（见下行「母版/版式编辑」），不再 `unsupported_feature` |
+| 母版 / 版式编辑 | 对 master/layout 上元素 add/set/remove | ✅ M6 已实现 | `PptxMasters.cs`：`set /master[m]`（background + accent1..6 主题强调色）、`set /master[m]/layout[l]`（background）、`add /master[m] {type:layout, basedOn?}`（克隆既有版式）、`/master[m]/shape[i]` 与 `/master[m]/layout[l]/shape[i]` 复用 slide 形状 op；克隆版式可经 `add type:slide props:{layout:N}` 套用到新片；无引用版式才可 remove |
 | 图片 | 插入（PNG/JPEG）/位置/尺寸（单位换算，缺省守纵横比）/name；返回稳定 `shape[@id=N]` 路径 | ✅ M2 已实现 | `ImagePart` + `P.Picture`（PptxImages.cs）；src 必经沙箱；SVG/裁剪/滤镜 → 🗺 M3 |
 | 表格 | `add type:table`（rows×cols、headerRow、x/y/w、columnWidths）+ light/medium/dark 三档直绘样式（header 填充 + 斑马行，不依赖主题）；单元格 text/`mergeRight`/`mergeDown`、加行（`add type:row`）；`/slide[i]/table[k]/tr[r]/tc[c]` 寻址，get 回报 rowsDetail + 合并形状，SVG 渲染画出真网格 | ✅ M5 已实现 | `a:tbl`（PptxTables.cs，graphicFrame 手写）；内建 tableStyles 目录引用、列实体操作 → 📋 余项 |
 | 图表基础 | 柱/线/饼增删读（`/slide[i]/chart[k]` 寻址）；跨文档 `dataFrom` 直接取 xlsx 数据；M4 起新建图表**默认嵌入工作簿** + 系列/分类写 Sheet1 引用（`c:numRef`/`c:strRef` + 缓存），PowerPoint 右键「编辑数据」直接可用（get 报 `dataEditable:true`）；旧式纯缓存图表 `set {embedData:true}` 一键退化改造 | ✅ M3 已实现（M4 + 嵌入工作簿） | 自研 `ChartPart` + `EmbeddedPackagePart`（PptxCharts.cs/PptxChartWorkbook.cs，c:externalData autoUpdate=false）+ 命令层 dataFrom 展开；轴/系列子实体 → 📋 余项 |
@@ -183,18 +189,18 @@
 | 幻灯片背景 | slide 级纯色背景（真 `p:bg`，非全幅矩形） | ✅ M2 已实现 | `P.Background` + `a:solidFill`（set/add `background` prop）；渐变/图片背景 → 🗺 M3 |
 | 批注（legacy） | 经典批注增/读/删（`add type:comment`，text/author/x/y），`/slide[i]/comment[@id=N]` 稳定寻址，`read --view structure` 列出；M5 起**回复线程**：`add type:reply`（path = 父批注），`read --view comments` 按线程嵌套 `replies`，删根连带回复 | ✅ M4 已实现（M5 + 回复线程） | `SlideCommentsPart` + `CommentAuthorsPart`（PptxComments.cs，作者去重复用）；回复 = p:cm + p15:threadingInfo/parentCm（PowerPoint 2013+ 显示真线程） |
 | 现代线程批注 | p188 modern comments（线程/回复）round-trip | 🗺 M3 | `powerPointComments` part（OpenXml 3.x 已建模） |
-| 动画 | 进入预设 appear/fade/flyIn(8 方向)/wipe(4 方向)；M5 起**强调** pulse/grow/spin/colorPulse（colorPulse 收 color）与**退出** fadeOut/flyOut/wipeOut（退出尾帧挂 hide set）；click/withPrevious/afterPrevious 触发、duration/delay；`/slide[i]/animation[k]` 寻址增删，structure 视图按播放顺序列出（含 class=entrance/emphasis/exit） | ✅ M4 已实现（M5 + 强调/退出） | `p:timing` 树手写（PptxAnimations.cs + 预设类映射，OpenXml 无高层 API）；其余上游预设（15 emphasis + 16 exit 全集）、多效果链、motion path、repeat/restart/autoReverse → 🗺 深水区（M6 时间轴编辑种子） |
+| 动画 | 进入预设 appear/fade/flyIn(8 方向)/wipe(4 方向)；M5 起**强调** pulse/grow/spin/colorPulse（colorPulse 收 color）与**退出** fadeOut/flyOut/wipeOut（退出尾帧挂 hide set）；click/withPrevious/afterPrevious 触发、duration/delay；`/slide[i]/animation[k]` 寻址增删，structure 视图按播放顺序列出（含 class=entrance/emphasis/exit）；M6 起**时间轴重排**（`move /slide[i]/animation[2] before/after /slide[i]/animation[1]`）+ `set` 重调既有动画 props | ✅ M4 已实现（M5 强调/退出 + M6 时间轴编辑） | `p:timing` 树手写（PptxAnimations.cs + 预设类映射，OpenXml 无高层 API）；M6 时间轴 move/set 落地；其余上游预设（15 emphasis + 16 exit 全集）、多效果链、motion path、repeat/restart/autoReverse、动画预设++ → 🗺 M7 |
 | 切换（transition） | none/fade/push/wipe + 时长（`transitionDuration`，p14:dur 毫秒），get/outline 回读 | ✅ M3 已实现 | `P.Transition`（PptxTransitions.cs）；p15 12 种扩展预设 → 📋 余项 |
 | Morph 平滑切换 | p14 morph + `!!` 命名匹配感知 | 🗺 M3 | p14 扩展 + 对象名约定 |
 | 媒体（video/audio） | 嵌入/链接、loop、autoStart | 🗺 M3 | `VideoReferenceRelationship` + `p:nvPr` media |
-| 公式（equation） | OMML 公式形状 | 🗺 M3 | `a14:m` 内嵌 Math |
+| 公式（equation） | OMML 公式形状 | 🗺 M7 | `a14:m` 内嵌 Math（M6 公式已落地 docx；pptx 公式形状顺延 M7，复用 `AIOffice.Word.Equations` 转换器） |
 | zoom | summary / section / slide zoom 跳转对象 | 🗺 M3 | p15 `sectionZoom`/`slideZoom` |
 | OLE 对象 | 嵌入对象 + preview 图 | 🗺 M3 | `graphicFrame` + `p:oleObj` |
 | 3D 模型 | glTF 模型嵌入、rotation=ax,ay,az | 🗺 M3 | am3d 扩展 part |
 | SmartArt | **只读**落地（M5）：`read --view structure` 逐片列出 smartArt、`get /slide[i]/smartart[k]` 输出连接序嵌套节点树（text/children）、宿主 frame 回指 smartArtPath、query 可命中；编辑报 `unsupported_feature` + workaround | ✅ M5 已实现（只读） | `DiagramDataPart` 走查（PptxSmartArt.cs）；写入（data/layout/colors part 组）→ 🗺 深水区 |
 | 超链接 | 文本/形状级跳转（外链、页内跳转）、tooltip | 🔜 M1 | `a:hlinkClick` + 关系 |
 | 主题 / 文档级属性 | theme 颜色字体、defaultFont、show.loop、print.what | 📋 M2 | `ThemePart` / `PresentationPropertiesPart` |
-| RTL | shape/notes direction、图表轴 RTL | 🗺 M3 | `a:bodyPr@rtlCol` / `a:pPr@rtl` |
+| RTL | shape/notes direction、图表轴 RTL | 🗺 M7 | `a:bodyPr@rtlCol` / `a:pPr@rtl`（M6 RTL 只覆盖 docx；pptx 形状 RTL 顺延 M7） |
 | 形状 z 序 | `move` 到 front/back/forward/backward，重排 spTree 绘制顺序 | ✅ M3 已实现 | spTree 子节点重排（PptxEditor.cs）；front = 最后绘制（最上层） |
 | 逐页渲染 SVG/HTML | 每页 slide 输出 SVG（或 HTML 退化；M3 起含迷你图表渲染、预设几何、线条） | ✅ M0 已实现 | 自研渲染器（基础形状/文本；覆盖面随元素能力增长） |
 | 截图网格 / 页范围 | PNG 缩略图网格（--grid）、html 页范围 | 🔜 M1 | 单页 PNG 已落地（`render --to png --scope /slide[N]`）；网格拼接与页范围未实现 |
@@ -203,13 +209,13 @@
 
 ## 4. 统计
 
-| 范围 | ✅ 已实现（M0–M5） | 🔜 M1 余项 | 📋 M2 余项 | 🗺 深水区 | ❌ 不计划 | 合计 |
+| 范围 | ✅ 已实现（M0–M6） | 🔜 M1 余项 | 📋 M2 余项 | 🗺 深水区（M7） | ❌ 不计划 | 合计 |
 |---|---|---|---|---|---|---|
 | 跨格式通用 | 26 | 3 | 5 | 4 | 3 | 41 |
-| docx | 19 | 2 | 6 | 7 | 0 | 34 |
-| xlsx | 22 | 4 | 6 | 6 | 0 | 38 |
-| pptx | 17 | 4 | 6 | 10 | 0 | 37 |
-| **合计** | **84** | **13** | **23** | **27** | **3** | **150** |
+| docx | 22 | 1 | 6 | 5 | 0 | 34 |
+| xlsx | 25 | 4 | 6 | 6 | 0 | 41 |
+| pptx | 20 | 4 | 5 | 10 | 0 | 39 |
+| **合计** | **93** | **12** | **22** | **25** | **3** | **155** |
 
 > 解读：M0 的 31 项里有相当一部分是 AI 原生层（envelope、快照、rev、sandbox、schema、MCP）—— 这是 AIOffice 的差异化地基，上游完全没有。格式能力本身（docx 4 / xlsx 5 / pptx 5）在 M0 刻意收窄到"段落、单元格、形状"三个最小核心，换取每一项都带测试、过 `OpenXmlValidator`、守住 round-trip 字节一致律。
 >
@@ -222,3 +228,5 @@
 > M4（v0.5.0）新增 8 项翻绿（含 1 个新行：xlsx 查找替换）：跨格式**全文 find/replace** 落地（三 handler 共享一份契约 + 命令层 `"/"` 文档级展开 + CLI `--find/--replace` 糖，docx `--track` 出修订对）；docx **TOC、水印** 2 项翻绿，脚注/尾注（+尾注）、节属性（+插入分节符）、修订（+tracked replace）3 行就地深化；xlsx 行列操作、单元格批注 2 项翻绿，区域寻址行深化（批量 2D 写入 + 空白 sheet SAX 流式写）；pptx **进入动画、经典批注** 2 项翻绿，图表行深化（嵌入式工作簿 → PowerPoint「编辑数据」可用）。工程面：tag 触发的 GitHub release 自动化（6 平台单文件二进制 + SHA256SUMS）。
 >
 > M5（v0.6.0，markdown/csv 桥）新增 12 项翻绿（含 2 个新行：markdown 桥、xlsx 线程批注）：跨格式 **markdown↔docx 桥**（Markdig 导入 + GFM 导出 round-trip）与 **csv↔xlsx 桥**（`create --from` / `read --view csv`，前导零保文本）落地，`IFormatHandler` 增量获得 `CreateFrom` 默认钩子（无导入器格式诚实拒绝）；docx **表格格式、单元格合并、域** 3 项翻绿，页眉页脚行深化（firstPage/even 变体）；xlsx **数据验证、迷你图、超链接、CSV 导入、线程批注** 5 项翻绿；pptx **原生表格、SmartArt（只读）** 2 项翻绿，动画行深化（强调/退出预设）、批注行深化（回复线程）。其余项按余项标记排队（M6 窗口：就地写入流式、插件机制、公式 OMML、RTL 深化、现代 pptx 批注 part、动画时间轴编辑），每一项落地时同步更新本表状态与"实现备注"中的真实 API。
+>
+> M6（v0.7.0，深水区攻坚）新增 9 项翻绿（含 5 个新行：xlsx 就地流式写入 / Excel 表 / 大纲分组、pptx 幻灯片分节 / 幻灯片尺寸）：docx **公式（LaTeX → OMML 自研转换器）、右到左/双向、多栏分节（含 columnBreak）** 3 项翻绿；xlsx **就地流式写入**（既有大工作簿 SAX 原地改写）、**Excel 表（ListObject + 汇总 + 结构化引用求值）**、**行/列大纲分组** 3 项翻绿；pptx **母版/版式编辑（背景 + 强调色 + 克隆版式）、幻灯片分节、幻灯片尺寸/宽高比** 3 项翻绿，动画行深化（时间轴 move/set 重排）。Core 新增 `DocPath` 寻址形式：`/`（演示文稿根，pptx 幻灯片尺寸 + 分节 + 文档级 get）与 `row[a]:row[b]`/`col[a]:col[b]` 元素跨段（xlsx 大纲分组）—— 这是把 M6 能力接到真实 CLI/MCP 命令面的关键一步（之前这些路径在 `EditOp.ParseBatch` → `DocPath.Parse` 网关被拒，仅直构 EditOp 的格式层测试可达）。深水区余项整体顺延 M7（pptx/xlsx 公式、插件机制、动画预设++、OLE、无障碍/alt-text 审计）。

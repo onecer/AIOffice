@@ -822,3 +822,184 @@ $ csv loop: orders.csv ("007","A, B",12.5) → create loop.xlsx --from orders.cs
 - xlsx in-place streaming **writes** for big existing sheets still load the ClosedXML DOM (M6 seed); the csv import reuses the M4 blank-sheet SAX path.
 - MCP `office_create {overwrite:true}` on an existing file still hits the handler's "File already exists" guard (pre-existing M0 behavior, applies to `from` too) — delete first or pick a new name; carry to M6.
 - M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still open**, observed again in M5.3/M5.4; carry to M6.
+
+---
+
+# AIOffice 0.7.0 (M6) — Integration Smoke Report
+
+Date: 2026-06-13 · Machine: macOS 26.3.0 (Darwin 25.3.0) arm64 · dotnet 10.0.300 (TFM net10.0)
+All commands below were actually executed; outputs are trimmed but real. M6 = the deep-water pass:
+docx equations (LaTeX → Office Math) / RTL / multi-column · xlsx in-place streaming writes / Excel
+Tables / outline grouping · pptx master+layout editing / slide sections / slide size / animation timeline.
+
+## M6.1 Build — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror
+已成功生成。  0 个警告  0 个错误
+```
+
+## M6.2 Tests — PASS (1253/1253 across 7 projects)
+
+```
+$ dotnet test AIOffice.sln --no-build
+Core 124 · MCP 63 · Word 385 · Pptx 327 · Preview 24 · Render 31 · Excel 299   →  1253 passed, 0 failed
+```
+
+New M6 tests landed WITH the integration (baseline before M6 was 1237): Core +8 addressing
+(ElementSpan + root "/"), Core +1 ParseBatch theory (M6 span/root paths survive the gate), Excel +2
+(group span through ParseBatch), Pptx +1 (root section/slideSize through ParseBatch), MCP +1
+(equation over the wire).
+
+One assertion changed honestly (justified inline): `ReplaceSugarTests.Root_path_is_rejected_for_non_replace_ops`
+now expects `unsupported_feature` instead of `invalid_path` — "/" is a real path form in M6, so a
+non-replace docx root op parses and is rejected by the handler (still a hard rejection, nothing written).
+
+## M6.3 docx equations / RTL / multi-column — PASS
+
+```
+$ aioffice create report.docx --title "M6 Report"
+  → {"created":".../report.docx","kind":"docx"}                                                    ✓
+$ aioffice edit report.docx --ops '[{op:add,path:/body/p[1],type:equation,props:{latex:"E = mc^2"}}]'
+  → ops[0] {type:equation, path:/body/p[1]/omath[1], display:false, latex:"E = mc^2"}              ✓ inline
+$ aioffice edit report.docx --ops '[{...latex:"\frac{-b \pm \sqrt{b^2-4ac}}{2a}", display:true}]'
+  → ops[0] {type:equation, path:/body/p[2]/omath[1], display:true}                                 ✓ display block
+$ aioffice edit report.docx --ops '[{...latex:"\begin{pmatrix}1&0\\0&1\end{pmatrix}", display:true}]'
+  → ops[0] {type:equation, display:true, latex:"\begin{pmatrix}1&0\\0&1\end{pmatrix}"}             ✓ matrix
+$ aioffice read report.docx --view text
+  → p[1]: "M6 Report$E = mc^2$"   p[2]: "$$\begin{pmatrix}1&0\\0&1\end{pmatrix}$$"
+    p[3]: "$$\frac{-b \pm \sqrt{b^2-4ac}}{2a}$$"                                                    ✓ $…$ / $$…$$ markers
+$ aioffice get report.docx /body/p[1]/omath[1]
+  → {type:equation, properties:{latex:"E = mc^2", display:false}}                                  ✓ stored LaTeX read back
+$ aioffice edit report.docx --ops '[{...type:equation,props:{latex:"\foobar{x} + \alpha"}}]'
+  → ok:true + meta.warnings:[{code:"equation_partial",
+      message:"…not recognized and appear literally: \foobar…"}]                                   ✓ partial degrade, file still valid
+$ aioffice edit report.docx --ops '[{op:add,path:/body,type:p,props:{text:"مرحبا بالعالم"}},
+                                     {op:set,path:/body/p[5],props:{rtl:true}}]'  → applied:2        ✓
+$ aioffice get report.docx /body/p[5]   → {rtl:true, alignment:"right"}                             ✓ RTL paragraph
+$ aioffice edit report.docx --ops '[{op:add,path:/body,type:table,props:{rows:2,columns:2}},
+                                     {op:set,path:/body/table[1],props:{rtl:true}}]'  → applied:2    ✓
+$ aioffice get report.docx /body/table[1]   → properties.rtl = true                                 ✓ RTL table
+$ aioffice edit report.docx --ops '[{op:set,path:/section[1],props:{columns:2}}]'  → applied:1       ✓
+$ aioffice get report.docx /section[1]   → {columns:2, columnGapCm:1.27}                            ✓ two-column section
+$ aioffice validate report.docx   → {valid:true, count:0, issues:[]}                                ✓ 0 errors after all the above
+```
+
+## M6.4 xlsx in-place streaming write / Excel Table / outline grouping — PASS
+
+```
+# ~54 MB CSV → big.xlsx via the streaming SAX writer
+$ aioffice create big.xlsx --from big.csv
+  → {rows:330001, columns:6, cells:1980006, streamed:true}  (elapsed ~4.9 s; file 42,181,943 bytes)  ✓
+# in-place streaming write into the existing 42 MB workbook (stream=true)
+$ aioffice edit big.xlsx --ops '[{op:set,path:/Sheet1/H200000,props:{value:"STREAMED-DEEP"}},
+                                  {op:set,path:/Sheet1/J5,props:{values:[["a","b"],["c","d"]]}}]' stream=true
+  → {applied:2, ops:[{path:/Sheet1/H200000, streamed:true},{path:/Sheet1/J5, streamed:true}],
+     streamed:true}  (elapsed ~6.5 s)                                                              ✓ in-place
+$ aioffice get big.xlsx /Sheet1/H200000 stream=true   → {value:"STREAMED-DEEP", streamed:true}      ✓ reopen-verified deep cell
+$ aioffice get big.xlsx /Sheet1/K6 stream=true        → {value:"d", streamed:true}                  ✓ reopen-verified bulk cell
+# Excel Table "Sales" medium2 with a totals row, then a structured-reference SUM
+$ aioffice edit metrics.xlsx --ops '[{op:add,path:/Sheet1/A1:B5,type:table,
+      props:{name:"Sales",style:"medium2",totals:{"Amount":"sum"}}}]'
+  → {name:"Sales", style:"TableStyleMedium2", totalsRow:true, totals:{Amount:"sum"}}               ✓
+$ aioffice edit metrics.xlsx --ops '[{op:set,path:/Sheet1/D1,props:{value:"=SUM(Sales[Amount])"}}]'
+$ aioffice get metrics.xlsx /Sheet1/D1
+  → {value:825, type:number, formula:"=SUM(Sales[Amount])", cachedValue:825}                        ✓ 100+250+175+300=825 evaluated
+# outline grouping over a row span — through the REAL CLI (was blocked at the Core gate before M6)
+$ aioffice edit metrics.xlsx --ops '[{op:add,path:/Sheet1/row[2]:row[6],type:group,props:{collapsed:true}}]'
+  → {type:group, axis:row, from:"2", to:"6", collapsed:true, outlineLevel:1}                        ✓
+$ aioffice get metrics.xlsx /Sheet1/row[3]   → {hidden:true, outlineLevel:1}                        ✓ structure shows outline
+$ aioffice validate metrics.xlsx   → {valid:true, errors:0, warnings:0}                             ✓ 0 errors
+```
+
+## M6.5 pptx master/layout / sections / slide size / animation timeline — PASS
+
+```
+$ aioffice edit deck.pptx --ops '[{op:set,path:/master[1],props:{background:"0F172A",accent1:"38BDF8"}}]'  ✓ master bg + accent
+$ aioffice edit deck.pptx --ops '[{op:add,path:/master[1],type:layout,props:{name:"M6 Custom",basedOn:1}}]'
+  → target:/master[1]/layout[2]                                                                     ✓ cloned layout
+$ aioffice get deck.pptx /master[1]
+  → {layoutCount:2, layouts:[{name:"Blank"},{name:"M6 Custom", usedBySlides:[]}]}                   ✓
+$ aioffice edit deck.pptx --ops '[{op:add,path:/slide[3],type:slide,props:{title:"Uses M6 Custom",layout:2}}]'  ✓ slide uses cloned layout
+$ aioffice edit deck.pptx --ops '[{op:add,path:/,type:section,props:{name:"Intro",afterSlide:0}},
+                                   {op:add,path:/,type:section,props:{name:"Body",afterSlide:1}}]'  → applied:2   ✓ (path "/" — was blocked pre-M6)
+$ aioffice read deck.pptx --view outline   → sections:[{name:"Intro",slides:[/slide[1]]},
+                                                        {name:"Body",slides:[/slide[2],/slide[3],/slide[4]]}]    ✓ outline groups by section
+$ aioffice edit deck.pptx --ops '[{op:set,path:/,props:{slideSize:"4:3"}}]'   → applied:1            ✓
+$ aioffice get deck.pptx /   → {slideSize:"4:3", widthCm:25.4, heightCm:19.05, slideCount:4, sectionCount:2}     ✓ dims
+$ aioffice edit deck.pptx --ops '[{...animation fade click},{...animation pulse afterPrevious}]'  → applied:2
+  structure animations → ["fade","pulse"]
+$ aioffice edit deck.pptx --ops '[{op:move,path:/slide[1]/animation[2],position:"before /slide[1]/animation[1]"}]'
+  structure animations → ["pulse","fade"]                                                          ✓ timeline reorder
+$ aioffice validate deck.pptx   → {valid:true, count:0, issues:[]}                                  ✓ 0 errors
+```
+
+## M6.6 MCP over the wire — PASS
+
+```
+$ tools/list  → 14 tools (unchanged; M6 added op types + addressing forms, never tools)            ✓
+$ office_edit {file:eq.docx, ops:[{op:add,path:/body/p[1],type:equation,props:{latex:"E = mc^2"}}]}
+  → ops[0].path = /body/p[1]/omath[1]                                                              ✓
+$ office_get {file:eq.docx, path:/body/p[1]/omath[1]}  → properties.latex = "E = mc^2"             ✓
+```
+
+Schema token budget after the M6 additions: ~2214 tokens (budget 3500) — the `office_edit` type
+enum gained equation/columnBreak/section/layout/group, the `office_get` path hint gained the new
+forms, all within the reserved wording headroom; the budget test stays green untouched.
+
+## M6.7 Rendered equation (dogfood) — PASS
+
+```
+$ aioffice create quad.docx --title "Quadratic Formula"
+$ aioffice edit quad.docx --ops '[{op:set,path:/body/p[1],props:{text:"The quadratic formula:"}},
+      {op:add,path:/body/p[1],type:equation,props:{latex:"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}",display:true}}]'
+$ aioffice render quad.docx --to png -o quad.png   → {format:png, sizeBytes:12312}                  ✓
+  Visually verified: x = (-b ± √(b²-4ac)) / 2a renders with a real fraction bar, radical,
+  superscript and ± glyph. Embedded at assets/demo/equation-quadratic.png (README, both languages).
+```
+
+## M6.8 Published binary — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true -p:SelfContained=true -o dist/osx-arm64
+  → dist/osx-arm64/aioffice  38,131,657 bytes (36 MB)
+$ aioffice doctor   → {version:"0.7.0", runtime:".NET 10.0.8", ok:true}                             ✓ 0.7.0
+$ aioffice edit b.docx … type:equation latex:"E = mc^2" display:true → get omath → "E = mc^2"; validate 0   ✓ equation loop
+$ aioffice edit b.xlsx … type:table name:"T" style:medium2 totals:{Amount:sum};
+  set D1 "=SUM(T[Amount])" → get D1 = 30                                                            ✓ Excel Table loop
+$ aioffice edit b.pptx … set /master[1] {background,accent1}; add type:layout "Bin Layout";
+  get /master[1] → layoutCount:2 ["Blank","Bin Layout"]; validate 0                                ✓ master-edit loop
+```
+
+## M6.9 Manual-check fixtures refreshed (open these in real Office)
+
+`fixtures/manual-check/` regenerated with M6 content — open in real Word/Excel/PowerPoint to confirm
+equations render, sections appear, tables/grouping show:
+- `report.docx` — inline `E=mc^2`, the display quadratic formula, a 2×2 matrix, an RTL Arabic
+  paragraph + RTL table, a two-column section.
+- `metrics.xlsx` — an Excel Table "Sales" (medium2) with a totals row, `=SUM(Sales[Amount])`, and
+  rows 2–6 collapsed into an outline group.
+- `deck.pptx` — an edited master (dark background + accent), a cloned layout, two sections
+  ("Intro"/"Body"), 4:3 slide size, and a reordered animation timeline.
+
+## M6.10 Honest limits introduced/kept in M6
+
+- **Equations are docx-only in M6.** pptx/xlsx equations (OMML in slides/cells) are M7 seeds — the
+  same `AIOffice.Word.Equations` converter will be reused. Tracked-changes does NOT record equation
+  adds: `add type:equation` with `--track` answers `unsupported_feature` (run it without `--track`).
+- **The LaTeX subset is curated, not complete.** Unknown commands degrade to literal runs + an
+  `equation_partial` warning (the file always validates); see `aioffice help equations` for the
+  supported set. This is deliberate — an honest partial render over a silent failure.
+- **RTL is docx-only in M6** (paragraph/run/table). xlsx `sheetView rightToLeft` and pptx shape RTL
+  are M7. RTL never reshapes glyphs — it sets the OOXML direction; Word/LibreOffice lay out the text.
+- **In-place streaming writes require an all-streamable batch.** Any non-streamable op
+  (bold/fill/numberFormat/merge/…) in the batch falls the whole batch back to the ClosedXML DOM path.
+  Streamed formula cells carry no cached value (Excel recomputes on open). This is the M5 seed paid off.
+- **Excel Table `remove` keeps the cell data** (ClosedXML's `Clear` would erase values) — the
+  ListObject is unregistered, the values survive. Documented in `office_help xlsx/table`.
+- **The "/" root and `row[a]:row[b]` span are new Core addressing forms** added so M6 features reach
+  the real CLI/MCP surface (they were blocked at `EditOp.ParseBatch` → `DocPath.Parse` before).
+  docx/xlsx have no document-root edit/get target, so they answer `unsupported_feature` for "/"
+  (naming the body/section/sheet workaround) rather than crashing.
+- M0 gap 6 (validate envelope drift: docx/pptx say `count`, xlsx says `errors/warnings`) — **still
+  open**, observed again in M6.3/M6.4; carry to M7.

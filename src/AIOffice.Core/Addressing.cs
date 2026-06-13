@@ -18,6 +18,13 @@ public enum PathSegmentKind
 
     /// <summary>A rectangular cell range: <c>A1:C10</c>.</summary>
     Range,
+
+    /// <summary>
+    /// A contiguous run of indexed/letter-indexed elements of the same name
+    /// (xlsx outline groups): <c>row[2]:row[6]</c>, <c>col[B]:col[E]</c>. The
+    /// handler owns the span semantics; the grammar only validates the shape.
+    /// </summary>
+    ElementSpan,
 }
 
 /// <summary>A spreadsheet cell reference (column letters + 1-based row).</summary>
@@ -73,6 +80,15 @@ public sealed record PathSegment
     /// <summary>Bottom-right of a range; null unless Kind is Range.</summary>
     public CellRef? End { get; init; }
 
+    /// <summary>
+    /// For an <see cref="PathSegmentKind.ElementSpan"/>, the raw start/end tokens
+    /// as written (<c>"2"</c>/<c>"6"</c> or <c>"B"</c>/<c>"E"</c>); null otherwise.
+    /// The handler interprets them against the document.
+    /// </summary>
+    public string? SpanFrom { get; init; }
+
+    public string? SpanTo { get; init; }
+
     public string ToCanonicalString() => Kind switch
     {
         PathSegmentKind.Element => Id is { } id
@@ -87,6 +103,7 @@ public sealed record PathSegment
         PathSegmentKind.Name => Quote(Name!),
         PathSegmentKind.Cell => Start!.Value.ToString(),
         PathSegmentKind.Range => $"{Start!.Value}:{End!.Value}",
+        PathSegmentKind.ElementSpan => $"{Name}[{SpanFrom}]:{Name}[{SpanTo}]",
         _ => throw new InvalidOperationException($"Unknown segment kind: {Kind}"),
     };
 
@@ -123,6 +140,11 @@ public sealed partial record DocPath
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[(default|firstPage|even)\]$")]
     private static partial Regex NamedVariantElement();
 
+    // A contiguous element span: same element name on both ends, numeric bounds
+    // (row[2]:row[6]) or letter bounds (col[B]:col[E]). The handler resolves it.
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([0-9]+|[A-Z]{1,3})\]:\1\[([0-9]+|[A-Z]{1,3})\]$")]
+    private static partial Regex ElementSpanPattern();
+
     [GeneratedRegex(@"^([A-Z]{1,3})([0-9]{1,7})$")]
     private static partial Regex CellPattern();
 
@@ -140,8 +162,15 @@ public sealed partial record DocPath
 
     public required IReadOnlyList<PathSegment> Segments { get; init; }
 
+    /// <summary>
+    /// True for the document root <c>"/"</c> (zero segments): pptx slide size and
+    /// slide-section management, and document-level <c>get</c>. Handlers that have
+    /// no document-level surface reject it with <c>unsupported_feature</c>.
+    /// </summary>
+    public bool IsRoot => Segments.Count == 0;
+
     public string ToCanonicalString() =>
-        "/" + string.Join('/', Segments.Select(s => s.ToCanonicalString()));
+        Segments.Count == 0 ? "/" : "/" + string.Join('/', Segments.Select(s => s.ToCanonicalString()));
 
     public override string ToString() => ToCanonicalString();
 
@@ -171,6 +200,14 @@ public sealed partial record DocPath
         {
             error = $"Path must start with '/': {text}";
             return false;
+        }
+
+        // "/" alone is the document root: pptx slide size + sections and
+        // document-level get. It carries zero segments.
+        if (text.Length == 1)
+        {
+            path = new DocPath { Segments = [] };
+            return true;
         }
 
         var rawSegments = SplitSegments(text, ref error);
@@ -212,6 +249,30 @@ public sealed partial record DocPath
         if (wasQuoted)
         {
             return new PathSegment { Kind = PathSegmentKind.Name, Name = raw };
+        }
+
+        // Element spans (xlsx outline groups) carry both bounds in one segment:
+        // row[2]:row[6], col[B]:col[E]. The bounds must be the same kind (both
+        // numeric or both letters); the handler interprets them.
+        var span = ElementSpanPattern().Match(raw);
+        if (span.Success)
+        {
+            var from = span.Groups[2].Value;
+            var to = span.Groups[3].Value;
+            var fromNumeric = char.IsDigit(from[0]);
+            if (fromNumeric != char.IsDigit(to[0]))
+            {
+                error = $"Span bounds must both be numeric or both be column letters: {raw}";
+                return null;
+            }
+
+            return new PathSegment
+            {
+                Kind = PathSegmentKind.ElementSpan,
+                Name = span.Groups[1].Value,
+                SpanFrom = from,
+                SpanTo = to,
+            };
         }
 
         var range = RangePattern().Match(raw);

@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：M5 规格（v0.6.0）：**工具数维持 14 个**——桥接只加参数不加工具：`office_create` 新增可选 `from`（markdown → docx / csv → xlsx 导入），`office_read` 的 view 枚举扩为 `markdown`（docx 专属导出）与 `csv`（xlsx 专属导出，新增 `sheet` 参数）；`office_edit` 的 add type 词表扩入 `field` / `dataValidation` / `sparkline` / `reply`（及 pptx `table`）。此前 M2 给 `office_edit` 增加 `track`/`author` 与 accept/reject op、给 `office_read` 增加 revisions/comments/styles 视图；错误码自 M2 起含 `file_too_large`（大文件守卫）。
+> 状态：M6 规格（v0.7.0）：**工具数维持 14 个**——M6 深水区能力只扩 `office_edit` 的 add type 词表与寻址形式，不加工具：新增 `equation`（docx LaTeX）/ `columnBreak`/ `section`（pptx）/ `layout`（pptx 克隆）/ `group`（xlsx 大纲）/ `table`（xlsx ListObject），新寻址 `/`（演示文稿根：pptx 幻灯片尺寸 + 分节 + 文档级 get）、`/body/p[i]/omath[j]`（行内公式）、`row[a]:row[b]`/`col[a]:col[b]`（xlsx 大纲分组跨段）、可编辑 `/master[1]/layout[i]`；schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M5：`office_create` 的 `from`（markdown/csv 导入）+ `office_read` 的 `markdown`/`csv` 视图；M2：`track`/`author` + accept/reject op + revisions/comments/styles 视图 + `file_too_large` 错误码。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -261,7 +261,7 @@ aioffice mcp [--workspace <dir>]
           "op": { "type": "string", "enum": ["set", "add", "remove", "move", "replace", "accept", "reject"],
             "description": "accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning" },
           "path": { "type": "string", "description": "set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\"" },
-          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation, field, dataValidation, sparkline" },
+          "type": { "type": "string", "description": "add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline" },
           "props": { "type": "object", "additionalProperties": { "type": "string" },
             "description": "String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified (12pt, 2cm); colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals" },
           "position": { "type": ["integer", "string"],
@@ -653,7 +653,7 @@ aioffice mcp [--workspace <dir>]
 | `preview_open` | 300 | M1 转正，吃掉当年预留额度的大头 |
 | `preview_selection` | 180 | M1 转正 |
 | **M1 小计（14 工具）** | **3020** | v0 小计 2540 + preview 预留 480，预算如约未重谈 |
-| 措辞浮动预留 | 480 | description 迭代余量（M5 的 `from`/新视图/新 type 词表从这里支出，实测全表 ≈ 2082 tokens，余量充足） |
+| 措辞浮动预留 | 480 | description 迭代余量（M5 的 `from`/新视图/新 type 词表、M6 的公式/分节/分组/Excel 表 type 词表与新寻址提示均从这里支出，实测全表 ≈ 2214 tokens，余量仍充足） |
 | **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关 |
 
 预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。

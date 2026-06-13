@@ -50,14 +50,6 @@ internal static class PptxEditor
     public static PptxOpOutcome Apply(PresentationPart presentation, EditOp op, Workspace workspace)
     {
         var parsed = PptxAddress.Parse(op.Path);
-        if (parsed.IsMaster)
-        {
-            throw new AiofficeException(
-                ErrorCodes.UnsupportedFeature,
-                $"Editing masters/layouts is not supported yet (planned M2): {op.Path}",
-                "Edit slides instead, or copy a layout-derived slide via 'add slide' with props {\"layout\": N}.");
-        }
-
         if (parsed.IsSmartArt)
         {
             throw PptxSmartArt.EditUnsupported(op.Path);
@@ -93,11 +85,39 @@ internal static class PptxEditor
             return PptxNotes.Append(presentation, address, op);
         }
 
+        if (address.IsMaster)
+        {
+            return PptxMasters.Add(presentation, address, op);
+        }
+
+        if (address.IsPresentation || address.IsSection)
+        {
+            var sectionType = op.Type?.Trim().ToLowerInvariant();
+            if (sectionType == "section")
+            {
+                return PptxSections.Add(presentation, address, op.Props);
+            }
+
+            throw new AiofficeException(
+                op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
+                op.Type is null ? "add on '/' requires a type." : $"Cannot add '{op.Type}' on '{op.Path}'.",
+                "The only thing you can add at the presentation root is a section " +
+                "({\"op\":\"add\",\"path\":\"/\",\"type\":\"section\",\"props\":{\"name\":\"Intro\"}}); " +
+                "add slides via /slide[i].",
+                candidates: ["section"]);
+        }
+
         var type = op.Type?.Trim().ToLowerInvariant();
         switch (type)
         {
             case "slide":
                 return AddSlide(presentation, address, op.Position, op.Props);
+
+            case "section":
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"add section targets the presentation root, not '{op.Path}'.",
+                    "Use the root path: {\"op\":\"add\",\"path\":\"/\",\"type\":\"section\",\"props\":{\"name\":\"Intro\",\"afterSlide\":0}}.");
 
             case "shape" or "textbox":
             {
@@ -333,6 +353,21 @@ internal static class PptxEditor
             return PptxNotes.Set(presentation, address, op.Props);
         }
 
+        if (address.IsPresentation)
+        {
+            return PptxSlideSize.Set(presentation, op.Props);
+        }
+
+        if (address.IsSection)
+        {
+            return PptxSections.Set(presentation, address, op.Props);
+        }
+
+        if (address.IsMaster)
+        {
+            return PptxMasters.Set(presentation, address, op.Props);
+        }
+
         if (address.IsChart)
         {
             if (op.Props.ContainsKey("embedData"))
@@ -355,11 +390,7 @@ internal static class PptxEditor
 
         if (address.IsAnimation)
         {
-            throw new AiofficeException(
-                ErrorCodes.UnsupportedFeature,
-                "Animations cannot be edited in place yet.",
-                "Remove the animation ({\"op\":\"remove\",\"path\":\"" + address.CanonicalAnimationPath + "\"}) " +
-                "and add it again with the new effect/trigger/duration.");
+            return PptxAnimations.Set(presentation, address, op.Props);
         }
 
         if (address.IsComment)
@@ -460,25 +491,30 @@ internal static class PptxEditor
         return address.CanonicalSlidePath;
     }
 
-    /// <summary>Sets a proper p:bg solid fill (replacing any previous background).</summary>
+    /// <summary>Sets a proper p:bg solid fill on a slide (replacing any previous background).</summary>
     internal static void SetBackground(SlidePart slidePart, JsonNode? value)
+    {
+        var slideData = slidePart.Slide?.CommonSlideData ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The slide has no common slide data (p:cSld).",
+            "The slide part is malformed; re-export the file or restore a snapshot.");
+        SetBackground(slideData, value);
+    }
+
+    /// <summary>Sets a proper p:bg solid fill on any p:cSld (slide, master or layout), replacing any previous one.</summary>
+    internal static void SetBackground(P.CommonSlideData slideData, JsonNode? value)
     {
         if (value is JsonObject or JsonArray ||
             (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw)))
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                "Gradient and image backgrounds are not supported yet (planned M3).",
+                "Gradient and image backgrounds are not supported.",
                 "Use a solid color, e.g. {\"background\":\"0F172A\"} — or add a full-bleed picture: " +
                 "{\"op\":\"add\",\"type\":\"image\",\"props\":{\"src\":\"bg.png\",\"x\":0,\"y\":0,\"w\":\"33.87cm\",\"h\":\"19.05cm\"}}.");
         }
 
         var hex = Units.ParseColorHex("background", value);
-        var slideData = slidePart.Slide?.CommonSlideData ?? throw new AiofficeException(
-            ErrorCodes.FormatCorrupt,
-            "The slide has no common slide data (p:cSld).",
-            "The slide part is malformed; re-export the file or restore a snapshot.");
-
         slideData.Background = new P.Background(
             new P.BackgroundProperties(
                 new A.SolidFill(new A.RgbColorModelHex { Val = hex }),
@@ -502,6 +538,24 @@ internal static class PptxEditor
         if (address.IsNotes)
         {
             return PptxNotes.Clear(presentation, address);
+        }
+
+        if (address.IsPresentation)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "The presentation root cannot be removed.",
+                "Remove a slide (/slide[i]), a section (/section[i]) or a layout (/master[m]/layout[l]) instead.");
+        }
+
+        if (address.IsSection)
+        {
+            return PptxSections.Remove(presentation, address);
+        }
+
+        if (address.IsMaster)
+        {
+            return PptxMasters.Remove(presentation, address);
         }
 
         if (address.IsChart)
@@ -585,12 +639,26 @@ internal static class PptxEditor
                 "Move the slide itself ({\"op\":\"move\",\"path\":\"/slide[3]\",\"position\":\"1\"}), or set/remove the notes text.");
         }
 
-        if (address.IsAnimation || address.IsComment)
+        if (address.IsAnimation)
+        {
+            return PptxAnimations.Move(presentation, address, op.Position);
+        }
+
+        if (address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved.",
-                "Animations play in insertion order (remove and re-add to reorder); comments are anchored by x/y.");
+                "Comments are anchored by x/y; reorder animations with move (before/after another animation).");
+        }
+
+        if (address.IsPresentation || address.IsSection || address.IsMaster)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved.",
+                "Move slides (/slide[i]) or reorder animations; sections follow slide order, " +
+                "and masters/layouts have no order to change.");
         }
 
         if (address.IsTable && (address.TableRowIndex is not null || address.TableCellIndex is not null))
@@ -786,7 +854,10 @@ internal static class PptxEditor
     /// picks a preset geometry (rect/roundRect/ellipse/triangle/diamond/arrow)
     /// or "line" (a straight connector honoring props.flip).
     /// </summary>
-    private static uint AddTextBox(SlidePart slidePart, JsonObject? props)
+    private static uint AddTextBox(SlidePart slidePart, JsonObject? props) =>
+        AddTextBox(PptxDoc.RequireShapeTree(slidePart), props);
+
+    internal static uint AddTextBox(P.ShapeTree tree, JsonObject? props)
     {
         props ??= [];
         foreach (var (key, _) in props)
@@ -799,10 +870,9 @@ internal static class PptxEditor
             : null;
         if (string.Equals(geometry, "line", StringComparison.Ordinal))
         {
-            return AddLine(slidePart, props);
+            return AddLine(tree, props);
         }
 
-        var tree = PptxDoc.RequireShapeTree(slidePart);
         var id = PptxDoc.NextShapeId(tree);
 
         var x = props.TryGetPropertyValue("x", out var xNode) ? Units.ParseLengthEmu("x", xNode) : Units.CmToEmu(2.5);
@@ -870,7 +940,7 @@ internal static class PptxEditor
     /// default runs top-left to bottom-right; flip "v"/"h" mirrors it. props.fill
     /// sets the stroke color (a line has no area).
     /// </summary>
-    private static uint AddLine(SlidePart slidePart, JsonObject props)
+    private static uint AddLine(P.ShapeTree tree, JsonObject props)
     {
         foreach (var key in new[] { "text", "title", "fontSize", "bold", "color", "align" })
         {
@@ -883,7 +953,6 @@ internal static class PptxEditor
             }
         }
 
-        var tree = PptxDoc.RequireShapeTree(slidePart);
         var id = PptxDoc.NextShapeId(tree);
 
         var x = props.TryGetPropertyValue("x", out var xNode) ? Units.ParseLengthEmu("x", xNode) : Units.CmToEmu(2.5);
@@ -966,7 +1035,7 @@ internal static class PptxEditor
         }
     }
 
-    private static void SetShapeProps(ShapeView view, JsonObject props)
+    internal static void SetShapeProps(ShapeView view, JsonObject props)
     {
         long? x = null, y = null, w = null, h = null;
 

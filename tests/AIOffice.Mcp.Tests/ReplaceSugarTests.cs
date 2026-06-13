@@ -198,8 +198,13 @@ public sealed class ReplaceSugarTests : IDisposable
         var envelope = Edit("report.docx", new JsonArray(
             Op("set", "/", props: new JsonObject { ["text"] = "x" })));
 
+        // M6: "/" is now a real path form (pptx slide size / sections + document
+        // -level get), so it parses instead of failing invalid_path. A non-replace
+        // op on the docx root has no edit target, so the docx handler rejects it
+        // with unsupported_feature naming the body/section workaround — still a
+        // hard rejection (nothing is written), only the code is more specific.
         Assert.False(envelope.IsOk);
-        Assert.Equal(ErrorCodes.InvalidPath, envelope.Error!.Code);
+        Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.False(string.IsNullOrWhiteSpace(envelope.Error.Suggestion));
     }
 }

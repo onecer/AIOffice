@@ -114,8 +114,10 @@ props:{effect, trigger?, duration?, delay?, direction?, color?}}`
 | exit     | fadeOut · flyOut · wipeOut       | direction: flyOut/wipeOut         |
 
 Triggers: `click` (default) · `withPrevious` · `afterPrevious`; durations like
-`"0.5s"`. `read --view structure` lists per-slide animation order; remove
-`/slide[i]/animation[k]` to drop one.
+`"0.5s"`. `read --view structure` lists per-slide animation order. M6 timeline
+editing: `{op:"move", path:"/slide[i]/animation[2]", position:"before
+/slide[i]/animation[1]"}` reorders the timeline; `set /slide[i]/animation[k]`
+retunes its props; remove `/slide[i]/animation[k]` to drop one.
 
 ## comment + reply (M2 comments, M5 threads)
 
@@ -131,6 +133,44 @@ SmartArt diagrams surface in `read --view structure` (per-slide `smartArt`
 rows) and `get /slide[i]/smartart[k]` as nested node trees in connection
 order. Editing SmartArt is `unsupported_feature` with the workaround named.
 
+## slide size (M6, `/` root)
+
+`{op:"set", path:"/", props:{slideSize:"16:9|4:3|16:10|A4|letter"}}` or explicit
+`{width, height}` (cm/in/emu) rewrites `p:sldSz`; existing shapes keep their
+coordinates. `get /` reports `slideSize`, `widthCm`, `heightCm`, `slideCount`,
+`sectionCount`.
+
+## sections (M6, `/section[i]`)
+
+Standard PowerPoint sections group slides in the outline. Add on the `/` root:
+
+    {op:"add", path:"/", type:"section", props:{name:"Intro", afterSlide:0}}
+    {op:"add", path:"/", type:"section", props:{name:"Body",  afterSlide:1}}
+
+`afterSlide` is 0-based (0 = before slide 1, N = after slide N); a new section
+claims the still-unsectioned slides from there up to the next section. `set
+/section[i] {name}` renames; `remove /section[i]` drops the section (its slides
+survive, just unsectioned). `read --view outline` groups slides under their
+sections; `get /section[i]` reports its name and slide list.
+
+## master / layout editing (M6)
+
+The M1 read-only debt is paid: slide masters and layouts are now editable.
+
+| target                    | ops                                                    |
+|---------------------------|--------------------------------------------------------|
+| `/master[m]`              | `set` background, accent1..accent6 (theme color scheme) |
+| `/master[m]/layout[l]`    | `set` background                                       |
+| `/master[m]` (add layout) | `{op:"add", type:"layout", props:{name, basedOn?}}` clones an existing layout |
+| `/master[m]/shape[i]`, `/master[m]/layout[l]/shape[i]` | the slide shape ops (set/add/remove) |
+
+    aioffice edit deck.pptx --ops '[{"op":"set","path":"/master[1]","props":{"background":"0F172A","accent1":"38BDF8"}}]'
+    aioffice edit deck.pptx --ops '[{"op":"add","path":"/master[1]","type":"layout","props":{"name":"Section","basedOn":1}}]'
+
+Use a cloned layout on a new slide via `props:{layout:N}` (1-based) on `add
+type:slide`. `remove` a layout only when no slide references it. `get
+/master[m]` lists layouts (name, type, `usedBySlides`).
+
 ## Rendering
 
 `aioffice render deck.pptx --to svg --scope /slide[2] -o slide2.svg` renders
@@ -138,5 +178,3 @@ one slide; `--to html` renders a simple HTML projection; `--to png` screenshots
 one slide via a local Chrome/Edge (default `/slide[1]` — pass `--scope`);
 `--to pdf` (M3) prints the WHOLE deck to one PDF, one page per slide
 (`--scope /slide[N]` narrows it to a single page).
-
-Master/layout editing is still `unsupported_feature`.

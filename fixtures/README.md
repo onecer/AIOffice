@@ -42,6 +42,15 @@ pptx 加页+加形状+渲染 SVG。每个脚本都以 `validate` 收尾——这
 `fixtures/manual-check/`，由真人用真实 Office 打开确认。CI 无法自动化这一步，
 OpenXmlValidator 只是代理指标。
 
+M6（v0.7.0）三件套，请用真实 Office 打开核验渲染：
+
+- `report.docx` —— 行内公式 `E=mc²`、显示块二次求根公式、2×2 单位矩阵（确认**公式真的渲染成数学排版**）、
+  一段阿拉伯语 RTL 段落（确认从右到左）、整节两栏排版。
+- `metrics.xlsx` —— Excel 表 "Sales"（medium2 样式 + 汇总行），`=SUM(Sales[Amount])` 应为 965，
+  第 2–6 行折叠为大纲分组（确认左侧出现折叠符号）。
+- `deck.pptx` —— 编辑过的母版（深色背景 + 强调色）、克隆出的版式、两个节 "Intro"/"Body"（确认节视图分组）、
+  4:3 幻灯片尺寸。
+
 ## 从 OfficeCLI 学习能力（而非语法）/ Lifting capability cases from OfficeCLI
 
 `/tmp/office_research/OfficeCLI` 是能力对齐的上游参照（SKILL.md 为能力清单，

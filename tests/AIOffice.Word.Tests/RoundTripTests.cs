@@ -221,6 +221,43 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the M6 surface: inline + display LaTeX equations
+    /// (with their stored mc:Ignorable LaTeX source), RTL paragraphs/tables and a
+    /// multi-column section must survive a no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_m6_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "M6 round trip");
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"p","props":{"text":"Body text."}},
+              {"op":"add","path":"/body/p[2]","type":"equation","props":{"latex":"E = mc^2"}},
+              {"op":"add","path":"/body","type":"equation","props":{"latex":"\\sum_{i=1}^{n} i^2","display":true}},
+              {"op":"set","path":"/body/p[1]","props":{"rtl":true}},
+              {"op":"add","path":"/body","type":"table","props":{"rows":2,"columns":2}},
+              {"op":"set","path":"/body/table[1]","props":{"rtl":true}},
+              {"op":"set","path":"/section[1]","props":{"columns":2,"columnGap":"1cm"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads the OMML equation DOM
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

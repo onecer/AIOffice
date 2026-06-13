@@ -61,12 +61,12 @@ public static class ToolCatalog
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "path":{"type":"string","description":"Canonical 1-based path, e.g. \"/body/p[3]\", \"/Sheet1/B2\", \"/'Q3 Data'/A1:C10\", \"/slide[2]/shape[3]\"; \"/\" for document-level properties. Grammar: office_help {topic:\"addressing\"}"}},
+              "path":{"type":"string","description":"Canonical 1-based path, e.g. \"/body/p[3]\", \"/body/p[3]/omath[1]\", \"/Sheet1/B2\", \"/Sheet1/table[@name=Sales]\", \"/slide[2]/shape[3]\", \"/section[1]\", \"/master[1]/layout[2]\"; \"/\" = pptx slide-size/section root. Grammar: office_help {topic:\"addressing\"}"}},
              "required":["file","path"]}
             """),
         Make(
             "office_edit",
-            "ALL mutations: apply an atomic batch of set/add/remove/move/accept/reject ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
+            "ALL mutations: apply an atomic batch of set/add/remove/move/replace/accept/reject ops — all-or-nothing single save, auto-snapshot, optional rev guard.",
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
@@ -76,7 +76,7 @@ public static class ToolCatalog
                   "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject"],
                     "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\""},
-                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table, row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, animation, field, dataValidation, sparkline"},
+                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
                     "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
                   "position":{"type":["integer","string"],

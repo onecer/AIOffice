@@ -70,7 +70,7 @@ public sealed partial class PptxHandler : IFormatHandler
 
         return view switch
         {
-            "outline" => BuildOutline(slides),
+            "outline" => BuildOutline(presentation, slides),
             "text" => BuildTextView(slides),
             "stats" => BuildStats(slides),
             "comments" => PptxComments.CommentsView(presentation, slides.Select(s => (s.Index, s.Part))),
@@ -92,6 +92,16 @@ public sealed partial class PptxHandler : IFormatHandler
         using var stream = PptxDoc.LoadStream(file);
         using var doc = PptxDoc.Open(stream, editable: false, file);
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
+
+        if (address.IsPresentation)
+        {
+            return PptxSlideSize.Detail(presentation);
+        }
+
+        if (address.IsSection)
+        {
+            return PptxSections.Detail(presentation, address);
+        }
 
         if (address.IsNotes)
         {
@@ -434,7 +444,7 @@ public sealed partial class PptxHandler : IFormatHandler
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"Master/layout rendering is not supported yet (planned M2): '{scope}'.",
+                $"Rendering a master/layout directly is not supported: '{scope}'.",
                 "Render a slide that uses the layout instead, e.g. --scope /slide[2].");
         }
 
@@ -451,32 +461,55 @@ public sealed partial class PptxHandler : IFormatHandler
         return [new SlideRef(address.SlideIndex, part)];
     }
 
-    private static object BuildOutline(List<SlideRef> slides) => new
+    private static object BuildOutline(PresentationPart presentation, List<SlideRef> slides)
     {
-        View = "outline",
-        Slides = slides.Select(s =>
+        var sections = PptxSections.List(presentation);
+        return new
         {
-            var shapes = PptxDoc.Shapes(s.Part);
-            var notes = PptxNotes.Text(s.Part);
-            var transition = PptxTransitions.Read(s.Part);
-            return new
+            View = "outline",
+            Slides = slides.Select(s =>
             {
-                Path = Units.Inv($"/slide[{s.Index}]"),
-                Index = s.Index,
-                Transition = transition?.Kind,
-                TransitionDuration = transition?.Duration,
-                ShapeCount = shapes.Count,
-                Shapes = shapes.Select(shape => new
+                var shapes = PptxDoc.Shapes(s.Part);
+                var notes = PptxNotes.Text(s.Part);
+                var transition = PptxTransitions.Read(s.Part);
+                return new
                 {
-                    Path = shape.CanonicalPath(s.Index),
-                    Name = shape.Name,
-                    Kind = shape.Kind,
-                    Text = PptxQueryEngine.Snippet(PptxDoc.ShapeText(shape.Element)),
-                }).ToList<object>(),
-                Notes = notes.Length == 0 ? null : PptxQueryEngine.Snippet(notes),
-            };
-        }).ToList<object>(),
-    };
+                    Path = Units.Inv($"/slide[{s.Index}]"),
+                    Index = s.Index,
+                    Section = SectionNameOf(sections, s.Index),
+                    Transition = transition?.Kind,
+                    TransitionDuration = transition?.Duration,
+                    ShapeCount = shapes.Count,
+                    Shapes = shapes.Select(shape => new
+                    {
+                        Path = shape.CanonicalPath(s.Index),
+                        Name = shape.Name,
+                        Kind = shape.Kind,
+                        Text = PptxQueryEngine.Snippet(PptxDoc.ShapeText(shape.Element)),
+                    }).ToList<object>(),
+                    Notes = notes.Length == 0 ? null : PptxQueryEngine.Snippet(notes),
+                };
+            }).ToList<object>(),
+
+            // The same slides grouped under their sections (when the deck has any).
+            Sections = sections.Count == 0
+                ? null
+                : sections.Select(section => (object)new
+                {
+                    Path = Units.Inv($"/section[{section.Index}]"),
+                    Index = section.Index,
+                    section.Name,
+                    Slides = section.Slides
+                        .Where(n => slides.Any(s => s.Index == n))
+                        .Select(n => Units.Inv($"/slide[{n}]"))
+                        .ToList(),
+                }).ToList(),
+        };
+    }
+
+    /// <summary>The name of the section a slide belongs to, or null when it is unsectioned.</summary>
+    private static string? SectionNameOf(List<SectionView> sections, int slideIndex) =>
+        sections.FirstOrDefault(s => s.Slides.Contains(slideIndex))?.Name;
 
     private static object BuildTextView(List<SlideRef> slides) => new
     {
@@ -544,11 +577,24 @@ public sealed partial class PptxHandler : IFormatHandler
     private static object BuildStructure(PresentationPart presentation, List<SlideRef> slides)
     {
         var size = presentation.Presentation?.SlideSize;
+        var cx = size?.Cx?.Value ?? PptxFactory.SlideWidthEmu;
+        var cy = size?.Cy?.Value ?? PptxFactory.SlideHeightEmu;
+        var sections = PptxSections.List(presentation);
         return new
         {
             View = "structure",
-            SlideWidthCm = Units.EmuToCm(size?.Cx?.Value ?? PptxFactory.SlideWidthEmu),
-            SlideHeightCm = Units.EmuToCm(size?.Cy?.Value ?? PptxFactory.SlideHeightEmu),
+            SlideSize = PptxSlideSize.MatchPreset(cx, cy),
+            SlideWidthCm = Units.EmuToCm(cx),
+            SlideHeightCm = Units.EmuToCm(cy),
+            Sections = sections.Count == 0
+                ? null
+                : sections.Select(s => (object)new
+                {
+                    Path = Units.Inv($"/section[{s.Index}]"),
+                    Index = s.Index,
+                    s.Name,
+                    Slides = s.Slides.Select(n => Units.Inv($"/slide[{n}]")).ToList(),
+                }).ToList(),
             Masters = PptxDoc.Masters(presentation).Select(m =>
             {
                 var masterPath = Units.Inv($"/master[{m.Index}]");

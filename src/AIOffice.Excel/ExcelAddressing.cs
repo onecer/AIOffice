@@ -20,6 +20,7 @@ internal enum ExcelTargetKind
     DataValidation,
     Sparkline,
     Comment,
+    Table,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -64,6 +65,9 @@ internal sealed record ExcelTarget
 
     /// <summary>Bare thread GUID when <see cref="Kind"/> is Comment (<c>comment[@id=…]</c>).</summary>
     public string? CommentId { get; init; }
+
+    /// <summary>Table name when <see cref="Kind"/> is Table (<c>table[@name=…]</c>).</summary>
+    public string? TableName { get; init; }
 }
 
 /// <summary>
@@ -91,6 +95,15 @@ internal static partial class ExcelPaths
     /// </summary>
     [GeneratedRegex(@"^(?<sheet>/.+)/(?i:pivot)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
     private static partial Regex PivotByName();
+
+    /// <summary>
+    /// The stable-name table form <c>/Sheet/table[@name=X]</c> (bare or
+    /// <c>'quoted'</c> name). Pre-parsed here, exactly like the pivot form,
+    /// because the shared DocPath grammar has no attribute predicates for names
+    /// with spaces/specials.
+    /// </summary>
+    [GeneratedRegex(@"^(?<sheet>/.+)/(?i:table)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
+    private static partial Regex TableByName();
 
     /// <summary>Quotes a sheet name when it would not survive the path grammar bare.</summary>
     public static string QuoteSheet(string name) =>
@@ -140,6 +153,25 @@ internal static partial class ExcelPaths
                 ? byName.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
                 : byName.Groups["bare"].Value;
             return new ExcelTarget { Kind = ExcelTargetKind.Pivot, Sheet = sheetTarget.Sheet, PivotName = name };
+        }
+
+        // /Sheet/table[@name=X] gets the same id-form peel-off as pivots.
+        var byTable = TableByName().Match(pathText);
+        if (byTable.Success)
+        {
+            var sheetTarget = Resolve(workbook, byTable.Groups["sheet"].Value);
+            if (sheetTarget.Kind != ExcelTargetKind.Sheet)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"table[@name=…] must follow a sheet name: {pathText}",
+                    "Use /SheetName/table[@name=X]; quote names with specials: table[@name='Q3 Sales'].");
+            }
+
+            var name = byTable.Groups["quoted"].Success
+                ? byTable.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
+                : byTable.Groups["bare"].Value;
+            return new ExcelTarget { Kind = ExcelTargetKind.Table, Sheet = sheetTarget.Sheet, TableName = name };
         }
 
         var path = DocPath.Parse(pathText);
@@ -261,6 +293,10 @@ internal static partial class ExcelPaths
     /// <summary>The canonical stable-name pivot path aioffice emits: <c>/Sheet/pivot[@name=X]</c>.</summary>
     public static string PivotPath(IXLWorksheet sheet, string pivotName) =>
         $"{SheetPath(sheet)}/pivot[@name={QuoteSheet(pivotName)}]";
+
+    /// <summary>The canonical stable-name table path aioffice emits: <c>/Sheet/table[@name=X]</c>.</summary>
+    public static string TablePath(IXLWorksheet sheet, string tableName) =>
+        $"{SheetPath(sheet)}/table[@name={QuoteSheet(tableName)}]";
 
     public static string ConditionalFormatPath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/conditionalFormat[{index}]");

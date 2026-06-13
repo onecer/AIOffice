@@ -182,6 +182,44 @@ public sealed class RoundTripTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
     }
 
+    /// <summary>The round-trip law over the M6 surface: master/layout edits, sections, slide size, timeline edits.</summary>
+    [Fact]
+    public void M6Features_ReadSideVerbs_LeaveEveryByteUntouched()
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx", ("title", "Immutable"))));
+        var added = TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("add", "/slide[2]", type: "slide", props: TestEnv.Props(("title", "Second"))),
+            TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("text", "move me"))),
+        ]));
+        var shapePath = added["results"]![1]!["target"]!.GetValue<string>();
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", "/", props: TestEnv.Props(("slideSize", "16:10"))),
+            TestEnv.Op("set", "/master[1]", props: TestEnv.Props(("background", "0F172A"), ("accent1", "38BDF8"))),
+            TestEnv.Op("add", "/master[1]", type: "layout", props: TestEnv.Props(("name", "Custom Layout"))),
+            TestEnv.Op("add", "/", type: "section", props: TestEnv.Props(("name", "Intro"), ("afterSlide", 0))),
+            TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(("effect", "fade"))),
+            TestEnv.Op("add", shapePath, type: "animation", props: TestEnv.Props(("effect", "wipe"))),
+        ]));
+        TestEnv.AssertOk(_handler.Edit(_ws.Ctx("deck.pptx"), [
+            TestEnv.Op("set", "/slide[1]/animation[1]", props: TestEnv.Props(("duration", "0.8s"))),
+            TestEnv.Op("move", "/slide[1]/animation[2]", position: "before /slide[1]/animation[1]"),
+        ]));
+        var before = File.ReadAllBytes(_ws.PathOf("deck.pptx"));
+
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "outline"))));
+        TestEnv.AssertOk(_handler.Read(_ws.Ctx("deck.pptx", ("view", "structure"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/section[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/master[1]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/master[1]/layout[2]"))));
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/animation[1]"))));
+        TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape"))));
+        TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "html"))));
+        TestEnv.AssertOk(_handler.Validate(_ws.Ctx("deck.pptx")));
+
+        Assert.Equal(before, File.ReadAllBytes(_ws.PathOf("deck.pptx")));
+    }
+
     [Fact]
     public void FailedEditBatch_LeavesEveryByteUntouched()
     {

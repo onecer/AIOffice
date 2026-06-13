@@ -36,6 +36,9 @@ returned and the envelope carries a `formula_not_evaluated` warning in
 | height | number | points              |
 | hidden | bool   |                     |
 
+`get` also reports M6 outline state: `outlineLevel` and `collapsed` (see
+**outline grouping** below). Columns are addressed `/Sheet1/col[C]`.
+
 ## sheet (add)
 
 `{op:"add", path:"/'New Sheet'", type:"sheet"}` creates a sheet. Sheet names
@@ -66,10 +69,57 @@ props:{value:"=SUM(SalesData)"}}` evaluates and caches a real value.
 | fitToWidth, fitToHeight | sheet       | print scaling, pages               |
 | printArea               | sheet       | e.g. "A1:F40"                      |
 
-`get /Sheet1` reflects freeze/autoFilter/pageSetup. Streaming (M3): files over
-20 MB (or `stream:true`) answer `read --view stats|text` and cell/range `get`
-via a SAX scan without loading the workbook DOM — reads only; edits still load
-the full workbook.
+`get /Sheet1` reflects freeze/autoFilter/pageSetup. Streaming reads (M3): files
+over 20 MB (or `stream:true`) answer `read --view stats|text` and cell/range
+`get` via a SAX scan without loading the workbook DOM.
+
+## in-place streaming write (M6 flagship)
+
+`edit … stream=true` (or any file over 20 MB) rewrites a LARGE existing
+workbook **in place**, streaming the target sheet part through the SAX writer
+instead of loading the whole DOM — set deep cells / bulk-write ranges in a
+50 MB+ workbook in seconds with bounded memory.
+
+Streamable ops (the whole batch must be streamable, else it falls back to the
+DOM path): `set value` on a cell, `set value` with a formula (`"=…"`, no cached
+value), `set values` (a 2-D bulk write) on a cell/range. Any other prop
+(bold/fill/numberFormat/merge/…) makes the batch non-streamable. The response
+marks `streamed:true`.
+
+    aioffice edit big.xlsx --ops '[{"op":"set","path":"/Sheet1/H200000","props":{"value":"x"}}]' stream=true
+
+## table (M6 Excel Table / ListObject, `/Sheet1/table[@name=Sales]`)
+
+`{op:"add", path:"/Sheet1/A1:D20", type:"table", props:{...}}` turns a range
+(first row = headers) into a structured table.
+
+| prop          | type   | notes                                                  |
+|---------------|--------|--------------------------------------------------------|
+| name          | string | table name (used in the path + structured references)  |
+| style         | string | none · light1-21 · medium1-28 · dark1-11 (e.g. `medium2`), or full `TableStyleMedium2` |
+| headerRow     | bool   | default true                                           |
+| totalsRow     | bool   | show/hide the totals row                               |
+| totals        | object | column → function map, e.g. `{"Amount":"sum"}` (turns the totals row on) |
+| bandedRows / bandedColumns | bool | row/column stripes                       |
+
+Totals functions: sum · average · count · countNumbers · min · max · stdDev ·
+var. Structured references evaluate because the table exists in the model
+before save: `{op:"set", path:"/Sheet1/D1", props:{value:"=SUM(Sales[Amount])"}}`.
+`get /Sheet1/table[@name=Sales]` describes range/style/columns/totals; `remove`
+drops the ListObject but **keeps the cell data**.
+
+## outline grouping (M6)
+
+Group a contiguous row or column span into an outline level. The span is one
+path segment: `row[a]:row[b]` or `col[a]:col[b]`.
+
+    aioffice edit m.xlsx --ops '[{"op":"add","path":"/Sheet1/row[2]:row[6]","type":"group","props":{"collapsed":true}}]'
+    aioffice edit m.xlsx --ops '[{"op":"add","path":"/Sheet1/col[B]:col[E]","type":"group"}]'
+
+`{collapsed:true}` collapses the new group. `remove` over the same span
+ungroups one outline level. Nested groups raise the level. A row/column `get`
+and `read --view structure` report `outlineLevel`/`collapsed`; Excel draws the
+outline symbols on reopen.
 
 ## pivot (M2, `/Pivot/pivot[@name=SalesPivot]`)
 

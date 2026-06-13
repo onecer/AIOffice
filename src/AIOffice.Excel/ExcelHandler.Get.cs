@@ -15,6 +15,15 @@ public sealed partial class ExcelHandler
             "get needs a path.",
             "Pass an address like /Sheet1/A1 or /Sheet1/A1:C10; run 'aioffice query' to discover paths.");
 
+        // "/" (document root) has no workbook-level get surface; address a sheet.
+        if (pathArg == "/")
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "xlsx has no document-root properties to get.",
+                "Address a sheet (/Sheet1), a cell (/Sheet1/A1) or a range; run 'aioffice read --view outline' to list sheets.");
+        }
+
         // Cell/range gets on big files (or with stream=true) are served by the
         // SAX path without loading the workbook DOM. Other targets (sheet,
         // chart, pivot, name…) still need the full model.
@@ -70,6 +79,8 @@ public sealed partial class ExcelHandler
                 ExcelSparklines.Describe(target.Sheet, ExcelSparklines.Find(target), target.SparklineIndex!.Value),
                 MetaFor(file, sw)),
             ExcelTargetKind.Comment => Envelope.Ok(CommentTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.Table => Envelope.Ok(
+                ExcelTables.Describe(target.Sheet, ExcelTables.Find(target)), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -264,6 +275,7 @@ public sealed partial class ExcelHandler
             values,
             height = row.Height,
             hidden = row.IsHidden ? true : (bool?)null,
+            outlineLevel = row.OutlineLevel > 0 ? row.OutlineLevel : (int?)null,
         };
     }
 
@@ -286,6 +298,7 @@ public sealed partial class ExcelHandler
             values,
             width = column.Width,
             hidden = column.IsHidden ? true : (bool?)null,
+            outlineLevel = column.OutlineLevel > 0 ? column.OutlineLevel : (int?)null,
         };
     }
 
