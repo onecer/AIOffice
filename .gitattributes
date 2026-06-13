@@ -1,0 +1,16 @@
+# Normalize line endings on checkout so source and text fixtures are LF
+# everywhere — Windows CI checkouts otherwise convert LF->CRLF and break
+# byte-exact / substring assertions on fixtures and golden files.
+* text=auto eol=lf
+
+# Treat binary Office and image assets as binary (never EOL-normalize).
+*.docx  binary
+*.xlsx  binary
+*.pptx  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.svg   text eol=lf
+*.pdf   binary
+*.snap  binary

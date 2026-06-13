@@ -62,12 +62,16 @@ public sealed class InPlaceStreamingWriteTests : ExcelTestBase
     {
         using var guard = new EnvScope(FileSizeGuard.EnvVar, "100000");
 
-        // A ~50 MB workbook (above the 15 MB in-place streaming-write threshold).
+        // A ~50 MB workbook, comfortably above the 15 MB in-place streaming-write
+        // threshold so size alone activates the streaming path. The compressed size
+        // varies a little by platform/runtime DEFLATE (~49.6 MB on CI x64, ~50+ MB
+        // locally), so the precondition asserts well clear of the 15 MB threshold
+        // rather than an exact round number.
         var streamed = Path.Combine(Dir, "streamed.xlsx");
         BigWorkbookGenerator.Generate(streamed, 400_000);
         Assert.True(
-            new FileInfo(streamed).Length > 50L * 1024 * 1024,
-            $"fixture is {new FileInfo(streamed).Length / (1024.0 * 1024.0):F1} MB; the equality gate needs > 50 MB");
+            new FileInfo(streamed).Length > 40L * 1024 * 1024,
+            $"fixture is {new FileInfo(streamed).Length / (1024.0 * 1024.0):F1} MB; the streaming gate needs > 40 MB (>> the 15 MB activation threshold)");
 
         // The DOM twin: identical source bytes, but edited through the DOM path
         // by forcing stream=false on a copy the size guard would normally stream.

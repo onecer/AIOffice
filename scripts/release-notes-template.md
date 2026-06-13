@@ -7,10 +7,12 @@
 
 ## Highlights in {{tag}}
 
-- **Document-wide find/replace** — `aioffice edit f --find X --replace Y [--regex] [--match-case] [--whole-word]` (and the `office_edit` replace op, scope `"/"`): docx body + headers + footers, every sheet, every slide including notes; matches split across runs are found; on docx `--track` records every replacement as a w:del+w:ins revision pair.
-- **docx structure** — table of contents (`add toc`, read back via `/toc[1]`), text watermarks, endnotes, multi-section documents (`sectionBreak`, per-section page setup).
-- **xlsx at scale** — bulk anchor writes (values + formulas in one op), row/column insert/delete with formula shifting, column width/hidden, legacy cell notes.
-- **pptx motion & data** — entrance/exit/emphasis animations, slide comments, and charts whose embedded workbook makes them **Edit-Data-able in PowerPoint** (plus retrofitting old charts via `embedData:true`).
+The first release since `v0.4.0` — four milestones (M4–M7) of new capability, **1366 passing tests**, **15 MCP tools**.
+
+- **`audit` — a new top-level verb (15th capability).** Accessibility + quality lint across all three formats (`aioffice audit file [--category accessibility|quality] [--fix]`): missing alt-text, heading-level skips, tables/slides without headers, low contrast (WCAG luminance), broken refs (`#REF!`/`#DIV/0!`), broken links, off-canvas shapes, empty placeholders — with `--fix` for safe autofixes. No other office CLI does this.
+- **LaTeX → equations.** A self-built LaTeX→OMML converter (no LaTeX dependency): fractions, roots, sub/superscript, sums/integrals with limits, matrices, Greek, operators. `add type:equation` (inline + display); original LaTeX is archived for faithful read-back; unknown commands degrade gracefully.
+- **Markdown / CSV bridges.** `create report.docx --from notes.md` (headings, lists, GFM tables, links, code) and `read --view markdown`; `create data.xlsx --from data.csv` (RFC-4180) and `read --view csv`.
+- **Document-wide find/replace**, **TOC / watermark / endnotes / multi-section** docx, **editable-data pptx charts** + entrance/exit/emphasis animations, **pivot tables / data validation / threaded comments / Excel Tables**, **in-place streaming writes** for large workbooks, **pptx master/layout editing & sections**, **document properties** (core + custom), **content controls**, **PDF export**, and **cross-document data flow** (`dataFrom: "book.xlsx!Sheet1/A1:B5"`).
 
 ## Install
 

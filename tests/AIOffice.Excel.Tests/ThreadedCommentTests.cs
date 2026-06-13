@@ -148,7 +148,10 @@ public sealed partial class ThreadedCommentTests : ExcelTestBase
         // The shadow mirrors the whole conversation for old Excel.
         using (var workbook = new XLWorkbook(file))
         {
-            var shadow = workbook.Worksheet("Sheet1").Cell("C3").GetComment().Text;
+            // ClosedXML reconstructs multi-line comment text with Environment.NewLine
+            // (CRLF on Windows) when reading back; the part itself stores '\n' (see
+            // ShadowText). Normalize so the substring checks are platform-independent.
+            var shadow = workbook.Worksheet("Sheet1").Cell("C3").GetComment().Text.Replace("\r\n", "\n");
             Assert.Contains("is this right?", shadow, StringComparison.Ordinal);
             Assert.Contains("Reply:\nyes, verified", shadow, StringComparison.Ordinal);
             Assert.Contains("Reply:\nthanks!", shadow, StringComparison.Ordinal);
