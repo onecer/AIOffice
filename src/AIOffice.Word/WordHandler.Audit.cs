@@ -32,8 +32,13 @@ public sealed partial class WordHandler : IAuditor
 
         // Atomic, like Edit: apply to an in-memory copy and write back only on success.
         var originalBytes = File.ReadAllBytes(file);
+
+        // a11y_no_doc_title writes the core Title; migrate any legacy .psmdcp part to
+        // the standard docProps/core.xml first so the fix lands in the conventional part.
+        var workingBytes = MigrateLegacyCorePropertiesBytes(originalBytes, file);
+
         var ms = new MemoryStream();
-        ms.Write(originalBytes);
+        ms.Write(workingBytes);
         ms.Position = 0;
 
         var fixedCount = 0;
@@ -128,7 +133,7 @@ public sealed partial class WordHandler : IAuditor
 
     private static IEnumerable<AuditFinding> AuditNoDocTitle(WordprocessingDocument doc)
     {
-        if (string.IsNullOrWhiteSpace(doc.PackageProperties.Title))
+        if (string.IsNullOrWhiteSpace(ReadCoreTitle(doc)))
         {
             yield return Finding(
                 "a11y_no_doc_title", "warning", "accessibility", path: "/properties",
@@ -446,7 +451,7 @@ public sealed partial class WordHandler : IAuditor
                     return false;
                 }
 
-                doc.PackageProperties.Title = title;
+                WriteCoreField(doc, CoreField.Title, title);
                 return true;
             }
 

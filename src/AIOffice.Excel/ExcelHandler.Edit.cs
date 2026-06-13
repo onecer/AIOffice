@@ -1421,6 +1421,7 @@ public sealed partial class ExcelHandler
             // Evaluation blew up inside save: fall back to a plain save (no cached
             // values at all) rather than failing the edit. Excel computes on open.
             workbook.SaveAs(file);
+            ExcelCoreProperties.NormalizeAfterSave(file); // core props → docProps/core.xml
             return
             [
                 new Warning(
@@ -1429,6 +1430,10 @@ public sealed partial class ExcelHandler
                     "Excel will compute all formulas when the file is opened."),
             ];
         }
+
+        // ClosedXML writes core properties into a non-standard .psmdcp part; move
+        // them to the conventional docProps/core.xml so unzip and Office see them.
+        ExcelCoreProperties.NormalizeAfterSave(file);
 
         StripStaleCachedValues(file, unevaluated);
 

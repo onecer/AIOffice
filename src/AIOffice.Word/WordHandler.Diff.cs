@@ -343,8 +343,8 @@ public sealed partial class WordHandler : IDiffer
     /// <summary>Core document-property changes, reported at /properties with the property name as Detail.</summary>
     private static void DiffProperties(WordprocessingDocument oldDoc, WordprocessingDocument newDoc, List<DiffChange> changes)
     {
-        var oldCore = oldDoc.PackageProperties;
-        var newCore = newDoc.PackageProperties;
+        var oldCore = ReadCoreProps(oldDoc);
+        var newCore = ReadCoreProps(newDoc);
 
         CompareProperty(changes, "title", oldCore.Title, newCore.Title);
         CompareProperty(changes, "author", oldCore.Creator, newCore.Creator);

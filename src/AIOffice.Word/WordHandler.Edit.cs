@@ -54,9 +54,17 @@ public sealed partial class WordHandler
                 "Re-run 'aioffice read' or 'aioffice query' to get fresh paths and the current rev, then retry.");
         }
 
+        // When the batch sets document properties, upgrade any legacy .psmdcp
+        // core-properties part to the standard docProps/core.xml first, so the write
+        // lands in the conventional part instead of stranding values in the old one.
+        // Scoped to property writes so unrelated edits never rewrite the core part.
+        var workingBytes = ops.Any(o => o.Op == "set" && IsPropertiesPath(o.Path))
+            ? MigrateLegacyCorePropertiesBytes(originalBytes, file)
+            : originalBytes;
+
         // Atomic: every op is applied to an in-memory copy; the file is written only when all succeed.
         var ms = new MemoryStream();
-        ms.Write(originalBytes);
+        ms.Write(workingBytes);
         ms.Position = 0;
 
         var summaries = new List<object>(ops.Count);

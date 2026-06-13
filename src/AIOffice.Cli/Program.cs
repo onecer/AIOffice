@@ -100,7 +100,8 @@ internal static class Program
     }
 
     private static bool NeedsWorkspace(string? verb) =>
-        verb is "doctor" or "snapshot" || (verb is not null && FileVerbNames.Contains(verb, StringComparer.Ordinal));
+        verb is "doctor" or "snapshot" or "convert" ||
+        (verb is not null && FileVerbNames.Contains(verb, StringComparer.Ordinal));
 
     /// <summary>The positional that names the file this command touches, if any.</summary>
     private static string? MetaFileFor(ParsedArgs parsed) => parsed.Verb switch
@@ -165,6 +166,7 @@ internal static class Program
         var fileVerbs = new FileVerbs(workspace, HandlerDiscovery.Discover(snapshots), snapshots);
         return verb switch
         {
+            "convert" => fileVerbs.Convert(parsed),
             "create" => fileVerbs.Create(parsed),
             "read" => fileVerbs.Read(parsed),
             "query" => fileVerbs.Query(parsed),

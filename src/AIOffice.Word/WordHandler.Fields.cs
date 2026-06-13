@@ -109,7 +109,7 @@ public sealed partial class WordHandler
                 }
 
             case "docTitle":
-                var title = doc.PackageProperties.Title;
+                var title = ReadCoreTitle(doc);
                 return title is { Length: > 0 } ? title : "(document title)";
 
             default: // pageNumber, numPages: 1 is the safest placeholder

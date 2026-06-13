@@ -107,6 +107,14 @@ public sealed partial class ExcelHandler
             }
         }
 
+        // The bare-save SAX branch (no formulas) skips SaveWithCachedValues, so
+        // its core properties are still in the legacy .psmdcp part; normalize so
+        // every csv-imported workbook lands them at docProps/core.xml too.
+        if (streamed)
+        {
+            ExcelCoreProperties.NormalizeAfterSave(file);
+        }
+
         return Envelope.Ok(
             new
             {

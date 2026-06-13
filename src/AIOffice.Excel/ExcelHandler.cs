@@ -87,6 +87,7 @@ public sealed partial class ExcelHandler : IFormatHandler
         }
 
         workbook.SaveAs(file);
+        ExcelCoreProperties.NormalizeAfterSave(file); // core props land at docProps/core.xml, not the legacy .psmdcp part
         return Envelope.Ok(
             new { file, kind = "xlsx", sheets = new[] { title } },
             MetaFor(file, sw));

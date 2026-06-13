@@ -248,6 +248,15 @@ public sealed class FileVerbs
         return AIOffice.Mcp.DiffVerb.RunTwoFile(handler, ctx, baseline, otherFile!, view);
     }
 
+    public Envelope Convert(ParsedArgs args)
+    {
+        var src = RequirePositional(args, 0, "src",
+            "convert needs a source and a destination: aioffice convert <src> <dest>.");
+        var dest = RequirePositional(args, 1, "dest",
+            "convert needs a destination too: aioffice convert report.docx deck.pptx.");
+        return AIOffice.Mcp.ConvertVerb.Run(_workspace, _handlers.Registry, _handlers.ByKind, src, dest);
+    }
+
     public Envelope Template(ParsedArgs args)
     {
         var file = RequireFile(args, mustExist: true);

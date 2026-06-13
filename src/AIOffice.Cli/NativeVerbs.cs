@@ -15,7 +15,7 @@ public sealed class NativeVerbs
     private static readonly string[] HelpTopics =
     [
         "addressing", "selectors", "properties-docx", "properties-xlsx", "properties-pptx", "errors",
-        "equations", "rtl", "sections", "audit", "diff",
+        "equations", "rtl", "sections", "audit", "diff", "convert",
     ];
 
     private readonly Workspace _workspace;
@@ -149,8 +149,32 @@ public sealed class NativeVerbs
                 directory = Path.GetDirectoryName(_snapshots.RingDirectory(Path.Combine(_workspace.Root, "example.docx"))),
                 capacityPerFile = SnapshotStore.Capacity,
             },
+            capabilities = Capabilities(),
         });
     }
+
+    /// <summary>
+    /// A one-call introspection of the whole aioffice surface so an agent can
+    /// learn what it can do without probing each verb: the verb + MCP tool
+    /// counts, the formats it handles, the convert source/target matrix, the
+    /// render targets and the audit categories.
+    /// </summary>
+    private static object Capabilities() => new
+    {
+        verbs = CommandSurface.VerbNames.Count,
+        verbNames = CommandSurface.VerbNames,
+        mcpTools = AIOffice.Mcp.ToolCatalog.Names.Count,
+        mcpToolNames = AIOffice.Mcp.ToolCatalog.Names,
+        formats = new[] { "docx", "xlsx", "pptx" },
+        convert = new
+        {
+            sources = AIOffice.Mcp.ConvertVerb.SupportedSources,
+            contentTargets = AIOffice.Mcp.ConvertVerb.SupportedContentTargets,
+            renderTargets = AIOffice.Mcp.ConvertVerb.SupportedRenderTargets,
+        },
+        renderTargets = new[] { "html", "svg", "text", "png", "pdf" },
+        auditCategories = AuditOptions.Categories,
+    };
 
     /// <summary>Status of the preview lockfile directory (where running servers advertise their port).</summary>
     private static object PreviewLockDirInfo()

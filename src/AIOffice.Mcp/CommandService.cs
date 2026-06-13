@@ -259,6 +259,40 @@ public sealed class CommandService
             () => handler.Template(Context(resolved, a)));
     });
 
+    public Envelope Convert(JsonObject args) => Run(args, a =>
+    {
+        var src = RequireString(a, "src", "Pass the source document, e.g. report.docx.");
+        var dest = RequireString(a, "dest", "Pass the destination, e.g. deck.pptx (a fresh file is created).");
+        return ConvertVerb.Run(Workspace, Handlers, ConvertibleHandlersByKind(), src, dest);
+    });
+
+    /// <summary>
+    /// Resolves the office handlers by kind for the neutral-model bridge, reading
+    /// them out of the extension registry. Kinds whose package has not shipped are
+    /// simply absent — <see cref="ConvertVerb"/> reports an honest
+    /// <c>unsupported_feature</c> if one is needed.
+    /// </summary>
+    private IReadOnlyDictionary<DocumentKind, IFormatHandler> ConvertibleHandlersByKind()
+    {
+        var byKind = new Dictionary<DocumentKind, IFormatHandler>();
+        foreach (var (ext, kind) in new[]
+        {
+            (".docx", DocumentKind.Docx), (".xlsx", DocumentKind.Xlsx), (".pptx", DocumentKind.Pptx),
+        })
+        {
+            try
+            {
+                byKind[kind] = Handlers.Resolve(ext);
+            }
+            catch (AiofficeException)
+            {
+                // Package not present; leave the kind unmapped.
+            }
+        }
+
+        return byKind;
+    }
+
     // ── format-agnostic verbs ───────────────────────────────────────────────
 
     public Envelope Snapshot(JsonObject args) => Run(args, a =>
@@ -363,6 +397,21 @@ public sealed class CommandService
             },
             workspace = Workspace.Root,
             snapshotStore = new { path = _snapshotDir, count, bytes },
+            capabilities = new
+            {
+                mcpTools = ToolCatalog.Names.Count,
+                mcpToolNames = ToolCatalog.Names,
+                verbs = SurfaceSchema.VerbNames.Count,
+                formats = new[] { "docx", "xlsx", "pptx" },
+                convert = new
+                {
+                    sources = ConvertVerb.SupportedSources,
+                    contentTargets = ConvertVerb.SupportedContentTargets,
+                    renderTargets = ConvertVerb.SupportedRenderTargets,
+                },
+                renderTargets = new[] { "html", "svg", "text", "png", "pdf" },
+                auditCategories = AuditOptions.Categories,
+            },
             checks,
         });
     });

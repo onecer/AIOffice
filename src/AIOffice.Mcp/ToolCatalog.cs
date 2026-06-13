@@ -4,9 +4,9 @@ using ModelContextProtocol.Protocol;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The 16 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
-/// M8 added <c>office_diff</c> (the 16th tool); M7 added <c>office_audit</c>;
-/// M1 added <c>preview_open</c> / <c>preview_selection</c>.
+/// The 17 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// M9 added <c>office_convert</c> (the 17th tool); M8 added <c>office_diff</c>;
+/// M7 added <c>office_audit</c>; M1 added <c>preview_open</c> / <c>preview_selection</c>.
 /// <para>
 /// <c>preview_open</c> / <c>preview_selection</c> were reserved through v0 and
 /// register here in M1, inside the token budget set aside for them in
@@ -20,7 +20,7 @@ namespace AIOffice.Mcp;
 /// </summary>
 public static class ToolCatalog
 {
-    /// <summary>All tools, in spec order (16 as of M8).</summary>
+    /// <summary>All tools, in spec order (17 as of M9).</summary>
     public static IReadOnlyList<Tool> Tools { get; } =
     [
         Make(
@@ -143,6 +143,15 @@ public static class ToolCatalog
              "required":["file","data"]}
             """),
         Make(
+            "office_convert",
+            "Convert a document between formats: docx/xlsx/pptx <-> each other (content-neutral model), docx<->md, xlsx<->csv, any->pdf/png/svg/html. Lossy across formats; dropped content is named in data.dropped + a convert_lossy warning. dest is created fresh.",
+            """
+            {"type":"object","properties":{
+              "src":{"type":"string","description":"Source document (.docx/.xlsx/.pptx/.md/.csv); opened read-only"},
+              "dest":{"type":"string","description":"Destination, created fresh: .docx/.xlsx/.pptx/.md/.csv (content) or .pdf/.png/.svg/.html/.txt (render). Same ext as src -> invalid_args (use office_edit); unknown ext -> unsupported_feature"}},
+             "required":["src","dest"]}
+            """),
+        Make(
             "file_snapshot",
             "List or restore the automatic pre-edit snapshots (ring of 20 per file).",
             """
@@ -170,7 +179,7 @@ public static class ToolCatalog
             "Machine-readable JSON of the whole command surface: every verb, its args, error codes and examples.",
             """
             {"type":"object","properties":{
-              "verb":{"type":"string","description":"Omit -> full surface. One of: create|read|query|get|edit|render|validate|template|snapshot|doctor|schema|help|preview|mcp"}}}
+              "verb":{"type":"string","description":"Omit -> full surface. One of: create|read|query|get|edit|render|validate|audit|diff|template|convert|snapshot|doctor|schema|help|preview|mcp"}}}
             """),
         Make(
             "preview_open",

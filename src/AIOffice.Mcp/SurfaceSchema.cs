@@ -5,9 +5,9 @@ namespace AIOffice.Mcp;
 /// <summary>
 /// The machine-readable description of the whole aioffice command surface —
 /// the single source behind both <c>office_schema</c> and <c>aioffice schema</c>.
-/// 16 verbs, mirroring the 16 MCP tools (the <c>preview</c> verb carries
+/// 17 verbs, mirroring the 17 MCP tools (the <c>preview</c> verb carries
 /// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
-/// verb itself. M8 added <c>diff</c> / <c>office_diff</c>.
+/// verb itself. M9 added <c>convert</c> / <c>office_convert</c>; M8 added <c>diff</c>.
 /// </summary>
 public static class SurfaceSchema
 {
@@ -124,6 +124,14 @@ public static class SurfaceSchema
              ("aioffice diff report.docx --snapshot 1", "what changed since the last edit (snapshot 1 of the file's own ring)"),
              ("aioffice diff metrics.xlsx baseline.xlsx --view summary", "just the counts + a terse path+kind line per change")]),
 
+        Verb("convert", "Convert a document between formats: docx/xlsx/pptx ↔ each other (content-neutral model), docx↔md, xlsx↔csv, any→pdf/png/svg/html. Inherently lossy — dropped content is named in data.dropped + a convert_lossy warning.", "office_convert",
+            [("src", "source document (.docx/.xlsx/.pptx/.md/.csv); opened read-only"),
+             ("dest", "destination, created fresh: .docx/.xlsx/.pptx/.md/.csv (content) or .pdf/.png/.svg/.html/.txt (render). Same ext as src → invalid_args (use edit); unknown ext → unsupported_feature naming the targets")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.UnsupportedFeature, ErrorCodes.FileNotFound, ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt],
+            [("aioffice convert report.docx deck.pptx", "a slide per heading with its bullets; note the convert_lossy warning"),
+             ("aioffice convert data.xlsx data.docx", "a table per sheet with cached values"),
+             ("aioffice convert report.docx report.pdf", "paged PDF via a local Chromium")]),
+
         Verb("snapshot", "List or restore the automatic pre-edit snapshot ring (20 per file).", "file_snapshot",
             [("action", "list | restore (default list)"),
              ("file", "document path"),
@@ -155,13 +163,13 @@ public static class SurfaceSchema
             [("aioffice preview open report.docx", "blocks; click elements in the browser, then read them"),
              ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit")]),
 
-        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (16 tools).", null,
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (17 tools).", null,
             [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
             [ErrorCodes.InternalError],
             [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),
     ];
 
-    /// <summary>The 16 verb names, in surface order.</summary>
+    /// <summary>The 17 verb names, in surface order.</summary>
     public static IReadOnlyList<string> VerbNames { get; } = [.. Verbs.Select(v => v.Name)];
 
     /// <summary>

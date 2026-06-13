@@ -25,19 +25,19 @@ public sealed partial class WordHandler
     /// <summary>get /properties / read --view properties: {core:{…}, custom:{…}}.</summary>
     private static Dictionary<string, object?> PropertiesShape(WordprocessingDocument doc)
     {
-        var core = doc.PackageProperties;
+        var core = ReadCoreProps(doc);
         var coreShape = new Dictionary<string, object?>
         {
-            ["title"] = NullIfEmpty(core.Title),
-            ["subject"] = NullIfEmpty(core.Subject),
-            ["author"] = NullIfEmpty(core.Creator),
-            ["keywords"] = NullIfEmpty(core.Keywords),
-            ["category"] = NullIfEmpty(core.Category),
-            ["comments"] = NullIfEmpty(core.Description),
-            ["lastModifiedBy"] = NullIfEmpty(core.LastModifiedBy),
+            ["title"] = core.Title,
+            ["subject"] = core.Subject,
+            ["author"] = core.Creator,
+            ["keywords"] = core.Keywords,
+            ["category"] = core.Category,
+            ["comments"] = core.Description,
+            ["lastModifiedBy"] = core.LastModifiedBy,
             ["created"] = FormatDate(core.Created),
             ["modified"] = FormatDate(core.Modified),
-            ["revision"] = NullIfEmpty(core.Revision),
+            ["revision"] = core.Revision,
         };
 
         var custom = new Dictionary<string, object?>();
@@ -153,40 +153,39 @@ public sealed partial class WordHandler
 
     private static void SetCoreProperty(WordprocessingDocument doc, string name, JsonNode? node)
     {
-        var core = doc.PackageProperties;
         var value = node is null ? string.Empty : NodeToString(node);
 
         switch (name)
         {
             case "title":
-                core.Title = value;
+                WriteCoreField(doc, CoreField.Title, value);
                 break;
             case "subject":
-                core.Subject = value;
+                WriteCoreField(doc, CoreField.Subject, value);
                 break;
             case "author" or "creator":
-                core.Creator = value;
+                WriteCoreField(doc, CoreField.Creator, value);
                 break;
             case "keywords":
-                core.Keywords = value;
+                WriteCoreField(doc, CoreField.Keywords, value);
                 break;
             case "category":
-                core.Category = value;
+                WriteCoreField(doc, CoreField.Category, value);
                 break;
             case "comments":
-                core.Description = value;
+                WriteCoreField(doc, CoreField.Description, value);
                 break;
             case "lastModifiedBy":
-                core.LastModifiedBy = value;
+                WriteCoreField(doc, CoreField.LastModifiedBy, value);
                 break;
             case "revision":
-                core.Revision = value;
+                WriteCoreField(doc, CoreField.Revision, value);
                 break;
             case "created":
-                core.Created = ParsePropertyDate(name, value);
+                WriteCoreField(doc, CoreField.Created, FormatCoreDate(ParsePropertyDate(name, value)));
                 break;
             case "modified":
-                core.Modified = ParsePropertyDate(name, value);
+                WriteCoreField(doc, CoreField.Modified, FormatCoreDate(ParsePropertyDate(name, value)));
                 break;
             default:
                 throw new AiofficeException(

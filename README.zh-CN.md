@@ -16,7 +16,8 @@ aioffice create report.docx --title "Q3 报告"
 aioffice edit   report.docx --set '/body/p[1]' text="营收增长 12%"
 aioffice read   report.docx --view outline
 aioffice diff   report.docx old.docx        # 语义对比：一份已排序的变更清单
-aioffice mcp    # 同样的 16 项能力，以 MCP 工具形式走 stdio
+aioffice convert report.docx deck.pptx      # 跨格式：每个标题一页幻灯片，要点作为正文
+aioffice mcp    # 同样的 17 项能力，以 MCP 工具形式走 stdio
 ```
 
 ## 眼见为实
@@ -166,7 +167,7 @@ PNG 入库 `assets/demo/` 前仅做了等比缩放（≤900 px 宽，sips/Pillow
 | **人在环中的实时预览** | `preview open` 在 localhost 起一个实时视图；渲染节点带 `data-aio-path`，人类**点一下**，`preview selection` 就把规范路径还给 agent |
 | **默认沙箱** | 所有文件参数在工作区白名单内解析（`--workspace`，含符号链接逃逸检查）；越界即 `sandbox_denied`，退出码 4 |
 | **可自省的命令面** | `aioffice schema` 返回整个命令面的机器可读 JSON——agent 读规范，而不是幻觉规范 |
-| **CLI = MCP 同一套心智模型** | 16 个 CLI 动词与 16 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
+| **CLI = MCP 同一套心智模型** | 17 个 CLI 动词与 17 个 MCP 工具 1:1 对应，学一次，shell 和 stdio 两种接入 |
 
 ### "会教学的错误" —— 真实输出
 
@@ -370,10 +371,37 @@ $ aioffice diff metrics.xlsx baseline.xlsx --view summary
 
 变更清单始终按 `(path, kind)` 排序，因此同样两份文档在每个平台、每次运行 diff 结果完全一致。跨格式基线（`.docx` 对 `.xlsx`）返回 `invalid_args` 并指明不匹配。走 MCP 即 `office_diff {file, other? | snapshot?, view?}`——第 16 个工具。
 
+## 格式互转
+
+`convert` 把文档从一种格式转到另一种，按 `(源, 目标)` 扩展名对路由：同族文本桥复用既有代码（`docx↔md`、`xlsx↔csv`），跨格式对经一份**内容中立模型**（标题、段落、带格式 run、列表、表格、图片），`任意 → pdf/png/svg/html` 走 render 层。转换跨格式本质有损——目标无法承载的内容（动画、图表、SmartArt、精确样式、公式取值、markdown 不支持的颜色）honest 列入 `data.dropped` 并汇成单条 `convert_lossy` 警告。
+
+```bash
+# docx → pptx —— 每个标题一页，标题下的要点成为该页正文，表格成为原生 pptx 表格
+$ aioffice convert report.docx deck.pptx
+# → {"from":"docx","to":"pptx","blocksWritten":10,"dropped":[],"written":".../deck.pptx"}
+
+# xlsx → docx —— 每个工作表一个标题 + 表格；公式以缓存的显示值跨格式
+$ aioffice convert data.xlsx data.docx
+# → docx 里 Sheet1/Totals 表格保存显示值（例如 =SUM(...) → 30）
+
+# 任意格式 → markdown —— 经中立模型，故 xlsx 与 pptx 也能转 md
+$ aioffice convert report.docx report.md      # 标题、要点、管道表格
+$ aioffice convert report.md roundtrip.docx   # 再转回去 —— 大纲 round-trip
+
+# 任意格式 → PDF —— 经系统浏览器分页打印
+$ aioffice convert report.docx report.pdf
+
+# 护栏
+$ aioffice convert a.docx b.docx              # invalid_args：「use edit」（同格式）
+$ aioffice convert a.docx a.xyz               # unsupported_feature，列出受支持目标
+```
+
+从含图表的工作簿转出的 deck 会**报告损失**而非隐藏：`meta.warnings: [{ "code": "convert_lossy", "message": "Some content did not survive the conversion: charts (…the chart is not converted)." }]`。走 MCP 即 `office_convert {src, dest}`——第 17 个工具。完整 `(src → dest)` 矩阵见 `aioffice help convert`。
+
 ## MCP（接入 Claude 等 agent）
 
 ```bash
-aioffice mcp     # stdio MCP 服务器 —— 16 个工具，与 CLI 动词 1:1
+aioffice mcp     # stdio MCP 服务器 —— 17 个工具，与 CLI 动词 1:1
 ```
 
 Claude Desktop / Claude Code 配置：
@@ -399,10 +427,11 @@ Claude Desktop / Claude Code 配置：
 | `office_render` | render | `preview_open` | preview open |
 | `office_validate` | validate | `preview_selection` | preview selection |
 | `office_audit` | audit | `office_diff` | diff |
+| `office_convert` | convert | | |
 
-`preview_open` / `preview_selection`（实时预览 + 人工点选回读）已于 M1（v0.2.0）注册；`office_audit`（无障碍 + 质量 lint）是第 15 个工具，M7（v0.8.0）加入；`office_diff`（语义对比）是第 16 个工具，M8（v0.9.0）加入。全部工具 schema 的 token 预算上限 3,500——由测试强制，加入 `office_diff` 后仍在预算内。
+`preview_open` / `preview_selection`（实时预览 + 人工点选回读）已于 M1（v0.2.0）注册；`office_audit`（无障碍 + 质量 lint）是第 15 个工具，M7（v0.8.0）加入；`office_diff`（语义对比）是第 16 个工具，M8（v0.9.0）加入；`office_convert`（跨格式互转）是第 17 个工具，M9（v0.10.0）加入。全部工具 schema 的 token 预算上限 3,500——由测试强制，加入 `office_convert` 后仍在预算内。
 
-## 命令面（v0.9.0）
+## 命令面（v0.10.0）
 
 | 动词 | 说明 |
 |---|---|
@@ -415,12 +444,13 @@ Claude Desktop / Claude Code 配置：
 | `validate <file>` | OOXML 校验 + lint，带修复建议 |
 | `audit <file> [--category accessibility\|quality\|all] [--severity error\|warning\|info] [--fix]` | **无障碍 + 质量 lint**——findings 是数据（`ok:true`，exit 0）；`--fix` 只做安全自动修复（alt 文本、表头行、文档/幻灯片标题、孤儿书签）并返回 `{fixed, remaining}` |
 | `diff <file> [<other>] [--snapshot N] [--view summary\|detailed]` | **语义对比**——对比同格式文件*或*文档自身的某个快照，返回已排序、确定性的 `{changes:[added/removed/modified/moved], summary, baseline}`（变更是数据，exit 0）；`--view summary` 裁剪为计数 + path+kind |
+| `convert <src> <dest>` | **跨格式互转**——docx/xlsx/pptx ↔ 互转（内容中立模型）、docx↔md、xlsx↔csv、任意→pdf/png/svg/html。跨格式有损：`data.dropped` + `convert_lossy` 警告列出未存活内容；同扩展名 → `invalid_args`，未知目标 → `unsupported_feature` |
 | `template <file> --data <json\|@file>` | `{{key}}` 模板合并（跨 run 拆分安全） |
 | `snapshot <list\|restore> <file> [n]` | 编辑前快照环（20 份） |
 | `preview <open\|selection\|close> <file> [--port N]` | localhost 实时预览；人点选 → `selection` 返回规范路径 |
 | `doctor` | 环境 / 运行时 / 处理器诊断 |
 | `schema [verb]` | 整个命令面的机器可读 JSON |
-| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** · **diff** |
+| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** · **diff** · **convert** |
 | `mcp` | stdio MCP 服务器 |
 | `version` | 版本信息 |
 
@@ -429,7 +459,7 @@ Claude Desktop / Claude Code 配置：
 
 **寻址语法**（1 起始）：`/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/`（pptx 幻灯片尺寸 + 分节）· **M7**：`/properties`（文档 core + custom 属性）· `/sdt[@tag=status]`（docx 内容控件）· `/style[@name=Currency-Red]`（xlsx 命名单元格样式）· **M8**：`/caption[@label=Figure][1]`（docx 题注）· `/Sheet1/slicer[1]`（xlsx 切片器）。
 
-## 当前能力（M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8）
+## 当前能力（M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9）
 
 | 格式 | M0（v0.1.0） | + M1（v0.2.0） | + M2（v0.3.0） | + M3（v0.4.0） | + M4（v0.5.0） | + M5（v0.6.0） | + M6（v0.7.0） | + M7（v0.8.0） | + M8（v0.9.0） |
 |---|---|---|---|---|---|---|---|---|---|
@@ -449,14 +479,22 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 - 跨格式 run 拆分安全（docx/pptx 中被格式切碎的文本照样命中，重写保留首个受影响 run 的格式）；regex 为 .NET 语法 + 2 秒匹配预算（超时 → 类型化 `invalid_args`）；零命中是 `ok:true` + `find_no_match` warning——绝不是错误。
 - CLI 糖：`aioffice edit report.docx --find 2025 --replace 2026 [--regex] [--match-case] [--whole-word]`；MCP `office_edit` 行为一致。docx 配 `--track` 时每处替换记成 `w:del`+`w:ins` 修订对，可后续 accept/reject。
 
+M9 跨格式新增 —— **三格式共用一个 `convert` 动词**（参见上文 [格式互转](#格式互转)）：
+
+- **内容中立模型** —— 跨格式对（`docx↔pptx`、`docx↔xlsx`、`pptx↔xlsx`，以及任意格式 `↔ md`）经一份共享的 `NeutralDoc` 模型（标题、带格式 run、列表、表格、图片）：源 handler 的 `ExportNeutral` 投影、目标 handler 的 `ImportNeutral` 从中重建新文件。`INeutralConvertible` 接口位于 Core（与 M7 `IAuditor`、M8 `IDiffer` 同模式），三 handler 各实现。
+- **复用文本桥** —— `docx↔md`（M5 markdown 桥）与 `xlsx↔csv`（M5 csv 桥）经同一 `convert` 入口；`xlsx→md` / `pptx→md` 走中立模型 + 命令层 `NeutralMarkdown` 序列化器。
+- **render 目标** —— `任意 → pdf/png/svg/html/txt` 打开源文件，路由到 render 层。
+- **诚实有损** —— 转换是内容转移、跨格式本质有损：`data.dropped` 与单条 `convert_lossy` 警告列出未存活内容（动画、图表、SmartArt、精确样式、公式取值、markdown 颜色）。目标**新建**（覆盖 → `convert_overwrite`）；同扩展名 → `invalid_args`，未知目标 → `unsupported_feature`。
+- **自省** —— `doctor`（与 `office_status`）新增 `capabilities` 块：动词数、MCP 工具数、支持格式、convert 源/目标、render 目标、audit 类别，一次调用即可让 agent 学到全表面。
+
 长期能力对齐台账（对标业界最强 CLI）见 [docs/PARITY.md](docs/PARITY.md)——能力对齐是北极星，命令面刻意自研。
 
 ## 架构
 
 ```
                  ┌─────────────────────────────────────────────┐
-   agent/human → │  src/AIOffice.Cli   （aioffice，16 动词）    │
-   MCP client  → │  src/AIOffice.Mcp   （stdio，16 工具，1:1）  │
+   agent/human → │  src/AIOffice.Cli   （aioffice，17 动词）    │
+   MCP client  → │  src/AIOffice.Mcp   （stdio，17 工具，1:1）  │
                  ├─────────────────────────────────────────────┤
                  │  src/AIOffice.Render （经浏览器出 png/pdf）  │
                  │  src/AIOffice.Preview  （实时点选预览）      │
@@ -480,7 +518,7 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 
 本项目的起点之一，是研究过一个**零自动化测试**却日更发布的优秀 office CLI——AIOffice 选择完全相反的立场：
 
-- **1449 个测试**横跨 7 个项目（Core 124 · Word 448 · Excel 363 · Pptx 396 · MCP 63 · Preview 24 · Render 31），每次提交全绿。
+- **1501 个测试**横跨 7 个项目（Core 124 · Word 459 · Excel 374 · Pptx 410 · MCP 79 · Preview 24 · Render 31），每次提交全绿。
 - **往返定律**：打开 → 不编辑直接保存，所有 zip part 必须字节级一致；已文档化的例外被逐一精确断言。
 - **独立裁判**：每个变更测试后 OpenXmlValidator 必须报 0 错误——工具不给自己的作业打分。
 - **CI 矩阵**：macOS 14 + Windows，warnings-as-errors 构建、金样脚本、单文件发布并冒烟。
@@ -498,7 +536,16 @@ M4 跨格式新增 —— **三格式共用一份查找替换契约**：
 - **M6（已交付，v0.7.0）** —— **深水区攻坚**：docx **公式**（手写 LaTeX → Office Math 转换器，行内/显示、矩阵、部分降级警告、原始 LaTeX 存档可忠实回读）/**右到左与双向**（段/run/表）/**多栏分节**（含分栏符）· xlsx **就地流式写入**（经 SAX writer 原地改写 50 MB+ 大工作簿）/**Excel 表**（ListObject + 汇总 + 结构化引用）/**大纲分组**（行/列跨段）· pptx **母版与版式编辑**（背景、主题强调色、克隆版式）/**幻灯片分节**/**幻灯片尺寸与宽高比**/**动画时间轴重排** · 新增寻址形式 `/`（演示文稿根）、`/body/p[i]/omath[j]`、`/section[i]`、`row[a]:row[b]` 跨段、可编辑 `/master[1]/layout[i]`。
 - **M7（已交付，v0.8.0）** —— **交付前先审计**：三格式共享 `audit` 动词 + `office_audit` MCP 工具（第 15 个工具）—— 无障碍 + 质量 lint，findings 是数据（`ok:true`，exit 0），`--fix` 只做安全自动修复（占位 alt 文本、表头行、文档/幻灯片标题、孤儿书签）并返回 `{fixed, remaining}` · docx **文档属性**（core + 类型化 custom）/**内容控件**（text/dropdown/date/checkbox，`read --view fields`）/图片 alt 文本 · xlsx **命名单元格样式**（`add type:cellStyle`，`read --view styles`）/文档属性/公式错误 + 合并数据单元格 + alt 文本审计 · pptx alt-text/标题/阅读顺序审计 + 显式 `altText`/`altTitle`/文档属性 · 新增寻址形式 `/properties`、`/sdt[@tag=X]`、`/style[@name=X]`；`office_read` view 枚举新增 `properties`/`fields`/`styles`。
 - **M8（已交付，v0.9.0）** —— **对比与审阅**：三格式共享 `diff` 动词 + `office_diff` MCP 工具（第 16 个工具）—— 语义对比文档与基线（另一同格式文件 `other` *或*文档自身的某个编辑前快照 `--snapshot N`），返回已排序、确定性的 `{changes:[added/removed/modified/moved], summary, baseline}`（变更是数据，exit 0；LCS/内容哈希区分 moved；`--view summary` 裁剪为 path+kind）· docx **题注**（Figure/Table/Equation + SEQ）/**交叉引用**（REF/PAGEREF，`labelAndNumber`/`numberOnly`/`text`/`page`）· xlsx **切片器**（表列 / 透视字段，原始 OpenXml 自研）· pptx **形状超链接/动作**（url / `#slide:N` 跳转 / `#first…#end` 放映动作 / `linkText`）· 新增寻址形式 `/caption[@label=Figure][i]`、`/Sheet1/slicer[i]`。
-- **M9（种子）** —— pptx/xlsx 公式（幻灯片与单元格内的 OMML，复用 `AIOffice.Word.Equations` 转换器）· 跨格式转换（docx ↔ pptx）· OLE 对象 · 插件机制（外部格式 handler）· 1.0 加固 · 动画预设++（完整强调/退出全集、效果链、motion path）· 现代 xlsx 批注打磨 · xlsx/pptx RTL。
+- **M9（已交付，v0.10.0 —— pre-1.0 capstone）** —— **跨格式互转**：三格式共享 `convert` 动词 + `office_convert` MCP 工具（第 17 个工具）—— docx/xlsx/pptx ↔ 互转经一份内容中立模型（`NeutralDoc` + `INeutralConvertible`，与 `IAuditor`/`IDiffer` 同一 Core 接口模式），`docx↔md` 与 `xlsx↔csv` 走 M5 文本桥，任意格式 ↔ markdown 走 `NeutralMarkdown` 序列化器，`任意 → pdf/png/svg/html` 走 render 层；跨格式本质有损，故 `data.dropped` + `convert_lossy` 警告列出未存活内容 · **1.0 加固**：每个 CLI 动词都有 help 主题并出现在 `schema`（新增 `convert` help 主题含 `(src→dest)` 矩阵），`doctor`/`office_status` 新增 `capabilities` 自省块（动词与工具数、格式、convert 源/目标、render 目标、audit 类别）。
+
+### 迈向 1.0
+
+capstone 已交付；1.0 API 稳定性承诺之前的余项：
+
+- **pptx/xlsx 公式** —— 幻灯片与单元格内的 OMML，经共享的 `AIOffice.Word.Equations` 转换器（目前公式仅 docx）。
+- **OLE 对象** —— 跨格式内嵌表格/对象。
+- **插件机制** —— 运行时发现的外部格式 handler，第三方无需 fork 即可加格式。
+- **API 稳定性承诺** —— 在版本化兼容承诺下冻结 envelope、寻址语法与动词表面。
 
 ## 设计声明
 

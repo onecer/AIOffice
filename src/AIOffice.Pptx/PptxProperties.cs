@@ -10,11 +10,19 @@ namespace AIOffice.Pptx;
 
 /// <summary>
 /// Document properties live on a virtual <c>/properties</c> node: the core
-/// properties (title/subject/author…) come from the package's
-/// CoreFilePropertiesPart, and typed custom properties (string/number/bool/date)
-/// from the CustomFilePropertiesPart. <c>get /properties</c> and
-/// <c>read --view properties</c> both project this node; <c>set /properties</c>
-/// writes it. The wire shape matches docx/xlsx exactly.
+/// properties (title/subject/author…) come from the standard
+/// <c>docProps/core.xml</c> part (the SDK's CoreFilePropertiesPart, read/written
+/// via <see cref="PptxCoreProps"/>), and typed custom properties
+/// (string/number/bool/date) from the CustomFilePropertiesPart. <c>get
+/// /properties</c> and <c>read --view properties</c> both project this node;
+/// <c>set /properties</c> writes it. The wire shape matches docx/xlsx exactly.
+///
+/// Storage is always the conventional <c>docProps/core.xml</c> part, never
+/// <c>System.IO.Packaging</c> <c>PackageProperties</c> (which writes a
+/// non-standard <c>.psmdcp</c> part that Office and a plain <c>unzip</c> cannot
+/// see). Old files that only carry the legacy <c>PackageProperties</c> still read
+/// through the migrate-on-read fallback below, and the next write standardises
+/// them onto <c>docProps/core.xml</c>.
 /// </summary>
 internal static class PptxProperties
 {
@@ -29,15 +37,15 @@ internal static class PptxProperties
     /// <summary>get /properties / read --view properties: {path, core:{…}, custom:{…}}.</summary>
     public static object Shape(PresentationDocument doc)
     {
-        var core = doc.PackageProperties;
+        var core = ReadCore(doc);
         var coreShape = new Dictionary<string, object?>
         {
             ["title"] = NullIfEmpty(core.Title),
             ["subject"] = NullIfEmpty(core.Subject),
-            ["author"] = NullIfEmpty(core.Creator),
+            ["author"] = NullIfEmpty(core.Author),
             ["keywords"] = NullIfEmpty(core.Keywords),
             ["category"] = NullIfEmpty(core.Category),
-            ["comments"] = NullIfEmpty(core.Description),
+            ["comments"] = NullIfEmpty(core.Comments),
             ["lastModifiedBy"] = NullIfEmpty(core.LastModifiedBy),
             ["created"] = FormatDate(core.Created),
             ["modified"] = FormatDate(core.Modified),
@@ -65,6 +73,37 @@ internal static class PptxProperties
 
     private static string? FormatDate(DateTime? value) =>
         value is { } d ? d.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture) : null;
+
+    /// <summary>
+    /// The current core properties: the standard <c>docProps/core.xml</c> part
+    /// when present, else a migrate-on-read projection of the legacy
+    /// <c>PackageProperties</c> so files written by older builds still read. Any
+    /// subsequent <c>set</c> writes the result back to <c>docProps/core.xml</c>.
+    /// </summary>
+    private static PptxCoreProps.CoreModel ReadCore(PresentationDocument doc)
+    {
+        if (PptxCoreProps.Read(doc) is { } standard)
+        {
+            return standard;
+        }
+
+        // Legacy fallback: a file whose only metadata is the non-standard
+        // PackageProperties part. Read it so existing decks keep their title.
+        var legacy = doc.PackageProperties;
+        return new PptxCoreProps.CoreModel
+        {
+            Title = NullIfEmpty(legacy.Title),
+            Subject = NullIfEmpty(legacy.Subject),
+            Author = NullIfEmpty(legacy.Creator),
+            Keywords = NullIfEmpty(legacy.Keywords),
+            Category = NullIfEmpty(legacy.Category),
+            Comments = NullIfEmpty(legacy.Description),
+            LastModifiedBy = NullIfEmpty(legacy.LastModifiedBy),
+            Revision = NullIfEmpty(legacy.Revision),
+            Created = legacy.Created,
+            Modified = legacy.Modified,
+        };
+    }
 
     private static IEnumerable<CustomDocumentProperty> CustomProperties(PresentationDocument doc) =>
         doc.CustomFilePropertiesPart?.Properties?.Elements<CustomDocumentProperty>() ?? [];
@@ -116,6 +155,11 @@ internal static class PptxProperties
         var setCustom = new List<string>();
         JsonObject? customObject = null;
 
+        // Core props mutate a single in-memory model (seeded from the standard
+        // part, or migrated from the legacy one) so unchanged fields survive and
+        // the result lands in docProps/core.xml in one write below.
+        var core = ReadCore(doc);
+
         foreach (var (name, node) in props)
         {
             if (name == "custom")
@@ -127,8 +171,15 @@ internal static class PptxProperties
                 continue;
             }
 
-            SetCoreProperty(doc, name, node);
+            SetCoreProperty(core, name, node);
             setCore.Add(name);
+        }
+
+        if (setCore.Count > 0)
+        {
+            // Always write the standard docProps/core.xml part; this also
+            // migrates a legacy-only file onto the conventional storage.
+            PptxCoreProps.Write(doc, core);
         }
 
         if (customObject is not null)
@@ -151,9 +202,9 @@ internal static class PptxProperties
         return "/properties";
     }
 
-    private static void SetCoreProperty(PresentationDocument doc, string name, JsonNode? node)
+    /// <summary>Applies one named core property to the model (empty string clears it).</summary>
+    private static void SetCoreProperty(PptxCoreProps.CoreModel core, string name, JsonNode? node)
     {
-        var core = doc.PackageProperties;
         var value = node is null ? string.Empty : NodeToString(node);
 
         switch (name)
@@ -165,7 +216,7 @@ internal static class PptxProperties
                 core.Subject = value;
                 break;
             case "author" or "creator":
-                core.Creator = value;
+                core.Author = value;
                 break;
             case "keywords":
                 core.Keywords = value;
@@ -174,7 +225,7 @@ internal static class PptxProperties
                 core.Category = value;
                 break;
             case "comments":
-                core.Description = value;
+                core.Comments = value;
                 break;
             case "lastModifiedBy":
                 core.LastModifiedBy = value;

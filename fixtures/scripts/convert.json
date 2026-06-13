@@ -1,0 +1,46 @@
+{
+  "name": "convert",
+  "description": "Golden path for the M9 convert verb: build a docx with headings, bullets and a table, then convert it cross-format (docx->pptx via the neutral model, docx->md via the markdown bridge, md->docx round-trip), and exercise the same-extension and unknown-target guard rails.",
+  "steps": [
+    {
+      "argv": ["create", "golden-out/conv-report.docx", "--title", "Convert Golden"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": [
+        "edit", "golden-out/conv-report.docx",
+        "--ops",
+        "[{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"props\":{\"text\":\"Sales\",\"style\":\"Heading1\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"props\":{\"text\":\"North up 12%\",\"list\":\"bullet\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"props\":{\"text\":\"Costs\",\"style\":\"Heading1\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"p\",\"props\":{\"text\":\"Rent steady\",\"list\":\"bullet\"}},{\"op\":\"add\",\"path\":\"/body\",\"type\":\"table\",\"props\":{\"rows\":2,\"columns\":2}},{\"op\":\"set\",\"path\":\"/body/table[1]/tr[1]/tc[1]\",\"props\":{\"text\":\"Region\"}},{\"op\":\"set\",\"path\":\"/body/table[1]/tr[1]/tc[2]\",\"props\":{\"text\":\"Total\"}},{\"op\":\"set\",\"path\":\"/body/table[1]/tr[2]/tc[1]\",\"props\":{\"text\":\"North\"}},{\"op\":\"set\",\"path\":\"/body/table[1]/tr[2]/tc[2]\",\"props\":{\"text\":\"100\"}}]"
+      ],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["convert", "golden-out/conv-report.docx", "golden-out/conv-deck.pptx"],
+      "expect": { "ok": true, "dataContains": "pptx" }
+    },
+    {
+      "argv": ["validate", "golden-out/conv-deck.pptx"],
+      "expect": { "ok": true }
+    },
+    {
+      "argv": ["convert", "golden-out/conv-report.docx", "golden-out/conv-report.md"],
+      "expect": { "ok": true, "dataContains": "md" }
+    },
+    {
+      "argv": ["convert", "golden-out/conv-report.md", "golden-out/conv-roundtrip.docx"],
+      "expect": { "ok": true, "dataContains": "docx" }
+    },
+    {
+      "argv": ["read", "golden-out/conv-roundtrip.docx", "--view", "text"],
+      "expect": { "ok": true, "dataContains": "North up 12%" }
+    },
+    {
+      "argv": ["convert", "golden-out/conv-report.docx", "golden-out/conv-same.docx"],
+      "expect": { "ok": false, "errorCode": "invalid_args" }
+    },
+    {
+      "argv": ["convert", "golden-out/conv-report.docx", "golden-out/conv-report.xyz"],
+      "expect": { "ok": false, "errorCode": "unsupported_feature" }
+    }
+  ]
+}

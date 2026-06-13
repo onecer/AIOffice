@@ -50,7 +50,7 @@ OfficeCLI 的**能力清单**是我们长期对齐的北极星（台账见 `docs
 
 ## 2. 命令面规范（v0）
 
-CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15）。
+CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。
 
 ### 2.1 全局约定
 
@@ -373,7 +373,7 @@ pptx   :  /slide[2]
 
 任何退出码下 stdout 都有完整 envelope——退出码给 shell 分流，envelope 给 AI 决策。
 
-### 2.7 MCP 工具面（M8 起 16 个，stdio，官方 C# SDK）
+### 2.7 MCP 工具面（M9 起 17 个，stdio，官方 C# SDK）
 
 CLI 动词与 MCP 工具 1:1，同一条内部执行路径（杜绝"CLI 能做、MCP 不能做"）：
 

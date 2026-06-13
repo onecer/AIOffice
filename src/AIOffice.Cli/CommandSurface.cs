@@ -164,6 +164,16 @@ public static class CommandSurface
             ],
             "office_diff"),
 
+        new("convert",
+            "Convert a document between formats: docx/xlsx/pptx ↔ each other (via a content-neutral model), docx↔md, xlsx↔csv, any→pdf/png/svg/html. Inherently lossy — what didn't survive is named in a convert_lossy warning.",
+            "aioffice convert <src> <dest> [--json]",
+            [
+                new("src", true, "Source document (.docx/.xlsx/.pptx/.md/.csv); read-only."),
+                new("dest", true, "Destination, created fresh: .docx/.xlsx/.pptx/.md/.csv (content) or .pdf/.png/.svg/.html/.txt (render). Same extension as src is invalid_args (use edit)."),
+            ],
+            [],
+            "office_convert"),
+
         new("snapshot",
             "List or restore the automatic pre-edit snapshot ring (keeps the last 20 per file).",
             "aioffice snapshot <list|restore> <file> [n]",
@@ -207,7 +217,7 @@ public static class CommandSurface
             "preview_open"),
 
         new("mcp",
-            "Run the stdio MCP server exposing the same 15 tools as the CLI.",
+            "Run the stdio MCP server exposing the same 17 tools as the CLI.",
             "aioffice mcp",
             [],
             [],

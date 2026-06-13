@@ -16,7 +16,8 @@ aioffice create report.docx --title "Q3 Report"
 aioffice edit   report.docx --set '/body/p[1]' text="Revenue grew 12%"
 aioffice read   report.docx --view outline
 aioffice diff   report.docx old.docx        # semantic compare: a sorted change list
-aioffice mcp    # the same 16 capabilities, as MCP tools over stdio
+aioffice convert report.docx deck.pptx      # cross-format: a slide per heading, bullets below
+aioffice mcp    # the same 17 capabilities, as MCP tools over stdio
 ```
 
 ## Show, don't tell
@@ -166,7 +167,7 @@ Most office libraries are built for programmers. Most office CLIs are built for 
 | **Human-in-the-loop preview** | `preview open` serves a live view on localhost; rendered nodes carry `data-aio-path`, so a human **click** comes back to the agent as a canonical path via `preview selection`. |
 | **Sandboxed by default** | All file args resolve inside a workspace allowlist (`--workspace`, symlink-escape checked). Out-of-bounds access → `sandbox_denied`, exit 4. |
 | **Introspectable surface** | `aioffice schema` returns the entire command surface as machine-readable JSON. Agents read the spec instead of hallucinating it. |
-| **CLI = MCP, one mental model** | 16 CLI verbs and 16 MCP tools map 1:1. Learn it once, drive it from a shell or over stdio. |
+| **CLI = MCP, one mental model** | 17 CLI verbs and 17 MCP tools map 1:1. Learn it once, drive it from a shell or over stdio. |
 
 ### Errors that teach — real output
 
@@ -387,10 +388,47 @@ diff identically on every platform and every run. A cross-format baseline (a
 `.docx` against a `.xlsx`) is `invalid_args` naming the mismatch. Over MCP it is
 `office_diff {file, other? | snapshot?, view?}` — the 16th tool.
 
+## Convert between formats
+
+`convert` moves a document from one format to another. It routes by the
+`(source, destination)` extension pair: same-family text bridges reuse the
+existing code (`docx↔md`, `xlsx↔csv`), cross-format pairs go through a
+**content-neutral model** (headings, paragraphs, formatted runs, lists, tables,
+images), and `any → pdf/png/svg/html` routes to the render layer. Conversion is
+inherently lossy across formats — whatever the target cannot represent is named
+honestly in `data.dropped` and a single `convert_lossy` warning.
+
+```bash
+# docx → pptx — a slide per heading, its bullets as the slide body, tables as native pptx tables
+$ aioffice convert report.docx deck.pptx
+# → {"from":"docx","to":"pptx","blocksWritten":10,"dropped":[],"written":".../deck.pptx"}
+
+# xlsx → docx — a heading + table per sheet; formulas cross as their cached values
+$ aioffice convert data.xlsx data.docx
+# → a docx whose Sheet1/Totals tables hold the display values (e.g. =SUM(...) → 30)
+
+# anything → markdown — via the neutral model, so xlsx and pptx reach md too
+$ aioffice convert report.docx report.md      # headings, bullets and a pipe table
+$ aioffice convert report.md roundtrip.docx   # and back — the outline round-trips
+
+# anything → PDF — paged print via the system browser
+$ aioffice convert report.docx report.pdf
+
+# guardrails
+$ aioffice convert a.docx b.docx              # invalid_args: "use edit" (same format)
+$ aioffice convert a.docx a.xyz               # unsupported_feature, naming the targets
+```
+
+A deck converted from a chart-bearing workbook reports the loss instead of hiding
+it: `meta.warnings: [{ "code": "convert_lossy", "message": "Some content did not
+survive the conversion: charts (…the chart is not converted)." }]`. Over MCP it is
+`office_convert {src, dest}` — the 17th tool. See `aioffice help convert` for the
+full `(src → dest)` matrix.
+
 ## MCP (for Claude and other agents)
 
 ```bash
-aioffice mcp     # stdio MCP server — 16 tools, 1:1 with the CLI verbs
+aioffice mcp     # stdio MCP server — 17 tools, 1:1 with the CLI verbs
 ```
 
 Claude Desktop / Claude Code config:
@@ -416,10 +454,11 @@ Claude Desktop / Claude Code config:
 | `office_render` | render | `preview_open` | preview open |
 | `office_validate` | validate | `preview_selection` | preview selection |
 | `office_audit` | audit | `office_diff` | diff |
+| `office_convert` | convert | | |
 
-`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0); `office_diff` (semantic compare) is the 16th tool, added in M8 (v0.9.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test, and still under it with `office_diff` added.
+`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0); `office_diff` (semantic compare) is the 16th tool, added in M8 (v0.9.0); `office_convert` (cross-format conversion) is the 17th tool, added in M9 (v0.10.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test, and still under it with `office_convert` added.
 
-## Command surface (v0.9.0)
+## Command surface (v0.10.0)
 
 | Verb | Summary |
 |---|---|
@@ -432,12 +471,13 @@ Claude Desktop / Claude Code config:
 | `validate <file>` | OOXML validation + lint with fix suggestions |
 | `audit <file> [--category accessibility\|quality\|all] [--severity error\|warning\|info] [--fix]` | **Accessibility + quality lint** — findings are data (`ok:true`, exit 0); `--fix` applies only safe autofixes (alt text, table header, doc/slide title, orphan bookmark) and reports `{fixed, remaining}` |
 | `diff <file> [<other>] [--snapshot N] [--view summary\|detailed]` | **Semantic compare** against a same-format file *or* a snapshot of the file itself — a sorted, deterministic `{changes:[added/removed/modified/moved], summary, baseline}` (changes are data, exit 0); `--view summary` trims to counts + path+kind |
+| `convert <src> <dest>` | **Cross-format conversion** — docx/xlsx/pptx ↔ each other (content-neutral model), docx↔md, xlsx↔csv, any→pdf/png/svg/html. Lossy across formats: `data.dropped` + a `convert_lossy` warning name what didn't survive; same ext → `invalid_args`, unknown target → `unsupported_feature` |
 | `template <file> --data <json\|@file>` | `{{key}}` merge across docx/xlsx/pptx (split-run safe) |
 | `snapshot <list\|restore> <file> [n]` | Pre-edit snapshot ring (20) |
 | `preview <open\|selection\|close> <file> [--port N]` | Live localhost preview; human clicks → canonical paths via `selection` |
 | `doctor` | Environment / runtime / handler diagnosis |
 | `schema [verb]` | Machine-readable JSON of the whole surface |
-| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** · **diff** |
+| `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** · **rtl** · **sections** · **audit** · **diff** · **convert** |
 | `mcp` | stdio MCP server |
 | `version` | Version info |
 
@@ -446,7 +486,7 @@ Exit codes: `0` ok · `2` user error · `3` internal/format error · `4` sandbox
 
 **Addressing** (1-based): `/body/p[3]` · `/body/table[1]/tr[2]/tc[1]` · `/body/p[3]/omath[1]` · `/Sheet1/A1:C10` · `/Sheet1/table[@name=Sales]` · `/Sheet1/row[2]:row[6]` · `/'Q3 Data'/B2` · `/slide[2]/shape[3]` · `/section[1]` · `/master[1]/layout[2]` · `/` (pptx slide size + sections) · **M7**: `/properties` (core + custom doc properties) · `/sdt[@tag=status]` (docx content controls) · `/style[@name=Currency-Red]` (xlsx named cell styles) · **M8**: `/caption[@label=Figure][1]` (docx captions) · `/Sheet1/slicer[1]` (xlsx slicers).
 
-## What works today (M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8)
+## What works today (M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9)
 
 | Format | M0 (v0.1.0) | + M1 (v0.2.0) | + M2 (v0.3.0) | + M3 (v0.4.0) | + M4 (v0.5.0) | + M5 (v0.6.0) | + M6 (v0.7.0) | + M7 (v0.8.0) | + M8 (v0.9.0) |
 |---|---|---|---|---|---|---|---|---|---|
@@ -466,14 +506,22 @@ Cross-format in M4 — **one find/replace contract for all three formats**:
 - Matches split across formatting runs are found (docx/pptx); the rewritten text keeps the first affected run's formatting. Regex is .NET syntax with a 2 s match budget (timeout → typed `invalid_args`). Zero hits is `ok:true` plus a `find_no_match` warning — never an error.
 - CLI sugar: `aioffice edit report.docx --find 2025 --replace 2026 [--regex] [--match-case] [--whole-word]`; identical over MCP `office_edit`. On docx, `--track` records every replacement as a `w:del`+`w:ins` revision pair for later accept/reject.
 
+Cross-format in M9 — **one `convert` verb for all format transfers** (see [Convert between formats](#convert-between-formats) above):
+
+- **Content-neutral model** — cross-format pairs (`docx↔pptx`, `docx↔xlsx`, `pptx↔xlsx`, and any format `↔ md`) go through a shared `NeutralDoc` model (headings, formatted runs, lists, tables, images): the source handler's `ExportNeutral` projects to it, the destination handler's `ImportNeutral` rebuilds a fresh file from it. The `INeutralConvertible` interface lives in Core (the same pattern as M7 `IAuditor` and M8 `IDiffer`); each of the three handlers implements it.
+- **Text bridges reused** — `docx↔md` (the M5 markdown bridge) and `xlsx↔csv` (the M5 csv bridge) are reached through the same `convert` entrypoint, while `xlsx→md` / `pptx→md` ride the neutral model + a command-layer `NeutralMarkdown` serializer.
+- **Render targets** — `any → pdf/png/svg/html/txt` opens the source and routes to the render layer.
+- **Honest lossiness** — conversion is content-transfer and inherently lossy: `data.dropped` and a single `convert_lossy` warning name what didn't survive (animations, charts, SmartArt, exact styling, formulas-as-values, markdown colors). The destination is created fresh (overwrite → `convert_overwrite`); same-extension is `invalid_args`, an unknown target is `unsupported_feature`.
+- **Introspection** — `doctor` (and `office_status`) now carry a `capabilities` block: verb count, MCP tool count, supported formats, convert sources/targets, render targets and audit categories, so an agent can learn the whole surface in one call.
+
 The long-term capability ledger (vs. the strongest CLI in the field) lives in [docs/PARITY.md](docs/PARITY.md) — capability parity is the north star; the command surface is deliberately our own.
 
 ## Architecture
 
 ```
                  ┌─────────────────────────────────────────────┐
-   agent/human → │  src/AIOffice.Cli   (aioffice, 16 verbs)    │
-   MCP client  → │  src/AIOffice.Mcp   (stdio, 16 tools, 1:1)  │
+   agent/human → │  src/AIOffice.Cli   (aioffice, 17 verbs)    │
+   MCP client  → │  src/AIOffice.Mcp   (stdio, 17 tools, 1:1)  │
                  ├─────────────────────────────────────────────┤
                  │  src/AIOffice.Render  (png/pdf via browser) │
                  │  src/AIOffice.Preview  (live click-select)  │
@@ -497,7 +545,7 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
 
 Born from studying an excellent office CLI that ships **zero automated tests** — AIOffice takes the opposite stance:
 
-- **1449 tests** across 7 projects (Core 124 · Word 448 · Excel 363 · Pptx 396 · MCP 63 · Preview 24 · Render 31), green on every commit.
+- **1501 tests** across 7 projects (Core 124 · Word 459 · Excel 374 · Pptx 410 · MCP 79 · Preview 24 · Render 31), green on every commit.
 - **Round-trip law**: open → save with no edits must leave every zip part byte-identical; documented exceptions are asserted exactly.
 - **Independent oracle**: OpenXmlValidator must report 0 errors after every mutating test — the tool never grades its own homework.
 - **CI matrix**: macOS 14 + Windows, builds with warnings-as-errors, runs golden scripts, publishes and smokes the single-file binary.
@@ -515,7 +563,16 @@ Born from studying an excellent office CLI that ships **zero automated tests** �
 - **M6 (shipped, v0.7.0)** — the **deep-water pass**: docx **equations** (a hand-rolled LaTeX → Office Math converter, inline/display, matrices, partial-degrade warnings, LaTeX stored for faithful read-back) / **right-to-left & bidi** (paragraph/run/table) / **multi-column sections** (+ column breaks) · xlsx **in-place streaming writes** (rewrite a 50 MB+ workbook through the SAX writer) / **Excel Tables** (ListObjects + totals + structured references) / **outline grouping** (row/col spans) · pptx **master & layout editing** (backgrounds, theme accents, cloned layouts) / **slide sections** / **slide size & aspect ratio** / **animation timeline reorder** · new addressing forms `/` (presentation root), `/body/p[i]/omath[j]`, `/section[i]`, `row[a]:row[b]` spans, editable `/master[1]/layout[i]`.
 - **M7 (shipped, v0.8.0)** — **audit before you ship**: a shared `audit` verb + `office_audit` MCP tool (the 15th tool) across all three formats — accessibility + quality lint where findings are *data* (`ok:true`, exit 0), with safe-only `--fix` (placeholder alt text, table header rows, doc/slide titles, orphan bookmarks) reporting `{fixed, remaining}` · docx **document properties** (core + typed custom) / **content controls** (text/dropdown/date/checkbox, `read --view fields`) / image alt text · xlsx **named cell styles** (`add type:cellStyle`, `read --view styles`) / document properties / formula-error + merged-data-cell + alt-text audit · pptx alt-text/title/reading-order audit + explicit `altText`/`altTitle` / document properties · new addressing forms `/properties`, `/sdt[@tag=X]`, `/style[@name=X]`; `office_read` view enum gains `properties`/`fields`/`styles`.
 - **M8 (shipped, v0.9.0)** — **diff & review**: a shared `diff` verb + `office_diff` MCP tool (the 16th tool) across all three formats — semantic compare against another same-format file *or* one of the document's own pre-edit snapshots, returning a sorted, deterministic `{changes:[added/removed/modified/moved], summary, baseline}` (changes are *data*, exit 0; LCS/content-hash distinguishes moves; `--view summary` trims to path+kind) · docx **captions** (Figure/Table/Equation + SEQ) / **cross-references** (REF/PAGEREF, `labelAndNumber`/`numberOnly`/`text`/`page`) · xlsx **slicers** (table-column / pivot-field, authored on raw OpenXml) · pptx **shape hyperlinks / actions** (url / `#slide:N` jump / `#first…#end` show actions / `linkText`) · new addressing forms `/caption[@label=Figure][i]`, `/Sheet1/slicer[i]`.
-- **M9 (seeds)** — pptx/xlsx equations (OMML in slides and cells, reusing the `AIOffice.Word.Equations` converter) · cross-format convert (docx ↔ pptx) · OLE objects · plugin mechanism (external format handlers) · 1.0 hardening · animation presets++ (full emphasis/exit set, effect chains, motion paths) · modern xlsx comment polish · xlsx/pptx RTL.
+- **M9 (shipped, v0.10.0 — the pre-1.0 capstone)** — **cross-format conversion**: a shared `convert` verb + `office_convert` MCP tool (the 17th tool) — docx/xlsx/pptx ↔ each other through a content-neutral model (`NeutralDoc` + `INeutralConvertible`, the same Core-interface pattern as `IAuditor`/`IDiffer`), `docx↔md` and `xlsx↔csv` via the M5 text bridges, any format ↔ markdown via a `NeutralMarkdown` serializer, and `any → pdf/png/svg/html` via the render layer; lossy by nature, so `data.dropped` + a `convert_lossy` warning name what didn't survive · **1.0 hardening**: every CLI verb has a help topic and appears in `schema` (new `convert` help topic with the `(src→dest)` matrix), and `doctor`/`office_status` gain a `capabilities` introspection block (verb + tool counts, formats, convert sources/targets, render targets, audit categories).
+
+### Toward 1.0
+
+The capstone shipped; what remains before a 1.0 API-stability commitment:
+
+- **pptx/xlsx equations** — OMML in slides and cells, through the shared `AIOffice.Word.Equations` converter (today equations are docx-only).
+- **OLE objects** — embedded spreadsheets/objects across formats.
+- **Plugin mechanism** — external format handlers discovered at runtime, so third parties can add formats without forking.
+- **API-stability commitment** — freeze the envelope, addressing grammar and verb surface under a versioned compatibility promise.
 
 ## Design statement
 

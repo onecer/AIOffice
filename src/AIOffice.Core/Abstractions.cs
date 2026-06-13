@@ -365,6 +365,56 @@ public interface IDiffer
     DiffResult Diff(CommandContext ctx, string baselineFile);
 }
 
+/// <summary>The kinds of block a <see cref="NeutralDoc"/> carries.</summary>
+public enum NeutralBlockKind { Heading, Paragraph, ListItem, Table, Image }
+
+/// <summary>One inline run of text inside a heading/paragraph/list item, with the formatting a neutral model preserves.</summary>
+public sealed record NeutralRun(string Text, bool Bold = false, bool Italic = false, bool Underline = false, string? Color = null, string? Href = null);
+
+/// <summary>
+/// One block in the format-neutral document model (M9). The model is the lingua
+/// franca <c>convert</c> uses to transfer content between docx/xlsx/pptx: rich
+/// enough to carry headings, paragraphs, lists, tables and images, deliberately
+/// lossy about everything format-specific (charts, animations, formulas, exact
+/// styling) — what a target cannot represent is named in <see cref="ImportResult.Dropped"/>.
+/// </summary>
+public sealed record NeutralBlock(
+    NeutralBlockKind Kind,
+    int Level = 0,                                              // Heading level 1-6, or ListItem indent 0-8
+    bool Ordered = false,                                       // ListItem: numbered vs bullet
+    IReadOnlyList<NeutralRun>? Runs = null,                     // Heading/Paragraph/ListItem inline content
+    IReadOnlyList<IReadOnlyList<string>>? Rows = null,          // Table cell text grid
+    bool HeaderRow = false,                                     // Table: first row is a header
+    string? Source = null,                                      // Image: workspace-relative path
+    string? Alt = null);                                        // Image: alt text
+
+/// <summary>A whole document reduced to the neutral model: an optional title and an ordered block list.</summary>
+public sealed record NeutralDoc(string? Title, IReadOnlyList<NeutralBlock> Blocks);
+
+/// <summary>
+/// The outcome of importing a <see cref="NeutralDoc"/> into a freshly-created
+/// file: how many blocks landed, and an honest list of <see cref="Dropped"/>
+/// feature notes (what the target format could not represent) for
+/// <c>convert</c> to surface as <c>convert_lossy</c> warnings.
+/// </summary>
+public sealed record ImportResult(int BlocksWritten, IReadOnlyList<string> Dropped);
+
+/// <summary>
+/// The M9 conversion surface: a handler can project its own file to the
+/// format-neutral model and absorb a neutral model into a freshly-created file
+/// of its kind. Conversion is content-transfer and inherently lossy across
+/// formats; <see cref="ImportResult.Dropped"/> names what did not survive.
+/// NOTE: this is AIOffice's own interface, NOT <see cref="System.IConvertible"/>.
+/// </summary>
+public interface INeutralConvertible
+{
+    /// <summary>Reads <c>ctx.File</c> and projects it to the format-neutral model.</summary>
+    NeutralDoc ExportNeutral(CommandContext ctx);
+
+    /// <summary>Writes <paramref name="doc"/> INTO <c>ctx.File</c> (a freshly created, empty file of this kind).</summary>
+    ImportResult ImportNeutral(CommandContext ctx, NeutralDoc doc);
+}
+
 /// <summary>Maps file extensions to format handlers.</summary>
 public sealed class HandlerRegistry
 {

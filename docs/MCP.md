@@ -1,6 +1,6 @@
 # AIOffice MCP Server 规格（`aioffice mcp`）
 
-> 状态：M8 规格（v0.9.0）：**工具数 15 → 16**——新增 `office_diff`（语义对比文档与基线——另一同格式文件 `other` 或文档自身快照 `snapshot:N`，返回已排序、确定性的 added/removed/modified/moved 变更清单，变更是数据，`view:summary|detailed`），以及 `office_edit` 的 docx `add type:caption`（题注，Figure/Table/Equation + SEQ）/`add type:crossRef`（交叉引用 REF/PAGEREF）、xlsx `add type:slicer`（表列 / 透视字段切片器）、pptx shape `set {hyperlink}`（外链 url / `#slide:N` 跳转 / `#first…#end` 放映动作）/`{linkText}`；新寻址 `/caption[@label=Figure][i]`、`/Sheet1/slicer[i]`；加入 office_diff 后 schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M7（v0.8.0）：**工具数 14 → 15**——新增 `office_audit`（无障碍 + 质量 lint，findings 是数据，`--fix` 仅安全自动修复），以及 `office_read` 的 `properties`/`fields`/`styles` 视图、`office_edit` 的 `set /properties`（文档属性 core + 类型化 custom）、`add type:contentControl`（docx 内容控件）、`add type:cellStyle`（xlsx 命名单元格样式）、shape `altText`/`altTitle`（pptx）；新寻址 `/properties`、`/sdt[@tag=X]`、`/style[@name=X]`。此前 M6（v0.7.0）：工具数维持 14，深水区只扩 `office_edit` 的 add type 词表与寻址（`equation`/`columnBreak`/`section`/`layout`/`group`/`table`，`/`、`/body/p[i]/omath[j]`、`row[a]:row[b]`、可编辑 `/master[1]/layout[i]`）；M5：`office_create` 的 `from` + `office_read` 的 `markdown`/`csv` 视图；M2：`track`/`author` + accept/reject op + revisions/comments/styles 视图 + `file_too_large` 错误码。
+> 状态：M9 规格（v0.10.0，pre-1.0 capstone）：**工具数 16 → 17**——新增 `office_convert`（跨格式互转 `{src, dest}`：docx/xlsx/pptx ↔ 互转经内容中立模型 `INeutralConvertible`，docx↔md / xlsx↔csv 复用文本桥，任意↔md 经命令层 `NeutralMarkdown` 序列化器，any→pdf/png/svg/html/txt 经 render 层；跨格式有损，丢失项汇入 `data.dropped` + 单条 `convert_lossy` 警告；目标新建，同扩展名 → `invalid_args`，未知目标 → `unsupported_feature`），以及 `office_status` 的 `capabilities` 自省块（动词与工具数、格式、convert 源/目标、render 目标、audit 类别）；加入 office_convert 后 schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M8 规格（v0.9.0）：**工具数 15 → 16**——新增 `office_diff`（语义对比文档与基线——另一同格式文件 `other` 或文档自身快照 `snapshot:N`，返回已排序、确定性的 added/removed/modified/moved 变更清单，变更是数据，`view:summary|detailed`），以及 `office_edit` 的 docx `add type:caption`（题注，Figure/Table/Equation + SEQ）/`add type:crossRef`（交叉引用 REF/PAGEREF）、xlsx `add type:slicer`（表列 / 透视字段切片器）、pptx shape `set {hyperlink}`（外链 url / `#slide:N` 跳转 / `#first…#end` 放映动作）/`{linkText}`；新寻址 `/caption[@label=Figure][i]`、`/Sheet1/slicer[i]`；加入 office_diff 后 schema 仍在 ≤ 3500 token 预算内（§2.1）。此前 M7（v0.8.0）：**工具数 14 → 15**——新增 `office_audit`（无障碍 + 质量 lint，findings 是数据，`--fix` 仅安全自动修复），以及 `office_read` 的 `properties`/`fields`/`styles` 视图、`office_edit` 的 `set /properties`（文档属性 core + 类型化 custom）、`add type:contentControl`（docx 内容控件）、`add type:cellStyle`（xlsx 命名单元格样式）、shape `altText`/`altTitle`（pptx）；新寻址 `/properties`、`/sdt[@tag=X]`、`/style[@name=X]`。此前 M6（v0.7.0）：工具数维持 14，深水区只扩 `office_edit` 的 add type 词表与寻址（`equation`/`columnBreak`/`section`/`layout`/`group`/`table`，`/`、`/body/p[i]/omath[j]`、`row[a]:row[b]`、可编辑 `/master[1]/layout[i]`）；M5：`office_create` 的 `from` + `office_read` 的 `markdown`/`csv` 视图；M2：`track`/`author` + accept/reject op + revisions/comments/styles 视图 + `file_too_large` 错误码。
 > 实现位于 `src/AIOffice.Mcp/`，基于官方 C# MCP SDK（NuGet `ModelContextProtocol`），stdio 传输，100% 自研——OOXML 读写由 `DocumentFormat.OpenXml` / `ClosedXML` 完成，**无外部引擎、无网络、无二进制下载**。
 > MCP 工具与 CLI 动词 1:1 镜像同一内部命令层（`AIOffice.Core`，one source of truth）：MCP 工具 = 参数校验 → 内部命令 → JSON envelope。一个心智模型，两个入口。
 > 说明文字为中文，所有 schema / 字段名 / 错误码为英文。
@@ -17,7 +17,7 @@ aioffice mcp [--workspace <dir>]
 
 - stdio MCP server；`--workspace`（或环境变量 `AIOFFICE_WORKSPACE`，默认 cwd）定义沙箱根。
 - 所有 `file` / `output` 参数在每次调用时做 realpath + symlink 逃逸检查，越界即 `sandbox_denied`。
-- 16 个工具：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_audit` `office_diff` `office_template` `file_snapshot` `office_status` `office_help` `office_schema` `preview_open` `preview_selection`（`office_diff` M8 加入，见 §1.7b；`office_audit` M7 加入，见 §1.7a；preview 二件套 M1 转正注册，见 §1.13）。
+- 17 个工具：`office_create` `office_read` `office_query` `office_get` `office_edit` `office_render` `office_validate` `office_audit` `office_diff` `office_template` `office_convert` `file_snapshot` `office_status` `office_help` `office_schema` `preview_open` `preview_selection`（`office_convert` M9 加入，见 §1.7c；`office_diff` M8 加入，见 §1.7b；`office_audit` M7 加入，见 §1.7a；preview 二件套 M1 转正注册，见 §1.13）。
 
 ### 0.2 统一返回 envelope
 
@@ -505,6 +505,45 @@ aioffice mcp [--workspace <dir>]
 
 ---
 
+### 1.7c `office_convert`（M9）
+
+**用途**：把文档从一种格式**互转**到另一种。按 (源扩展名, 目标扩展名) 对路由：同族文本桥 `docx↔md`（markdown 桥）/ `xlsx↔csv`（csv 桥）复用既有代码；跨格式对经一份**内容中立模型**（`INeutralConvertible`：源 handler `ExportNeutral` → 目标 handler `ImportNeutral`）覆盖 `docx↔pptx`/`docx↔xlsx`/`pptx↔xlsx`/`任意↔md`（md 经命令层 `NeutralMarkdown` 序列化器，故任意 office 格式可转 md）；`any → pdf/png/svg/html/txt` 经 render 层。`src` 只读；`dest` **新建**（覆盖既有 → `convert_overwrite` 警告）。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "src":  { "type": "string", "description": "Source document (.docx/.xlsx/.pptx/.md/.csv); opened read-only" },
+    "dest": { "type": "string",
+      "description": "Destination, created fresh: .docx/.xlsx/.pptx/.md/.csv (content) or .pdf/.png/.svg/.html/.txt (render). Same ext as src -> invalid_args (use office_edit); unknown ext -> unsupported_feature" }
+  },
+  "required": ["src", "dest"]
+}
+```
+
+**result**：`data: { from, to, blocksWritten, dropped: [<feature notes>], written }`。转换是内容转移、跨格式本质有损：每条丢失（导出侧的动画/图表/SmartArt + 导入侧目标无法承载的样式/公式取值/markdown 颜色）汇入 `data.dropped`，并由 verb 层折成单条 `meta.warnings` 的 `convert_lossy`。
+
+**示例**
+
+```json
+// call —— docx → pptx（每个标题一页，要点作为正文）
+{ "src": "report.docx", "dest": "deck.pptx" }
+// result
+{ "ok": true, "data": { "from": "docx", "to": "pptx", "blocksWritten": 10, "dropped": [], "written": ".../deck.pptx" } }
+
+// call —— 含图表的 deck → docx（图表无法跨格式，诚实报告）
+{ "src": "charted.pptx", "dest": "charted.docx" }
+// result（meta.warnings 含 convert_lossy）
+{ "ok": true, "data": { "from": "pptx", "to": "docx", "blocksWritten": 1,
+  "dropped": ["charts (transferred as data is not supported; the chart is not converted)"], "written": ".../charted.docx" } }
+```
+
+**映射 CLI**：`aioffice convert <src> <dest>`
+
+**错误码**：`invalid_args`（缺 src/dest、源与目标同扩展名 → 「use edit」）、`unsupported_feature`（未知目标扩展名——列出受支持目标；csv 仅与 xlsx 直转）、`file_not_found`、`sandbox_denied`、`format_corrupt`。
+
+---
+
 ### 1.8 `office_template`
 
 **用途**：模板合并——把 `data` 里的键值对填入文档文本 run 中的 `{{key}}` 占位符（docx/xlsx/pptx 通用，跨 run 拆分的占位符也能命中）。
@@ -646,7 +685,7 @@ aioffice mcp [--workspace <dir>]
 
 ### 1.12 `office_schema`
 
-**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。16 工具 / 16 动词的单一事实来源（与 `aioffice schema` 字节一致）。
+**用途**：整个命令面的机器可读 JSON——agent 自省全部动词、参数、错误码、示例，而不是猜。17 工具 / 17 动词的单一事实来源（与 `aioffice schema` 字节一致）。
 
 ```json
 {
@@ -764,16 +803,17 @@ aioffice mcp [--workspace <dir>]
 | `office_validate` | 100 | |
 | `office_audit` | 140 | M7 加入；描述刻意精简，code 全集外置到 `office_help {topic:"audit"}` |
 | `office_diff` | 160 | M8 加入；描述刻意精简，diff 语义/变更种类外置到 `office_help {topic:"diff"}` |
+| `office_convert` | 164 | M9 加入；描述刻意精简，(src→dest) 矩阵 + 有损说明外置到 `office_help {topic:"convert"}` |
 | `office_status` | 90 | |
 | `preview_open` | 300 | M1 转正，吃掉当年预留额度的大头 |
 | `preview_selection` | 180 | M1 转正 |
-| **M8 小计（16 工具）** | **3320** | M7 小计 3160（M1 3020 + `office_audit` 140）+ `office_diff` 160 |
-| 措辞浮动预留 | 180 | description 迭代余量（M5 的 `from`/新视图/新 type 词表、M6 的公式/分节/分组/Excel 表 type 词表、M7 的 `office_audit` + `properties`/`fields`/`styles` 视图 + `contentControl`/`cellStyle` type + `altText`、M8 的 `office_diff` + `caption`/`crossRef`/`slicer` type + shape `hyperlink` 提示均从这里支出，实测全表仍 ≤ 3500，CI schema-budget 测试把关） |
-| **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关；加入 `office_diff`（第 16 个工具）后仍未超额，故沿用 3500 上限、不上调天花板 |
+| **M9 小计（17 工具）** | **3484** | M8 小计 3320（M7 小计 3160 + `office_diff` 160）+ `office_convert` 164 |
+| 措辞浮动预留 | 16 | description 迭代余量（历代新 type 词表/视图/提示均从这里支出，实测全表仍 ≤ 3500，CI schema-budget 测试把关） |
+| **总额** | **≤ 3500** | CI 的 schema-budget 测试实测把关；加入 `office_convert`（第 17 个工具）后仍未超额，故沿用 3500 上限、不上调天花板 |
 
 预算纪律：示例写进字段 description（一行内），不写长篇；枚举值自解释的不加 description；**属性名表 / selector 全语法 / 寻址细则一律外置到 `office_help`**——这是预算能压住的根本原因。
 
-### 2.2 Few-fat vs many-thin：为什么是 16 个中粒度能力
+### 2.2 Few-fat vs many-thin：为什么是 17 个中粒度能力
 
 - **Many-thin 的失败模式**：按「动词 × 格式」切会得到 50+ 个工具（docx_add_paragraph、xlsx_set_cell…），schema 总量超预算一个数量级，且把路由难题推给模型——工具选择错误率随工具数超线性上涨。
 - **One-mega 的失败模式**：单个 `run_aioffice(argv: string)` 看似零预算，实际把 CLI 语法学习成本转嫁给模型：丢失参数级校验、丢失结构化错误与 `candidates[]`、丢失 `expect_rev` / 自动快照等横切机制的注入点。
@@ -853,6 +893,7 @@ You have aioffice MCP tools for real .docx/.xlsx/.pptx files. Rules:
 | `office_audit` | `audit <file> [--category] [--severity] [--fix]` | M7：无障碍 + 质量 lint，findings 是数据 |
 | `office_diff` | `diff <file> [<other>] [--snapshot N] [--view]` | M8：语义对比，变更是数据 |
 | `office_template` | `template <file> --data <json|@file> [-o]` | `{{key}}` 合并 |
+| `office_convert` | `convert <src> <dest>` | M9：跨格式互转，丢失项汇入 convert_lossy |
 | `file_snapshot` | `snapshot <list|restore> <file> [n]` | 环形 20 份 |
 | `office_status` | `doctor` | |
 | `office_help` | `help [topic]` | 渐进式文档 |
