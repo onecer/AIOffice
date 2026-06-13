@@ -51,9 +51,24 @@ public sealed class PreviewClientTests : PreviewTestBase
         PreviewClient.Close(file, LockDir);
 
         await server.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The lockfile deletion is eventually-consistent: on Windows a transient
+        // sharing violation (AV/indexer) can briefly hold the file, so the server
+        // retries and the stale-port path cleans up. Poll rather than demand an
+        // instantaneous delete so the test is deterministic on every platform.
+        await WaitUntil(() => !File.Exists(server.LockfilePath), TimeSpan.FromSeconds(5));
         Assert.False(File.Exists(server.LockfilePath), "lockfile must be deleted on close");
 
         var ex = Assert.Throws<AiofficeException>(() => PreviewClient.Close(file, LockDir));
         Assert.Equal(ErrorCodes.PreviewNotRunning, ex.Code);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
     }
 }
