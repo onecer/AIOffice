@@ -7,9 +7,15 @@
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4)
 ![platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
-**An AI-native CLI + MCP server for real Office files.** AIOffice lets AI agents create, query, edit, render, preview and validate `.docx` / `.xlsx` / `.pptx` the way they call functions: one command in, exactly one JSON envelope out.
+**Give your agent an Office engine.** AIOffice lets AI agents create, query, edit, render, preview and validate real `.docx` / `.xlsx` / `.pptx` the way they call functions: **one command in, exactly one JSON envelope out**. 100% self-built on pure C#/.NET — **one ~36 MB single-file binary, no Microsoft Office, no runtime dependencies, no wrapped third-party engines.**
 
-100% self-built on pure C#/.NET — direct lossless OOXML via DocumentFormat.OpenXml + ClosedXML. **One ~36 MB single-file binary. No Microsoft Office, no runtime dependencies, no wrapped third-party engines.**
+```bash
+# install (pick one) — then `aioffice version` to check
+npx aioffice version                       # zero-install, great for CI / MCP hosts
+npm install -g aioffice                     # global `aioffice` on your PATH
+brew install onecer/tap/aioffice            # macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.sh | sh
+```
 
 ```bash
 aioffice create report.docx --title "Q3 Report"
@@ -20,17 +26,28 @@ aioffice convert report.docx deck.pptx      # cross-format: a slide per heading,
 aioffice mcp    # the same 17 capabilities, as MCP tools over stdio
 ```
 
+### Why AIOffice
+
+- **100% self-built single binary** — pure C#/.NET, direct lossless OOXML via DocumentFormat.OpenXml + ClosedXML. No Office, no cloud, no wrapped engines, no runtime to install.
+- **Three real formats, one tool** — author and edit genuine `.docx`, `.xlsx`, `.pptx` that open in real Word, Excel and PowerPoint.
+- **Errors that teach** — every failure returns one JSON envelope with an actionable `suggestion` (and `candidates` for bad paths), so an agent self-corrects instead of guessing.
+- **render → look → fix** — render any node to PNG via the system browser and *see* what you made; over MCP the image comes back inline.
+- **Frozen 1.0 contract** — a stable, machine-readable surface (`surfaceVersion` 1.0) your agent can rely on. See [CONTRACT.md](CONTRACT.md).
+- **CLI = MCP, one mental model** — **18 CLI verbs**, **17 MCP tools** (1:1 with the verbs). Learn it once, drive it from a shell or over stdio.
+
 ## Show, don't tell
 
-Every file below was created, edited, validated and screenshotted by `aioffice` alone — no Office installed, no templates, no manual touch-ups. The exact script is in the fold below; [deck-1.svg](assets/demo/deck-1.svg) is the same title slide as SVG, where every shape carries a `data-aio-path` attribute pointing back to its canonical document path.
+Three real Office files — a pitch deck, a revenue dashboard, and a capability report — **built command by command by `aioffice` alone**. No Office installed to build them, no templates, no manual touch-ups. The screenshots below are those exact files opened in **LibreOffice** — independent, third-party proof that `aioffice` writes genuine, valid OOXML that any Office app renders faithfully. The full gallery, with the verbatim command sequence behind each one, is in **[SHOWCASE.md](SHOWCASE.md)**; reproduce all three with one script, **[`examples/tour.sh`](examples/tour.sh)**.
 
-| | |
-|---|---|
-| ![deck.pptx slide 1, rendered to PNG by aioffice](assets/demo/deck-1.png)<br><sub>`aioffice render deck.pptx --to png --scope '/slide[1]' -o deck-1.png`</sub> | ![deck.pptx slide 2, stat cards built from positioned shapes](assets/demo/deck-2.png)<br><sub>`aioffice query deck.pptx 'shape:contains("14")'` → `/slide[2]/shape[@id=9]`</sub> |
-| ![report.docx with running header, headings and table](assets/demo/report.png)<br><sub>`aioffice get report.docx '/header[1]/p[1]'` → `"text": "AIOffice Demo"`</sub> | ![metrics.xlsx with evaluated formulas and number formats](assets/demo/metrics.png)<br><sub>`aioffice get metrics.xlsx /Sheet1/B7` → `"cachedValue": 286900`</sub> |
+| | | |
+|---|---|---|
+| [![deck.pptx — a dark pitch deck with a native chart](assets/showcase/deck-1.png)](SHOWCASE.md#1--a-product-pitch-deck--deckpptx) | [![dashboard.xlsx — a regional revenue dashboard](assets/showcase/dashboard.png)](SHOWCASE.md#2--a-regional-revenue-dashboard--dashboardxlsx) | [![report.docx — a typeset capability report](assets/showcase/report.png)](SHOWCASE.md#3--a-capability-report--reportdocx) |
+| **`deck.pptx`** — 6 dark slides + a native bar chart (17 commands) | **`dashboard.xlsx`** — KPI band, live `=SUM`/`=XLOOKUP`, 2 charts (11 commands) | **`report.docx`** — table formula, LaTeX→Office-Math, citations (18 commands) |
 
 <details>
-<summary>The full script (every command verbatim, including the render → look → fix loop)</summary>
+<summary>How they were made — and the render → look → fix loop, on a smaller example</summary>
+
+The three artifacts above are built by **[`examples/tour.sh`](examples/tour.sh)** (every command verbatim) and documented in **[SHOWCASE.md](SHOWCASE.md)**. Here's a self-contained miniature of the same workflow — three small files and the render → look → fix loop — that you can paste into an empty directory:
 
 ```bash
 # in an empty working directory, with aioffice on PATH
@@ -147,7 +164,7 @@ aioffice validate deck.pptx
 aioffice render deck.pptx --to png --scope '/slide[2]' -o deck-2.png
 ```
 
-The PNGs were then downscaled to ≤900 px wide (plain `sips`/Pillow) before landing in `assets/demo/` — pixels untouched otherwise. The xlsx PNG shows the sheet as the HTML renderer draws it today: cells, formats and cached formula results; the bar chart lives in the file (see `get '/Sheet1/chart[1]'`) and shows up when Excel opens it.
+This miniature uses the same loop as the full showcase: `create` → batched `edit` → `validate` → `render --to png` → look → `edit` to fix. The xlsx PNG shows the sheet as the HTML renderer draws it: cells, formats and cached formula results; the bar chart lives in the file (see `get '/Sheet1/chart[1]'`) and shows up when Excel opens it. For the three polished artifacts and their verbatim commands, see **[SHOWCASE.md](SHOWCASE.md)** and **[`examples/tour.sh`](examples/tour.sh)**.
 
 </details>
 

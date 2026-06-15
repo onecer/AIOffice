@@ -1,0 +1,123 @@
+# deck.commands.txt — every command used to build assets/showcase/deck.pptx
+# Tool: ./dist/osx-arm64/aioffice  (v1.7.0), run with --workspace <sandbox>.
+# The deck is built entirely by aioffice. No Microsoft Office is installed.
+# JSON --ops payloads are shown inline; long ones were passed via --ops @file.
+
+# --- create the deck, set 16:9 size, and the dark master theme -----------------
+aioffice create deck.pptx --kind pptx
+
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/","props":{"slideSize":"16:9"}},
+  {"op":"set","path":"/master[1]","props":{"background":"0F172A","accent1":"38BDF8","accent2":"818CF8","accent3":"34D399"}}
+]'
+
+# --- grow to 6 slides, all on the dark background ------------------------------
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/slide[1]","props":{"background":"0F172A"}},
+  {"op":"add","path":"/slide[1]","type":"slide","position":"after","props":{"background":"0F172A"}},
+  {"op":"add","path":"/slide[2]","type":"slide","position":"after","props":{"background":"0F172A"}},
+  {"op":"add","path":"/slide[3]","type":"slide","position":"after","props":{"background":"0F172A"}},
+  {"op":"add","path":"/slide[4]","type":"slide","position":"after","props":{"background":"0F172A"}},
+  {"op":"add","path":"/slide[5]","type":"slide","position":"after","props":{"background":"0F172A"}}
+]'
+
+# --- slide 1: title (wordmark, tagline, accent shapes, footer) -----------------
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"shape":"rect","x":3.0,"y":5.6,"w":7.2,"h":0.16,"fill":"38BDF8","name":"accentBar"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"shape":"rect","x":29.6,"y":13.4,"w":4.27,"h":3.2,"fill":"38BDF8","name":"cornerBlock"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"shape":"rect","x":28.0,"y":2.4,"w":3.4,"h":3.4,"fill":"1E293B","name":"ghostBlock"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"AIOffice","x":2.85,"y":6.2,"w":24.0,"h":3.6,"fontSize":86,"bold":true,"color":"F8FAFC","align":"left","name":"wordmark"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"An AI-native Office engine for agents","x":3.0,"y":10.2,"w":24.0,"h":1.4,"fontSize":26,"color":"94A3B8","align":"left","name":"tagline"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"One self-contained binary  ·  docx · xlsx · pptx  ·  CLI + MCP","x":3.0,"y":11.7,"w":24.0,"h":1.0,"fontSize":15,"color":"475569","align":"left","name":"subtag"}},
+  {"op":"add","path":"/slide[1]","type":"shape","props":{"text":"Every slide in this deck was built only by aioffice — no Office installed.","x":3.0,"y":17.6,"w":24.0,"h":0.9,"fontSize":12,"color":"475569","align":"left","name":"footer"}}
+]'
+# tighten the wordmark/tagline boxes after looking at the render
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/slide[1]/shape[@id=5]","props":{"x":2.85,"y":6.45,"w":20.0,"h":2.6}},
+  {"op":"set","path":"/slide[1]/shape[@id=6]","props":{"x":3.0,"y":9.7,"w":20.0,"h":1.1}},
+  {"op":"set","path":"/slide[1]/shape[@id=7]","props":{"x":3.0,"y":11.0,"w":20.0,"h":0.8}},
+  {"op":"set","path":"/slide[1]/shape[@id=8]","props":{"x":3.0,"y":17.8,"w":20.0,"h":0.7}}
+]'
+
+# --- slide 2: "One binary, three formats" — 3 format cards ---------------------
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"shape":"rect","x":2.0,"y":2.1,"w":3.6,"h":0.14,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"One binary, three formats","x":2.0,"y":2.5,"w":26.0,"h":1.6,"fontSize":34,"bold":true,"color":"F8FAFC"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"text":"Read, edit, render and validate real Office files — no Microsoft runtime, no cloud.","x":2.0,"y":4.2,"w":29.0,"h":1.0,"fontSize":15,"color":"94A3B8"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"shape":"roundRect","x":2.0,"y":6.6,"w":9.4,"h":9.4,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"shape":"roundRect","x":12.2,"y":6.6,"w":9.4,"h":9.4,"fill":"1E293B"}},
+  {"op":"add","path":"/slide[2]","type":"shape","props":{"shape":"roundRect","x":22.4,"y":6.6,"w":9.4,"h":9.4,"fill":"1E293B"}}
+]'
+# card headers + bodies (docx / xlsx / pptx), accent bars + color-coded titles
+aioffice edit deck.pptx --ops '[ ...12 textboxes: "docx"/"xlsx"/"pptx" numbers (38BDF8/818CF8/34D399),
+  format titles, and body copy... ]'
+# bodies re-set with manual \n line breaks (the PNG renderer does not auto-wrap):
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/slide[2]/shape[@id=11]","props":{"text":"Headings, tables, styles,\ntracked changes, comments\nand mail-merge — straight\nto clean OOXML."}},
+  {"op":"set","path":"/slide[2]/shape[@id=15]","props":{"text":"Real formulas, dynamic\narrays, charts, pivots,\nconditional formats,\nwhat-if & goal-seek."}},
+  {"op":"set","path":"/slide[2]/shape[@id=19]","props":{"text":"Slides, shapes, native\ncharts, SmartArt, tables,\ntransitions and\nanimations."}}
+]'
+
+# --- slide 3: a REAL native chart (data labels + legend + axis titles) ---------
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"shape":"rect","x":2.0,"y":2.1,"w":3.6,"h":0.14,"fill":"38BDF8"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"text":"Documents generated per week","x":2.0,"y":2.5,"w":28.0,"h":1.6,"fontSize":34,"bold":true,"color":"F8FAFC"}},
+  {"op":"add","path":"/slide[3]","type":"shape","props":{"text":"A native chart with data labels, legend and axis titles — written straight into the .pptx, opens in real PowerPoint.","x":2.0,"y":4.2,"w":30.0,"h":1.0,"fontSize":15,"color":"94A3B8"}}
+]'
+aioffice edit deck.pptx --ops '[
+  {"op":"add","path":"/slide[3]","type":"chart","props":{
+    "kind":"bar",
+    "categories":["W1","W2","W3","W4","W5","W6"],
+    "series":[
+      {"name":"docx","values":[120,180,240,310,360,420]},
+      {"name":"xlsx","values":[90,150,210,260,330,390]},
+      {"name":"pptx","values":[60,110,170,230,300,370]}
+    ],
+    "title":"Weekly output by format",
+    "x":2.0,"y":6.0,"w":29.8,"h":11.5,
+    "dataLabels":{"show":"value","position":"outEnd"},
+    "legend":"bottom",
+    "axisTitles":{"category":"Week","value":"Documents"},
+    "gridlines":{"major":true,"minor":false}
+  }}
+]'
+# frame the native chart in a rounded white "card" panel, then send panel behind it
+aioffice edit deck.pptx --ops '[{"op":"add","path":"/slide[3]","type":"shape","props":{"shape":"roundRect","x":1.7,"y":5.7,"w":30.4,"h":12.2,"fill":"F8FAFC","name":"chartPanel"}}]'
+aioffice edit deck.pptx --ops '[
+  {"op":"move","path":"/slide[3]/shape[@id=6]","position":"back"},
+  {"op":"set","path":"/slide[3]/shape[@id=5]","props":{"x":2.1,"y":6.0,"w":29.6,"h":11.4}}
+]'
+
+# --- slide 4: render -> look -> fix (3 numbered step cards + arrows) -----------
+aioffice edit deck.pptx --ops '[ header bar + "render -> look -> fix" title + subtitle ]'
+aioffice edit deck.pptx --ops '[ 3 roundRect step cards (1E293B) + 2 arrow shapes (38BDF8) ]'
+aioffice edit deck.pptx --ops '[ 01/02/03 numbers (38BDF8/818CF8/34D399), step titles,
+  and command/explanation bodies with manual \n breaks ]'
+
+# --- slide 5: errors that teach (agent tries | aioffice answers) --------------
+aioffice edit deck.pptx --ops '[ header bar + "Errors that teach" title + subtitle ]'
+aioffice edit deck.pptx --ops '[ left card (1E293B) with a naive command + note;
+  right card (0B1220) with the real JSON error envelope: ok/code/message/suggestion ]'
+
+# --- slide 6: closing (headline, npx install card, repo url, accent blocks) ----
+aioffice edit deck.pptx --ops '[
+  accent bar + 2 corner blocks (38BDF8 / 818CF8),
+  "Give your agent an / Office engine." headline,
+  dark install card (0B1220) "$ npx @aioffice/cli create deck.pptx" in 38BDF8,
+  "github.com/onecer/aioffice" + "One binary · 18 verbs · 17 MCP tools · docx + xlsx + pptx"
+]'
+
+# --- document metadata ---------------------------------------------------------
+aioffice edit deck.pptx --ops '[
+  {"op":"set","path":"/properties","props":{
+    "title":"AIOffice — An AI-native Office engine for agents",
+    "author":"AIOffice","subject":"Product pitch deck",
+    "keywords":"aioffice;cli;mcp;office;docx;xlsx;pptx","category":"Pitch Deck",
+    "comments":"Built entirely by aioffice — no Office installed."}}
+]'
+
+# --- prove it is sound, then export the deliverable PNGs (1280x720) ------------
+aioffice validate deck.pptx                                            # -> 0 issues
+aioffice render deck.pptx --to png --scope /slide[1] -o deck-1.png     # title slide
+aioffice render deck.pptx --to png --scope /slide[3] -o deck-3.png     # chart slide
+# (slides 2,4,5,6 also rendered to PNG during the render -> look -> fix loop)

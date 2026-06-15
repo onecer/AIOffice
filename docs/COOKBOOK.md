@@ -1,9 +1,17 @@
 # AIOffice Cookbook
 
-Ten task-oriented recipes for driving `aioffice`. Every command below was **run and verified**
-against the binary; the `# →` lines show the actual (abridged) JSON that came back. Each command
-prints one JSON envelope `{ok, data, error, meta}`; on `ok:false`, read `error.suggestion` and
+Ten task-oriented recipes for driving [`aioffice`](../README.md) — one for each
+shape of work an agent actually does: a report, a deck, a budget, a mail-merge,
+an audit, a diff, a conversion, a render loop, an equation, an embed. Every
+command below was **run and verified** against the binary; the `# →` lines show
+the actual (abridged) JSON that came back. Each command prints one JSON envelope
+`{ok, data, error, meta}`; on `ok:false`, read `error.suggestion` and
 `error.candidates` and retry.
+
+> Want to see these capabilities combined into three polished, real artifacts?
+> [`examples/tour.sh`](../examples/tour.sh) builds a pitch deck, a revenue
+> dashboard, and a capability report end to end and renders the PNGs in
+> [SHOWCASE.md](../SHOWCASE.md) — every command verbatim, no Office installed.
 
 Conventions used throughout:
 - Quote every path/selector in your shell (`'/body/p[3]'`) so brackets aren't globbed.
@@ -255,3 +263,12 @@ re-opens as a working workbook. The extract op key is **`to`** (a workspace-rela
 - Edit: `aioffice edit <file> --ops '[…]'` (add `--dry-run` to preview, `--expect-rev <rev>` to guard)
 - Prove: `aioffice validate <file>`
 - Ask the binary: `aioffice schema [verb]` (machine-readable) · `aioffice help <topic>` (prose)
+
+### Next
+
+- **See it all combined** — [`examples/tour.sh`](../examples/tour.sh) builds a
+  deck, a dashboard, and a report and renders the [SHOWCASE.md](../SHOWCASE.md)
+  gallery.
+- **Drive it from an agent** — register the MCP server and point the system
+  prompt at [SKILL.md](../SKILL.md); host configs are in
+  [MCP-SETUP.md](MCP-SETUP.md).

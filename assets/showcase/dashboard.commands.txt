@@ -1,0 +1,208 @@
+# dashboard.xlsx — built end to end by aioffice 1.7.0, no manual editing, no template.
+# A realistic FY2025 regional revenue dashboard: a KPI band, an 8-region data table
+# with a live totals row, two native charts, conditional formatting, a light theme,
+# and real cached formula values (incl. =XLOOKUP). Every command below was run
+# against the published binary, in order, to produce the delivered files.
+#
+# Note on the PNG: aioffice's xlsx renderer rasterizes the cell-value grid
+# (text, bold, number-formatted display values, alignment). Fills, font colors and
+# chart graphics are written into the real .xlsx (valid, Excel-openable) but are not
+# painted by the headless renderer — so dashboard.png is the faithful grid output,
+# scoped to the KPI band + table (B5:I18). Open dashboard.xlsx in Excel to see the
+# light navy theme, the bar + line charts, the data-bar and color-scale rules.
+AIO=/Users/apple/app/tonoapp/Aioffice/dist/osx-arm64/aioffice
+WS=/Users/apple/app/tonoapp/Aioffice/assets/showcase
+
+# 1) Create the workbook (the first sheet takes the --title name: "Dashboard").
+$AIO create "$WS/dashboard.xlsx" --kind xlsx --title "Dashboard" --workspace "$WS"
+
+# 2) Title, subtitle, table headers, and the 8-region quarterly dataset (one bulk write).
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/B2","props":{"value":"Northwind Cloud — FY2025 Revenue Dashboard"}},
+  {"op":"set","path":"/Dashboard/B3","props":{"value":"Quarterly revenue, units, and margin by sales region · built entirely with aioffice"}},
+  {"op":"set","path":"/Dashboard/B9","props":{"value":"Region"}},
+  {"op":"set","path":"/Dashboard/C9","props":{"value":"Q1"}},
+  {"op":"set","path":"/Dashboard/D9","props":{"value":"Q2"}},
+  {"op":"set","path":"/Dashboard/E9","props":{"value":"Q3"}},
+  {"op":"set","path":"/Dashboard/F9","props":{"value":"Q4"}},
+  {"op":"set","path":"/Dashboard/G9","props":{"value":"FY Revenue"}},
+  {"op":"set","path":"/Dashboard/H9","props":{"value":"Units"}},
+  {"op":"set","path":"/Dashboard/I9","props":{"value":"Margin %"}},
+  {"op":"set","path":"/Dashboard/B10:F17","props":{"values":[
+    ["North America", 412000, 458000, 503000, 561000],
+    ["EMEA",          318000, 342000, 366000, 401000],
+    ["LATAM",         128000, 141000, 152000, 168000],
+    ["APAC",          274000, 309000, 358000, 412000],
+    ["UK & Ireland",  186000, 197000, 205000, 223000],
+    ["DACH",          221000, 238000, 251000, 269000],
+    ["Nordics",       97000,  104000, 112000, 124000],
+    ["MEA",           74000,  82000,  91000,  103000]
+  ]}},
+  {"op":"set","path":"/Dashboard/H10","props":{"value":3120}},
+  {"op":"set","path":"/Dashboard/H11","props":{"value":2410}},
+  {"op":"set","path":"/Dashboard/H12","props":{"value":1180}},
+  {"op":"set","path":"/Dashboard/H13","props":{"value":2640}},
+  {"op":"set","path":"/Dashboard/H14","props":{"value":1390}},
+  {"op":"set","path":"/Dashboard/H15","props":{"value":1720}},
+  {"op":"set","path":"/Dashboard/H16","props":{"value":760}},
+  {"op":"set","path":"/Dashboard/H17","props":{"value":540}},
+  {"op":"set","path":"/Dashboard/I10","props":{"value":0.342}},
+  {"op":"set","path":"/Dashboard/I11","props":{"value":0.311}},
+  {"op":"set","path":"/Dashboard/I12","props":{"value":0.268}},
+  {"op":"set","path":"/Dashboard/I13","props":{"value":0.357}},
+  {"op":"set","path":"/Dashboard/I14","props":{"value":0.298}},
+  {"op":"set","path":"/Dashboard/I15","props":{"value":0.324}},
+  {"op":"set","path":"/Dashboard/I16","props":{"value":0.281}},
+  {"op":"set","path":"/Dashboard/I17","props":{"value":0.252}}
+]'
+
+# 3) Live formulas: per-row FY revenue (=SUM), a totals row (=SUM / =AVERAGE).
+#    aioffice evaluates and caches every result into the saved file.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/G10","props":{"value":"=SUM(C10:F10)"}},
+  {"op":"set","path":"/Dashboard/G11","props":{"value":"=SUM(C11:F11)"}},
+  {"op":"set","path":"/Dashboard/G12","props":{"value":"=SUM(C12:F12)"}},
+  {"op":"set","path":"/Dashboard/G13","props":{"value":"=SUM(C13:F13)"}},
+  {"op":"set","path":"/Dashboard/G14","props":{"value":"=SUM(C14:F14)"}},
+  {"op":"set","path":"/Dashboard/G15","props":{"value":"=SUM(C15:F15)"}},
+  {"op":"set","path":"/Dashboard/G16","props":{"value":"=SUM(C16:F16)"}},
+  {"op":"set","path":"/Dashboard/G17","props":{"value":"=SUM(C17:F17)"}},
+  {"op":"set","path":"/Dashboard/B18","props":{"value":"Total"}},
+  {"op":"set","path":"/Dashboard/C18","props":{"value":"=SUM(C10:C17)"}},
+  {"op":"set","path":"/Dashboard/D18","props":{"value":"=SUM(D10:D17)"}},
+  {"op":"set","path":"/Dashboard/E18","props":{"value":"=SUM(E10:E17)"}},
+  {"op":"set","path":"/Dashboard/F18","props":{"value":"=SUM(F10:F17)"}},
+  {"op":"set","path":"/Dashboard/G18","props":{"value":"=SUM(G10:G17)"}},
+  {"op":"set","path":"/Dashboard/H18","props":{"value":"=SUM(H10:H17)"}},
+  {"op":"set","path":"/Dashboard/I18","props":{"value":"=AVERAGE(I10:I17)"}}
+]'
+
+# 4) KPI band (row 5 labels / row 6 values). Top Region and Best Quarter are real
+#    =XLOOKUP(MAX(...),...) results that aioffice evaluates at write time
+#    (-> "North America" and "Q4"); Regions is =COUNTA.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/B5","props":{"value":"Total FY Revenue"}},
+  {"op":"set","path":"/Dashboard/C5","props":{"value":"Units Sold"}},
+  {"op":"set","path":"/Dashboard/D5","props":{"value":"Avg Margin"}},
+  {"op":"set","path":"/Dashboard/E5","props":{"value":"Top Region"}},
+  {"op":"set","path":"/Dashboard/F5","props":{"value":"Best Quarter"}},
+  {"op":"set","path":"/Dashboard/G5","props":{"value":"Regions"}},
+  {"op":"set","path":"/Dashboard/B6","props":{"value":"=G18"}},
+  {"op":"set","path":"/Dashboard/C6","props":{"value":"=H18"}},
+  {"op":"set","path":"/Dashboard/D6","props":{"value":"=I18"}},
+  {"op":"set","path":"/Dashboard/E6","props":{"value":"=XLOOKUP(MAX(G10:G17),G10:G17,B10:B17)"}},
+  {"op":"set","path":"/Dashboard/F6","props":{"value":"=XLOOKUP(MAX(C18:F18),C18:F18,C9:F9)"}},
+  {"op":"set","path":"/Dashboard/G6","props":{"value":"=COUNTA(B10:B17)"}}
+]'
+
+# 5) Number formats: compact USD currency, percent, thousands; KPI value formats.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/C10:G18","props":{"numberFormat":"\"$\"#,##0"}},
+  {"op":"set","path":"/Dashboard/H10:H18","props":{"numberFormat":"#,##0"}},
+  {"op":"set","path":"/Dashboard/I10:I18","props":{"numberFormat":"0.0%"}},
+  {"op":"set","path":"/Dashboard/B6","props":{"numberFormat":"\"$\"#,##0"}},
+  {"op":"set","path":"/Dashboard/C6","props":{"numberFormat":"#,##0"}},
+  {"op":"set","path":"/Dashboard/D6","props":{"numberFormat":"0.0%"}},
+  {"op":"set","path":"/Dashboard/G6","props":{"numberFormat":"0"}}
+]'
+
+# 6) Light navy theme: header band, KPI cards, zebra-banded data rows, totals band,
+#    bold region names. (Real fills/colors in the .xlsx; visible when opened in Excel.)
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/A1:J19","props":{"fill":"FFFFFF"}},
+  {"op":"set","path":"/Dashboard/B2","props":{"bold":true,"color":"0F2742"}},
+  {"op":"set","path":"/Dashboard/B3","props":{"color":"64748B"}},
+  {"op":"set","path":"/Dashboard/B5:G5","props":{"fill":"E8F1FB","color":"35597E","bold":true}},
+  {"op":"set","path":"/Dashboard/B6:G6","props":{"fill":"F4F9FF","color":"0F2742","bold":true}},
+  {"op":"set","path":"/Dashboard/B9:I9","props":{"fill":"143C66","color":"FFFFFF","bold":true}},
+  {"op":"set","path":"/Dashboard/B10:I10","props":{"fill":"FFFFFF","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B11:I11","props":{"fill":"F1F6FC","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B12:I12","props":{"fill":"FFFFFF","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B13:I13","props":{"fill":"F1F6FC","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B14:I14","props":{"fill":"FFFFFF","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B15:I15","props":{"fill":"F1F6FC","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B16:I16","props":{"fill":"FFFFFF","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B17:I17","props":{"fill":"F1F6FC","color":"1E293B"}},
+  {"op":"set","path":"/Dashboard/B10:B17","props":{"bold":true,"color":"0F2742"}},
+  {"op":"set","path":"/Dashboard/B18:I18","props":{"fill":"D6E6F7","color":"0F2742","bold":true}}
+]'
+
+# 7) Column widths and row heights for a tidy used range.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/col[A]","props":{"width":2.5}},
+  {"op":"set","path":"/Dashboard/col[B]","props":{"width":16}},
+  {"op":"set","path":"/Dashboard/col[C]","props":{"width":14}},
+  {"op":"set","path":"/Dashboard/col[D]","props":{"width":14}},
+  {"op":"set","path":"/Dashboard/col[E]","props":{"width":14}},
+  {"op":"set","path":"/Dashboard/col[F]","props":{"width":14}},
+  {"op":"set","path":"/Dashboard/col[G]","props":{"width":16}},
+  {"op":"set","path":"/Dashboard/col[H]","props":{"width":10}},
+  {"op":"set","path":"/Dashboard/col[I]","props":{"width":11}},
+  {"op":"set","path":"/Dashboard/row[2]","props":{"height":26}},
+  {"op":"set","path":"/Dashboard/row[3]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[5]","props":{"height":16}},
+  {"op":"set","path":"/Dashboard/row[6]","props":{"height":24}},
+  {"op":"set","path":"/Dashboard/row[9]","props":{"height":20}},
+  {"op":"set","path":"/Dashboard/row[10]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[11]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[12]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[13]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[14]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[15]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[16]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[17]","props":{"height":18}},
+  {"op":"set","path":"/Dashboard/row[18]","props":{"height":20}}
+]'
+
+# 8) Conditional formatting: a data bar on Margin %, a color scale on FY Revenue.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/Dashboard/I10:I17","type":"conditionalFormat","props":{"kind":"dataBar","color":"38BDF8"}},
+  {"op":"add","path":"/Dashboard/G10:G17","type":"conditionalFormat","props":{"kind":"colorScale","minColor":"DCEBFB","maxColor":"143C66"}}
+]'
+
+# 9) Chart source: a compact Region + FY-Revenue helper block in K:L (off-canvas;
+#    the bar chart needs two adjacent columns). Values reference the table cells.
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/Dashboard/K9","props":{"value":"Region"}},
+  {"op":"set","path":"/Dashboard/L9","props":{"value":"FY Revenue"}},
+  {"op":"set","path":"/Dashboard/K10","props":{"value":"=B10"}},
+  {"op":"set","path":"/Dashboard/K11","props":{"value":"=B11"}},
+  {"op":"set","path":"/Dashboard/K12","props":{"value":"=B12"}},
+  {"op":"set","path":"/Dashboard/K13","props":{"value":"=B13"}},
+  {"op":"set","path":"/Dashboard/K14","props":{"value":"=B14"}},
+  {"op":"set","path":"/Dashboard/K15","props":{"value":"=B15"}},
+  {"op":"set","path":"/Dashboard/K16","props":{"value":"=B16"}},
+  {"op":"set","path":"/Dashboard/K17","props":{"value":"=B17"}},
+  {"op":"set","path":"/Dashboard/L10","props":{"value":"=G10"}},
+  {"op":"set","path":"/Dashboard/L11","props":{"value":"=G11"}},
+  {"op":"set","path":"/Dashboard/L12","props":{"value":"=G12"}},
+  {"op":"set","path":"/Dashboard/L13","props":{"value":"=G13"}},
+  {"op":"set","path":"/Dashboard/L14","props":{"value":"=G14"}},
+  {"op":"set","path":"/Dashboard/L15","props":{"value":"=G15"}},
+  {"op":"set","path":"/Dashboard/L16","props":{"value":"=G16"}},
+  {"op":"set","path":"/Dashboard/L17","props":{"value":"=G17"}}
+]'
+
+# 10) Two native, polished charts (v1.3 chart polish): a bar chart of FY revenue by
+#     region (data labels + axis titles), and a multi-series line chart of the
+#     quarterly trend (legend + gridlines + axis titles).
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/Dashboard","type":"chart","props":{
+    "kind":"bar","dataRange":"K9:L17","anchor":"B20","title":"FY Revenue by Region",
+    "legend":"none","dataLabels":{"show":"value"},
+    "axisTitles":{"category":"Region","value":"FY Revenue (USD)"}}},
+  {"op":"add","path":"/Dashboard","type":"chart","props":{
+    "kind":"line","dataRange":"B9:F17","anchor":"B40","title":"Quarterly Revenue Trend by Region",
+    "legend":"bottom","axisTitles":{"category":"Quarter","value":"Revenue (USD)"},
+    "gridlines":{"major":true,"minor":false}}}
+]'
+
+# 11) Workbook metadata (gives the file a document Title, clears the audit check).
+$AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/properties","props":{"title":"Northwind Cloud FY2025 Revenue Dashboard","author":"AIOffice"}}
+]'
+
+# 12) Prove the file is sound, then render the KPI band + table to PNG (scope B5:I18).
+$AIO validate "$WS/dashboard.xlsx" --workspace "$WS"
+$AIO audit    "$WS/dashboard.xlsx" --workspace "$WS"
+$AIO render   "$WS/dashboard.xlsx" --workspace "$WS" --to png --scope "/Dashboard/B5:I18" -o "$WS/dashboard.png"

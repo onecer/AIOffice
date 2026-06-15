@@ -1,0 +1,132 @@
+# report.docx — built end to end by aioffice 1.7.0, no manual editing, no template.
+# Every command below was run against the published binary:
+AIO=/Users/apple/app/tonoapp/Aioffice/dist/osx-arm64/aioffice
+WS=/Users/apple/app/tonoapp/Aioffice/assets/showcase
+
+# 1) Create the document (Heading1 title seeded from --title).
+$AIO create "$WS/report.docx" --kind docx --title "AIOffice Capability Report" --workspace "$WS"
+
+# 2) Custom accent theme, package metadata, and US-Letter page setup.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/theme","props":{"accent1":"2563EB","accent2":"0EA5E9","dk1":"0F172A","dk2":"1E293B","lt2":"F1F5F9","majorFont":"Calibri Light","minorFont":"Calibri"}},
+  {"op":"set","path":"/properties","props":{"title":"AIOffice Capability Report","subject":"What a single self-built binary can author","author":"AIOffice","keywords":"AIOffice, OOXML, AI-native, CLI, MCP","category":"Product","custom":{"Version":"1.7.0","Engine":"C#/.NET single binary","SurfaceVersion":1.0}}},
+  {"op":"set","path":"/section[1]","props":{"pageSize":"Letter","marginTop":"2.2cm","marginBottom":"2cm","marginLeft":"2.4cm","marginRight":"2.4cm"}}
+]'
+
+# 3) Custom paragraph styles for the masthead and lead text.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/styles","type":"style","props":{"id":"Subtitle","kind":"paragraph","name":"Subtitle","basedOn":"Normal","color":"475569","fontSize":13,"spacingBefore":2,"spacingAfter":14}},
+  {"op":"add","path":"/styles","type":"style","props":{"id":"Kicker","kind":"paragraph","name":"Kicker","basedOn":"Normal","color":"2563EB","fontSize":10,"bold":true,"spacingAfter":2}},
+  {"op":"add","path":"/styles","type":"style","props":{"id":"Lead","kind":"paragraph","name":"Lead","basedOn":"Normal","color":"334155","fontSize":11,"spacingAfter":8}}
+]'
+
+# 4) Masthead: kicker eyebrow before the title, subtitle after it.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body/p[1]","type":"p","position":"before","props":{"text":"AIOFFICE  ·  CAPABILITY REPORT","style":"Kicker"}},
+  {"op":"set","path":"/body/p[3]","props":{"text":"One self-built C#/.NET binary that authors real Office files","style":"Subtitle"}}
+]'
+
+# 5) Intro paragraph + the first H2 section and its table intro.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"AIOffice is a single self-built binary and MCP server that reads, edits, and renders genuine .docx, .xlsx, and .pptx files. Every element below — the heading hierarchy, the computed table total, the typeset equation, and the formatted bibliography — was produced by aioffice commands alone. This page is the artifact and the proof.","style":"Lead"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Coverage by surface","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"The Total row is a live Word table formula, =SUM(ABOVE), that aioffice computed headlessly when the file was written.","style":"Lead"}}
+]'
+
+# 6) A 5x3 data table.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"table","position":"inside","props":{"rows":5,"cols":3}}
+]'
+
+# 7) Fill the cells; the Total row carries a real =SUM(ABOVE) table formula
+#    that aioffice computes now (cached 143 and 74) and stores as a Word field.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"text":"Surface"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[2]","props":{"text":"Editable properties"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[3]","props":{"text":"Live operations"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[1]","props":{"text":"Word (.docx)"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[2]","props":{"text":"58"}},
+  {"op":"set","path":"/body/table[1]/tr[2]/tc[3]","props":{"text":"31"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[1]","props":{"text":"Excel (.xlsx)"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[2]","props":{"text":"46"}},
+  {"op":"set","path":"/body/table[1]/tr[3]/tc[3]","props":{"text":"24"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[1]","props":{"text":"PowerPoint (.pptx)"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[2]","props":{"text":"39"}},
+  {"op":"set","path":"/body/table[1]/tr[4]/tc[3]","props":{"text":"19"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[1]","props":{"text":"Total"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[2]","props":{"formula":"=SUM(ABOVE)","numberFormat":"integer"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[3]","props":{"formula":"=SUM(ABOVE)","numberFormat":"integer"}}
+]'
+
+# 8) Style the table: header row + total band, accent shading, clean borders, widths.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/body/table[1]","props":{"borders":"all","borderColor":"E2E8F0","borderWidthPt":0.75,"headerRow":true,"width":"100%","columnWidths":["7.5cm","4.5cm","4.5cm"],"cellPaddingCm":0.18}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"shading":"0F172A"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[2]","props":{"shading":"0F172A"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[3]","props":{"shading":"0F172A"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[1]","props":{"shading":"EFF6FF"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[2]","props":{"shading":"EFF6FF"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[3]","props":{"shading":"EFF6FF"}}
+]'
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[1]/p[1]/run[1]","props":{"color":"FFFFFF"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[2]/p[1]/run[1]","props":{"color":"FFFFFF"}},
+  {"op":"set","path":"/body/table[1]/tr[1]/tc[3]/p[1]/run[1]","props":{"color":"FFFFFF"}},
+  {"op":"set","path":"/body/table[1]/tr[5]/tc[1]/p[1]/run[1]","props":{"bold":true,"color":"0F172A"}}
+]'
+
+# 9) Equation section + a NUMBERED display equation: the quadratic formula.
+#    LaTeX in -> native Office Math (m:oMathPara) out, no LaTeX install.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Typeset mathematics","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"LaTeX in, native Office Math out. The expression below is real m:oMathPara markup from the built-in converter — no LaTeX install, no image.","style":"Lead"}}
+]'
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"equation","props":{"latex":"x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}","display":true,"number":true}}
+]'
+
+# 10) Bullet-list section.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Built entirely by the CLI","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Each item below maps to a documented capability:","style":"Lead"}},
+  {"op":"add","path":"/body","type":"p","props":{"text":"Heading hierarchy, a running header, and a Page X of Y footer field","list":"bullet"}},
+  {"op":"add","path":"/body","type":"p","props":{"text":"A formatted table whose total is a live =SUM(ABOVE) field computed headlessly","list":"bullet"}},
+  {"op":"add","path":"/body","type":"p","props":{"text":"A numbered display equation typeset from LaTeX into native Office Math","list":"bullet"}},
+  {"op":"add","path":"/body","type":"p","props":{"text":"A managed citation and an APA bibliography drawn from the document source store","list":"bullet"}},
+  {"op":"add","path":"/body","type":"p","props":{"text":"A custom accent theme, document metadata, and validation that reports zero issues","list":"bullet"}}
+]'
+
+# 11) Sources go into the document store; the References section cites both.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/sources","type":"source","props":{"tag":"ECMA376","kind":"report","author":"ECMA International","title":"Office Open XML File Formats (ECMA-376)","year":2016}},
+  {"op":"add","path":"/sources","type":"source","props":{"tag":"MCP2025","kind":"website","author":"Anthropic","title":"Model Context Protocol Specification","year":2025}}
+]'
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"Standards and protocol","style":"Heading2"}},
+  {"op":"add","path":"/body","type":"p","position":"inside","props":{"text":"AIOffice writes the published Office Open XML formats and speaks the Model Context Protocol.","style":"Lead"}}
+]'
+
+# 12) Drop the two CITATION fields into the section paragraph (/body/p[18]).
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body/p[18]","type":"citation","props":{"source":"ECMA376"}},
+  {"op":"add","path":"/body/p[18]","type":"citation","props":{"source":"MCP2025"}}
+]'
+
+# 13) Render the APA bibliography of the cited sources.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/body","type":"bibliography","props":{"style":"APA"}}
+]'
+
+# 14) Running header + a Page X of Y footer built from PAGE/NUMPAGES fields.
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/header[1]","type":"header","props":{"text":"AIOffice Capability Report"}},
+  {"op":"add","path":"/footer[1]","type":"footer","props":{"text":"Generated entirely by aioffice 1.7.0     "}}
+]'
+$AIO edit "$WS/report.docx" --workspace "$WS" --ops '[
+  {"op":"add","path":"/footer[1]/p[1]","type":"field","props":{"kind":"pageNumber","leadingText":"Page "}},
+  {"op":"add","path":"/footer[1]/p[1]","type":"field","props":{"kind":"numPages","leadingText":" of "}}
+]'
+
+# 15) Prove the file is sound (0 issues) and render the PNG used in the showcase.
+$AIO validate "$WS/report.docx" --workspace "$WS"
+$AIO render "$WS/report.docx" --workspace "$WS" --to png -o "$WS/report.png"
