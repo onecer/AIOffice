@@ -1,0 +1,110 @@
+name: npm-publish
+
+# Publishes the "aioffice" npm wrapper package (npm/) to the public registry when
+# a release tag (v*) is pushed. The package is a tiny JS shim whose postinstall
+# downloads + SHA256-verifies the matching native binary from that same release,
+# so this job WAITS for the release assets (SHA256SUMS) to exist before it
+# publishes — the package must never be installable ahead of its binaries.
+#
+# HUMAN SETUP REQUIRED: add a repository secret named NPM_TOKEN (an npm automation
+# token with publish rights to the "aioffice" package) to enable publishing. Until
+# that secret exists this workflow runs but SKIPS the publish with a clear log line
+# (it never fails the pipeline). See docs/INSTALL.md (npm section).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  npm-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Fail early (before waiting on the release) if the package version in
+      # npm/package.json does not match the pushed tag — they must agree because
+      # the postinstall derives the release tag from the package version.
+      - name: Check package version matches the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"            # e.g. v1.6.0
+          PKG_VERSION="$(node -p "require('./npm/package.json').version")"
+          if [ "v${PKG_VERSION}" != "${TAG}" ]; then
+            echo "::error::npm/package.json version (${PKG_VERSION}) does not match tag ${TAG}."
+            echo "Bump npm/package.json to ${TAG#v} before tagging."
+            exit 1
+          fi
+          echo "npm/package.json version ${PKG_VERSION} matches tag ${TAG}."
+
+      # The release job (release.yml) runs on the same tag and uploads the
+      # binaries + SHA256SUMS. Wait until SHA256SUMS is downloadable so the
+      # published package can actually fetch its binary on install.
+      - name: Wait for release assets (SHA256SUMS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          SUMS_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/SHA256SUMS"
+          echo "Waiting for ${SUMS_URL} ..."
+          # Up to ~30 min (release build + 6-binary cross-compile takes a while).
+          for i in $(seq 1 60); do
+            code="$(curl -sSL -o /dev/null -w '%{http_code}' "${SUMS_URL}")"
+            if [ "${code}" = "200" ]; then
+              echo "SHA256SUMS is available (attempt ${i})."
+              exit 0
+            fi
+            echo "attempt ${i}/60: HTTP ${code}; release assets not ready, sleeping 30s..."
+            sleep 30
+          done
+          echo "::error::Release assets for ${TAG} did not appear within ~30 min."
+          echo "Re-run this job after release.yml finishes; the package will not install without them."
+          exit 1
+
+      # Gate everything below on NPM_TOKEN. If it's absent (forks, or before the
+      # human adds the secret), skip cleanly so the pipeline stays green.
+      - name: Detect NPM_TOKEN
+        id: gate
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "have_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN secret is not set — skipping npm publish. Add the NPM_TOKEN repository secret to enable it."
+          fi
+
+      - name: Publish to npm
+        if: steps.gate.outputs.have_token == 'true'
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Idempotent: if this exact version is already on the registry (e.g. a
+          # re-run of the tag), log and skip instead of failing.
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::${NAME}@${VERSION} is already published — nothing to do."
+            exit 0
+          fi
+          npm publish --access public
+          echo "Published ${NAME}@${VERSION} to npm."
+
+      - name: Skipped (no NPM_TOKEN)
+        if: steps.gate.outputs.have_token != 'true'
+        shell: bash
+        run: |
+          echo "npm publish skipped: NPM_TOKEN secret absent. This is expected on forks and before the human configures publishing."

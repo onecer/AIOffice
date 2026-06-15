@@ -1,0 +1,10 @@
+# The native binary is downloaded at install time by install.js — never publish
+# it inside the tarball. The package stays tiny (a few KB of JS).
+bin/aioffice
+bin/aioffice.exe
+bin/*.download-*
+
+# Test/build scratch
+BUILD-NOTES.md
+*.tgz
+node_modules/

@@ -205,7 +205,40 @@ $ aioffice edit data.xlsx --ops '[{"op":"set","path":"/Sheet1/B1","props":{"valu
 }
 ```
 
-## Quickstart
+## Install
+
+AIOffice ships as **one self-contained native binary** — no .NET runtime, no Microsoft Office, no extra files. Pick whichever method fits your setup; every method downloads the binary matching your OS/CPU and verifies it against the release's `SHA256SUMS`. Full matrix and platform notes in **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+```bash
+# 1) npm (Node ≥ 18) — global install, or run on demand with npx
+npm install -g aioffice          # puts `aioffice` on your PATH
+npx aioffice doctor              # one-shot, no install (great for CI / MCP hosts)
+
+# 2) Homebrew (macOS / Linux)
+brew install onecer/tap/aioffice
+
+# 3) One-line script (macOS / Linux; Windows uses PowerShell — see below)
+curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.sh | sh
+
+# 4) Direct download — grab the asset for your platform from the releases page,
+#    verify its SHA256, chmod +x, and put it on your PATH:
+#    https://github.com/onecer/AIOffice/releases/latest
+```
+
+Windows (PowerShell): `irm https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.ps1 | iex`.
+On macOS, a directly downloaded binary may need `xattr -d com.apple.quarantine <path>` once (the script and Homebrew do this for you; binaries are not yet notarized — see [docs/SIGNING.md](docs/SIGNING.md)). After install, `aioffice version` should print `{"ok":true,"data":{"name":"aioffice","version":"1.6.0",…}}`.
+
+### Use it from your agent (MCP)
+
+AIOffice exposes the **same surface twice** — a CLI and a stdio **MCP server** with 17 tools that mirror the verbs 1:1. Run `aioffice mcp --workspace <dir>` and point your agent at it:
+
+```bash
+aioffice mcp --workspace /path/to/your/documents     # stdio JSON-RPC, sandboxed to <dir>
+```
+
+Per-host config (Claude Desktop, Claude Code, Cursor, generic stdio, TonoBraid) is in **[docs/MCP-SETUP.md](docs/MCP-SETUP.md)**. Point the agent's system prompt at **[SKILL.md](SKILL.md)** — the AI-facing onboarding guide (envelope shape, addressing grammar, read-before-write loop). Copy-paste task recipes live in **[docs/COOKBOOK.md](docs/COOKBOOK.md)**.
+
+### Build from source
 
 ```bash
 # Build (requires .NET 10 SDK)
@@ -453,6 +486,17 @@ aioffice validate report.docx                   # "valid": true, 0 errors
 
 The container is per-format — docx `/body` (or a tc/header/footer), xlsx `/Sheet1` (anchored), pptx `/slide[i]` — and embeds are addressed `/embed[i]`, `/Sheet1/embed[i]`, `/slide[i]/embed[@id=N]`. `extract` is a **producing** op: it writes the dest but never mutates the source document, and the extracted bytes equal what was embedded even after an open+save cycle. The media type is sniffed from the source file; the embed `src` and the extract `to` are both sandbox-resolved (an escaping path is `sandbox_denied`). It rides on `office_edit` / `office_read` — no new MCP tool, still 17. See `aioffice help embeds`.
 
+## What's new in 1.6
+
+1.6.0 is a **distribution & onboarding release — no capability change.** The native binary is byte-for-byte the same surface as 1.5.0: **18 CLI verbs / 17 MCP tools / `surfaceVersion` `1.0`**, the frozen [CONTRACT.md](CONTRACT.md) line, every envelope, error code and addressing form unchanged. What 1.6 adds is everything *around* the binary, so agents and humans can install and wire it up in one line:
+
+- **npm package** — `npm i -g aioffice` (or `npx aioffice …`). A tiny wrapper that downloads the matching native binary from the GitHub release and SHA256-verifies it; the binary is not shipped inside the tarball. See [`npm/README.md`](npm/README.md) and the `AIOFFICE_DOWNLOAD_VERSION` / `AIOFFICE_DOWNLOAD_BASEURL` overrides.
+- **Homebrew formula** — `brew install onecer/tap/aioffice`, installing the prebuilt per-platform binary ([`dist/Formula/aioffice.rb`](dist/Formula/aioffice.rb)).
+- **One-line install scripts** — `dist/install.sh` (macOS/Linux, POSIX sh) and `dist/install.ps1` (Windows PowerShell): detect platform → download → SHA256-verify → install → PATH hint; macOS quarantine stripped automatically.
+- **Onboarding docs** — [SKILL.md](SKILL.md) (AI-facing skill guide), [docs/COOKBOOK.md](docs/COOKBOOK.md) (10 copy-paste recipes), [docs/INSTALL.md](docs/INSTALL.md) (all four install paths), [docs/MCP-SETUP.md](docs/MCP-SETUP.md) (Claude Desktop / Claude Code / Cursor / generic stdio / TonoBraid configs), [docs/SIGNING.md](docs/SIGNING.md) (the code-signing / notarization roadmap).
+
+The whole release is **outside the C#/.NET source tree** — the build and tests are unaffected. **2125 tests** green across 7 projects (Core 124 · Word 612 · Excel 572 · Pptx 675 · MCP 87 · Preview 24 · Render 31). To publish: `cd npm && npm publish --access public` (after `npm login`); create `onecer/homebrew-tap` with `dist/Formula/aioffice.rb` as `Formula/aioffice.rb` (filling the four `sha256` values from the v1.6.0 `SHA256SUMS`); the install scripts are served straight from `main`. See [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 1.5
 
 1.5.0 is the fifth **post-1.0 feature release** — purely **additive**, so `surfaceVersion` stays **`1.0`** (everything below lives inside the frozen 1.0 contract line; nothing was removed or renamed, and the `op` kinds are unchanged). **It closes the modern scalar-function gap** (`XLOOKUP`/`IFS`/`SWITCH`/`LET`/… now evaluate) and rounds out the spreadsheet **what-if toolkit** (Scenario Manager + Goal Seek), while Word gains table-cell formulas, building blocks and line numbering, and PowerPoint gains embedded fonts, action buttons and custom layouts. 18 verbs / 17 MCP tools unchanged.
@@ -562,7 +606,7 @@ Claude Desktop / Claude Code config:
 
 `preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0); `office_diff` (semantic compare) is the 16th tool, added in M8 (v0.9.0); `office_convert` (cross-format conversion) is the 17th tool, added in M9 (v0.10.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test, and still under it with `office_convert` added.
 
-## Command surface (v1.5.0)
+## Command surface (v1.6.0)
 
 | Verb | Summary |
 |---|---|
@@ -700,7 +744,9 @@ AIOffice's surface is **deliberately incompatible** with existing office CLIs: c
 
 ## Docs
 
-[docs/DESIGN.md](docs/DESIGN.md) — architecture & surface spec · [docs/MCP.md](docs/MCP.md) — MCP tool spec · [docs/PARITY.md](docs/PARITY.md) — capability ledger · `aioffice help <topic>` — built-in progressive docs · [SMOKE_REPORT.md](SMOKE_REPORT.md) — real end-to-end verification log
+**Getting started:** [docs/INSTALL.md](docs/INSTALL.md) — all four install paths · [docs/MCP-SETUP.md](docs/MCP-SETUP.md) — wire it into Claude / Cursor / any MCP host · [SKILL.md](SKILL.md) — AI-facing onboarding guide · [docs/COOKBOOK.md](docs/COOKBOOK.md) — 10 copy-paste recipes · [docs/SIGNING.md](docs/SIGNING.md) — code-signing / notarization roadmap
+
+**Reference:** [docs/DESIGN.md](docs/DESIGN.md) — architecture & surface spec · [docs/MCP.md](docs/MCP.md) — MCP tool spec · [docs/PARITY.md](docs/PARITY.md) — capability ledger · [CONTRACT.md](CONTRACT.md) — frozen v1.0 AI-facing surface · `aioffice help <topic>` — built-in progressive docs · [SMOKE_REPORT.md](SMOKE_REPORT.md) — real end-to-end verification log
 
 ## License
 

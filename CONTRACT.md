@@ -493,6 +493,17 @@ code is unchanged and still fires for `LAMBDA` and the lambda-helpers
 (`MAP`/`REDUCE`/`SCAN`/`BYROW`/`BYCOL`), which cannot be evaluated headlessly — so an
 agent that handled the warning keeps working.
 
+## 7f. 1.6.0 — distribution release (no surface change)
+
+Package **1.6.0** is a **distribution & onboarding release**: the native binary is the
+**same surface** as 1.5.0 — **`surfaceVersion 1.0`**, the **18 CLI verbs / 17 MCP tools**,
+every envelope shape, error code, exit code, op/view/tool vocabulary and addressing form in
+§§1–7 are unchanged. Nothing was added to or removed from the contract. The release adds
+only packaging and onboarding artifacts *around* the binary (an npm package, a Homebrew
+formula, one-line install scripts, and the `SKILL.md` / `docs/COOKBOOK.md` /
+`docs/INSTALL.md` / `docs/MCP-SETUP.md` / `docs/SIGNING.md` guides). Agents that target the
+1.5.0 surface are byte-for-byte compatible with 1.6.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

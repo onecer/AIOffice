@@ -4,6 +4,52 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.6.0 — distribution & onboarding release (no capability change)
+
+`surfaceVersion` stays **1.0** and the native binary is **byte-for-byte the same surface**
+as 1.5.0 — **18 CLI verbs / 17 MCP tools**, every envelope, error code and addressing form
+unchanged. This release adds the packaging and onboarding layer *around* the binary, almost
+entirely **outside the C#/.NET source tree**, so the build and tests are unaffected.
+**2125 tests** across 7 projects (Core 124 · Word 612 · Excel 572 · Pptx 675 · MCP 87 ·
+Preview 24 · Render 31), green on macOS + Windows.
+
+### Added
+
+- **npm package** (`npm/`): `npm i -g aioffice` (or `npx aioffice …`). A dependency-free
+  wrapper that, on install, downloads the matching native binary from the GitHub release
+  and **SHA256-verifies** it against the release `SHA256SUMS`; the binary is not shipped in
+  the tarball. A thin bin shim spawns the binary with full stdio passthrough (so
+  `aioffice mcp` stays transparent) and lazily installs on first run if `--ignore-scripts`
+  skipped the postinstall. Env overrides `AIOFFICE_DOWNLOAD_VERSION` /
+  `AIOFFICE_DOWNLOAD_BASEURL` for pinning and private mirrors.
+- **Homebrew formula** (`dist/Formula/aioffice.rb`): `brew install onecer/tap/aioffice`
+  installs the prebuilt per-platform binary; the formula's `test` block runs
+  `aioffice version`.
+- **One-line install scripts**: `dist/install.sh` (POSIX sh, macOS/Linux) and
+  `dist/install.ps1` (Windows PowerShell) — detect platform → download → SHA256-verify →
+  install → PATH hint; `install.sh` strips the macOS Gatekeeper quarantine attribute.
+- **Onboarding docs**: `SKILL.md` (AI-facing skill guide), `docs/COOKBOOK.md` (10
+  copy-paste recipes), `docs/INSTALL.md` (all four install paths), `docs/MCP-SETUP.md`
+  (Claude Desktop / Claude Code / Cursor / generic stdio / TonoBraid configs), and
+  `docs/SIGNING.md` (code-signing / notarization roadmap). README (EN + 简体中文) gains an
+  INSTALL section (npm → brew → curl → direct download) and a "Use it from your agent (MCP)"
+  section.
+
+### Changed
+
+- `Directory.Build.props` `Version` → **1.6.0**, so the tagged release binaries report
+  `1.6.0` and the npm `package.json` / Homebrew formula / install-script defaults all pin
+  to **1.6.0** consistently.
+- Homebrew formula `license` corrected to **Apache-2.0** to match the repository `LICENSE`.
+
+### Publishing (run by a maintainer — not done in this release)
+
+- npm: `cd npm && npm publish --access public` (after `npm login`); optionally add the
+  `NPM_TOKEN` secret to enable the `.github/workflows/npm-publish.yml` auto-publish on tag.
+- Homebrew: create `onecer/homebrew-tap` and commit `dist/Formula/aioffice.rb` as
+  `Formula/aioffice.rb`, filling the four `sha256` values from the v1.6.0 `SHA256SUMS`.
+- Install scripts are served straight from `main` — no publish step.
+
 ## 1.5.0 — fifth post-1.0 feature release (additive)
 
 `surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0

@@ -1,0 +1,43 @@
+{
+  "name": "aioffice",
+  "version": "1.6.0",
+  "description": "AIOffice — an AI-native CLI + MCP server for creating, reading, editing, rendering and validating real Office documents (.docx/.xlsx/.pptx). Installs a single self-contained native binary downloaded and SHA256-verified from the GitHub release.",
+  "bin": {
+    "aioffice": "bin/aioffice.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/aioffice.js",
+    "install.js",
+    "platform.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onecer/AIOffice.git"
+  },
+  "homepage": "https://github.com/onecer/AIOffice#readme",
+  "bugs": {
+    "url": "https://github.com/onecer/AIOffice/issues"
+  },
+  "keywords": [
+    "office",
+    "docx",
+    "xlsx",
+    "pptx",
+    "ooxml",
+    "mcp",
+    "ai",
+    "cli",
+    "word",
+    "excel",
+    "powerpoint",
+    "automation"
+  ],
+  "license": "Apache-2.0",
+  "author": "onecer"
+}

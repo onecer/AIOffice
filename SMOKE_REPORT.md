@@ -2350,3 +2350,132 @@ $ embedded-font loop   → embed .ttf, get /fonts count 1, validate ok
 - MCP tool surface ~3235 tokens, within the 3500 ceiling (TokenBudgetTests green).
 - Binary size 38,578,633 bytes (~36.8 MB).
 - No git commit/push, no tags (left for the human release engineer).
+
+# AIOffice 1.6.0 — Distribution & Onboarding Smoke Report
+
+**Distribution release — no capability change.** The native binary keeps the same surface as
+1.5.0 (18 verbs / 17 MCP tools / `surfaceVersion 1.0`). This section records the real local
+verification of the packaging + onboarding paths (npm, install.sh, cookbook, MCP handshake)
+done by the integrator. **No publish, no signing, no git** was performed.
+
+## Build & tests — PASS (2125/2125 across 7 projects, at version 1.6.0)
+
+`dotnet build AIOffice.sln -c Release -warnaserror` → **0 warnings, 0 errors**.
+`dotnet test AIOffice.sln -c Release --no-build` → all green:
+
+| Project | Passed | Failed | Skipped |
+| --- | --- | --- | --- |
+| AIOffice.Core.Tests | 124 | 0 | 0 |
+| AIOffice.Word.Tests | 612 | 0 | 0 |
+| AIOffice.Excel.Tests | 572 | 0 | 0 |
+| AIOffice.Pptx.Tests | 675 | 0 | 0 |
+| AIOffice.Mcp.Tests | 87 | 0 | 0 |
+| AIOffice.Preview.Tests | 24 | 0 | 0 |
+| AIOffice.Render.Tests | 31 | 0 | 0 |
+| **Total** | **2125** | **0** | **0** |
+
+(SchemaConsistency + token-budget guards green. The version bump to 1.6.0 broke nothing.)
+
+## Version bump — applied & consistent
+
+- `Directory.Build.props` `<Version>` → **1.6.0**; the freshly published `osx-arm64` binary
+  reports `{"version":"1.6.0"}` on `version` and `doctor` (surfaceVersion `1.0`, verbs 18,
+  mcpTools 17).
+- `npm/package.json` `version` = **1.6.0**; `dist/Formula/aioffice.rb` `version "1.6.0"`;
+  `dist/install.sh` / `install.ps1` `FALLBACK_VERSION = v1.6.0`; `docs/INSTALL.md` and
+  `npm/README.md` examples pin **v1.6.0**. Verified no stray version drift across all
+  builder outputs (the only `1.5.0` strings remaining are the Formula's clearly-labeled
+  "example from v1.5.0" sha256 placeholders and the dist/README test note).
+- Homebrew formula `license` corrected **MIT → Apache-2.0** to match the repo `LICENSE`.
+
+## npm path — PASS (tarball + bin shim + doctor + MCP handshake)
+
+The repo is **private**, so anonymous `https.get` to its release assets 404s
+(`releases/download/v1.5.0/SHA256SUMS → HTTP 404`); the real binary was fetched with
+authenticated `gh release download` into a local mirror to drive the verification.
+
+- `npm pack` (in `npm/`) → `aioffice-1.6.0.tgz` (6,255 bytes). Tarball contents exactly:
+  `package/{README.md, bin/aioffice.js, install.js, package.json, platform.js}` — **no
+  binary shipped inside the tarball** (downloaded on install, as designed).
+- `npm install --ignore-scripts <tarball>` then seeded the **real v1.5.0** `aioffice-mac-arm64`
+  into `bin/`; the postinstall idempotency path correctly logged
+  *"could not fetch SHA256SUMS (Protocol http: not supported); a binary is already
+  installed, keeping it"* over the plain-HTTP mirror (the production fetch uses HTTPS to
+  GitHub) and kept the binary.
+- **bin shim → native binary**: `node_modules/.bin/aioffice doctor` →
+  `ok:true | version:1.5.0 | surfaceVersion:1.0 | verbs:18 | mcpTools:17` (the pinned
+  download is 1.5.0, proving the shim spawns the right binary with full passthrough).
+- **MCP handshake through the shim**: `initialize` + `notifications/initialized` +
+  `tools/list` over stdio → `initialize` returned `serverInfo {name:"aioffice"}`,
+  `protocolVersion:"2024-11-05"`; `tools/list` returned **exactly 17 tools**:
+  `file_snapshot, office_audit, office_convert, office_create, office_diff, office_edit,
+  office_get, office_help, office_query, office_read, office_render, office_schema,
+  office_status, office_template, office_validate, preview_open, preview_selection`.
+
+## install.sh path — PASS (download → SHA256 verify → install → run)
+
+`VERSION=v1.5.0 AIOFFICE_BIN=/tmp/aio-bin sh install.sh` run end-to-end against the local
+v1.5.0 mirror (the only edit was the base URL → mirror, because the private repo 404s the
+public download URL — identical to the dist/README test note):
+
+```
+aioffice-install: v1.5.0 aioffice-mac-arm64 -> /tmp/aio-bin/aioffice
+aioffice-install: sha256 verified (63a5d987013ed77561ee5e50d4a8e4f66ae81ec668cb0a5e99cc2b5e0c6aee6c)
+aioffice-install: NOTE /tmp/aio-bin is not on your PATH. ... export PATH="/tmp/aio-bin:$PATH"
+aioffice-install: installed. {"ok":true,"data":{"name":"aioffice","version":"1.5.0",...}}
+```
+
+- Installed binary: `aioffice version` → valid JSON envelope; `aioffice doctor` →
+  `ok:true | version:1.5.0 | surfaceVersion:1.0 | verbs:18 | mcpTools:17 | handlers ready:true`.
+- The four `sha256` example values in `dist/Formula/aioffice.rb` were confirmed to **exactly
+  match** the real v1.5.0 `SHA256SUMS` (mac-arm64 `63a5d98…`, mac-x64 `b8bc8d2…`, linux-arm64
+  `c73b06d…`, linux-x64 `842a55b…`) — the human swaps them for v1.6.0 values after tagging.
+
+## Cookbook recipes — PASS (run verbatim on the 1.6.0 binary)
+
+| Recipe | Result |
+| --- | --- |
+| 1. Quarterly report (.docx) | `validate` → `{valid:true, count:0}` |
+| 3. Budget (.xlsx) SUM + XLOOKUP | `B4` → value 17000 / `=SUM(B2:B3)` / cached 17000; `F2` → value 12500 / `=_xlfn.XLOOKUP(...)` / cached 12500 |
+| 4. Mail-merge from JSON | `{records:2, produced:[letter-Ada.docx, letter-Grace.docx], unresolved:[]}`; "Dear Ada," / "Your balance is $1,200…Gold member." |
+| 7. Convert docx → pptx | `{from:docx, to:pptx, blocksWritten:2, dropped:[]}`; slide 1 Title "Status Report" |
+
+## SKILL.md golden examples — PASS (spot-checked 3 on the 1.6.0 binary)
+
+- **Example 1** (create/edit/read docx): `read --view outline` →
+  `{path:/body/p[1], level:1, text:"Status Report"}` ✓
+- **Example 2** (xlsx formula): `get /Sheet1/B4` →
+  `{value:2050, formula:=SUM(B2:B3), cachedValue:2050, text:"2,050"}` ✓
+- **Example 6** (diff vs snapshot): `diff --snapshot N --view detailed` →
+  `{kind:modified, path:/body/table[1]/tr[4]/tc[3], before:+12%, after:+11.8%, detail:cell}` ✓
+
+## Human-only publish steps (NOT done here — need credentials)
+
+1. **Cut the v1.6.0 release** (tag `v1.6.0`; the existing `release.yml` builds + uploads the
+   6 binaries + `SHA256SUMS`). Make the repo/releases **public** so the curl/npm/brew download
+   URLs resolve for end users (today they 404 — private repo).
+2. **npm publish**: `cd npm && npm publish --access public` (after `npm login`). To automate on
+   tag, add the **`NPM_TOKEN`** repo secret — `.github/workflows/npm-publish.yml` then waits for
+   `SHA256SUMS` and publishes (it skips cleanly with a notice while the secret is absent).
+3. **Homebrew tap**: create public repo **`onecer/homebrew-tap`**, copy
+   `dist/Formula/aioffice.rb` in as `Formula/aioffice.rb`, and replace the four `sha256`
+   placeholders with the v1.6.0 values:
+   `gh release download v1.6.0 -R onecer/AIOffice -p SHA256SUMS -O - | sort`.
+4. **Install scripts** (`dist/install.sh` / `install.ps1`) are served straight from `main` —
+   no publish step.
+5. **Signing/notarization**: not done; roadmap in `docs/SIGNING.md`. Binaries remain unsigned
+   (`xattr -d com.apple.quarantine` for direct macOS downloads).
+
+## Invariants — held (1.6.0)
+- Published `osx-arm64` binary reports version **1.6.0**, **18 verbs / 17 MCP tools**,
+  **surfaceVersion `1.0`** (unchanged). The 1.6.0 binary is the same surface as 1.5.0 — no
+  capability change; only the version string moved.
+- No surface change in CONTRACT §§1–7; §7f records that 1.6.0 is a distribution release with
+  no contract change. The frozen error/exit-code lists, op kinds, and addressing forms are
+  unchanged.
+- Every builder output (npm/, dist/, SKILL.md, docs/*) reconciled: product name `aioffice`,
+  version `1.6.0`, asset names, `onecer/AIOffice` URLs, Apache-2.0 license — no drift.
+- dist `osx-arm64/aioffice` rebuilt at 1.6.0, size 38,578,649 bytes (~36.8 MB); `doctor`
+  smoke green.
+- No npm publish, no homebrew push, no signing/notarization, no git commit/push/tag —
+  all left for the human release engineer.

@@ -3,6 +3,11 @@ bin/
 obj/
 artifacts/
 
+# ...but the npm package's bin shim is a real source file, not build output —
+# the blanket bin/ rule above would otherwise drop it and ship a broken package.
+!npm/bin/
+!npm/bin/**
+
 # User-specific / IDE
 *.user
 *.suo
@@ -30,6 +35,14 @@ fixtures/tmp/
 *.log
 .omc/logs/
 
-# publish output
-dist/
+# publish output — the built single-file binaries under dist/<rid>/ are publish
+# artifacts (ignored), but the distribution SOURCE in dist/ (install scripts, the
+# Homebrew formula, README) is tracked: install.sh/install.ps1 are served from
+# raw.githubusercontent.com/.../main/dist/, and the formula is copied into the tap.
+dist/osx-arm64/
+dist/osx-x64/
+dist/win-x64/
+dist/win-arm64/
+dist/linux-x64/
+dist/linux-arm64/
 release-v0.4.0/
