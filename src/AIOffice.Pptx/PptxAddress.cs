@@ -33,6 +33,8 @@ internal enum PptxRootKind
 /// /slide[2]/table[1]/tr[2]    (1-based row in the table)
 /// /slide[2]/table[1]/tr[2]/tc[3] (1-based cell in the row)
 /// /slide[2]/smartart[1]       (1-based SmartArt index on the slide; read-only)
+/// /slide[2]/group[@id=7]      (a shape group, by its p:grpSp shape id)
+/// /slide[2]/group[@id=7]/shape[@id=9] (a shape inside the group)
 /// /slide[2]/animation[1]      (1-based animation index on the slide)
 /// /slide[2]/comment[@id=3]    (stable comment id on the slide)
 /// /slide[2]/embed[1]          (1-based embedded-object index on the slide)
@@ -49,7 +51,8 @@ internal sealed partial record PptxAddress
     public const string GrammarHint =
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
-        "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
+        "/slide[2]/smartart[1], /slide[2]/group[@id=7], /slide[2]/group[@id=7]/shape[@id=9], " +
+        "/slide[2]/animation[1], /slide[2]/comment[@id=3], " +
         "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/media[1], /slide[2]/media[@id=7], " +
         "/slide[2]/shape[@id=7]/omath[1], " +
         "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
@@ -86,6 +89,9 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^smartart\[([0-9]+)\]$")]
     private static partial Regex SmartArtSegment();
+
+    [GeneratedRegex(@"^group\[@id=([0-9]+)\]$")]
+    private static partial Regex GroupSegment();
 
     [GeneratedRegex(@"^animation\[([0-9]+)\]$")]
     private static partial Regex AnimationSegment();
@@ -154,6 +160,9 @@ internal sealed partial record PptxAddress
     /// <summary>1-based SmartArt index on the slide (/slide[i]/smartart[k]); null otherwise.</summary>
     public int? SmartArtIndex { get; init; }
 
+    /// <summary>Stable group id on the slide (/slide[i]/group[@id=N], the p:grpSp's shape id); null otherwise.</summary>
+    public uint? GroupId { get; init; }
+
     /// <summary>1-based animation index on the slide (/slide[i]/animation[k]); null otherwise.</summary>
     public int? AnimationIndex { get; init; }
 
@@ -192,6 +201,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses a SmartArt diagram by index (/slide[i]/smartart[k]).</summary>
     public bool IsSmartArt => SmartArtIndex.HasValue;
+
+    /// <summary>
+    /// True when the path addresses a shape group (/slide[i]/group[@id=N]) or a shape
+    /// inside one (/slide[i]/group[@id=N]/shape[...]).
+    /// </summary>
+    public bool IsGroup => GroupId.HasValue;
 
     /// <summary>True when the path addresses an animation by index (/slide[i]/animation[k]).</summary>
     public bool IsAnimation => AnimationIndex.HasValue;
@@ -328,6 +343,29 @@ internal sealed partial record PptxAddress
             return address with { SmartArtIndex = ParseIndex(smartArtMatch.Groups[1].Value, raw) };
         }
 
+        if (GroupSegment().Match(segments[1]) is { Success: true } groupMatch)
+        {
+            var grouped = address with { GroupId = uint.Parse(groupMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
+            if (segments.Length == 2)
+            {
+                return grouped;
+            }
+
+            // A child shape inside the group: /slide[i]/group[@id=N]/shape[k] or shape[@id=M].
+            grouped = WithShapeSegment(grouped, segments[2], raw,
+                $"After group[@id=N] comes shape[k] or shape[@id=M]; got '{segments[2]}'.");
+            if (segments.Length > 3)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    $"Paragraph/run addressing inside a group's child shape is not supported: {raw}",
+                    "Set the child shape's text with a 'text' prop on the shape path " +
+                    "(e.g. /slide[1]/group[@id=5]/shape[@id=7]), or ungroup first and address /slide[i]/shape[j]/p[k].");
+            }
+
+            return grouped;
+        }
+
         if (AnimationSegment().Match(segments[1]) is { Success: true } animationMatch)
         {
             if (segments.Length > 2)
@@ -390,7 +428,7 @@ internal sealed partial record PptxAddress
 
         var shaped = WithShapeSegment(address, segments[1], raw,
             $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
-            $"embed[k], embed[@id=N], media[k], media[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"embed[k], embed[@id=N], media[k], media[@id=N], group[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -527,6 +565,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical SmartArt path (/slide[i]/smartart[k]) of the addressed diagram.</summary>
     public string CanonicalSmartArtPath => Units.Inv($"/slide[{SlideIndex}]/smartart[{SmartArtIndex}]");
+
+    /// <summary>The canonical group path (/slide[i]/group[@id=N]) of the addressed group, by its p:grpSp shape id.</summary>
+    public string CanonicalGroupPath => Units.Inv($"/slide[{SlideIndex}]/group[@id={GroupId}]");
 
     /// <summary>The canonical animation-index path (/slide[i]/animation[k]) of the addressed animation.</summary>
     public string CanonicalAnimationPath => Units.Inv($"/slide[{SlideIndex}]/animation[{AnimationIndex}]");

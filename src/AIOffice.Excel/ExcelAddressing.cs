@@ -23,6 +23,7 @@ internal enum ExcelTargetKind
     Table,
     Slicer,
     Embed,
+    FormControl,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -79,6 +80,9 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based per-sheet embed index when <see cref="Kind"/> is Embed.</summary>
     public int? EmbedIndex { get; init; }
+
+    /// <summary>1-based per-sheet form-control index when <see cref="Kind"/> is FormControl.</summary>
+    public int? FormControlIndex { get; init; }
 }
 
 /// <summary>
@@ -325,6 +329,16 @@ internal static partial class ExcelPaths
                 segment.Index is { } embedIndex:
                 return new ExcelTarget { Kind = ExcelTargetKind.Embed, Sheet = sheet, EmbedIndex = embedIndex };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "formControl", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } formControlIndex:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.FormControl,
+                    Sheet = sheet,
+                    FormControlIndex = formControlIndex,
+                };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
@@ -362,6 +376,9 @@ internal static partial class ExcelPaths
 
     public static string EmbedPath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/embed[{index}]");
+
+    public static string FormControlPath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/formControl[{index}]");
 
     /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
     public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>

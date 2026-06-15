@@ -50,7 +50,7 @@ OfficeCLI 的**能力清单**是我们长期对齐的北极星（台账见 `docs
 
 ## 2. 命令面规范（v0）
 
-CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。M10 的嵌入对象（`embed`/`extract`）与 pptx 公式搭载在既有 `office_edit`/`office_read`/`office_get` 上，工具数维持 **17**。M10 起 `schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**——面向 AI 的契约版本，独立于工具包版本（见 [CONTRACT.md](../CONTRACT.md)）；1.0.0 起其值为 **`1.0`**（M10 期间为 `1.0-rc`）。
+CLI 动词与 MCP 工具 **1:1 镜像**（§2.7），一套心智模型。v0 起 13 个能力，M1 加 `preview`（14），M7 加 `audit`（15），M8 加 `diff`（16），M9 加 `convert`（17）。M10 的嵌入对象（`embed`/`extract`）与 pptx 公式搭载在既有 `office_edit`/`office_read`/`office_get` 上，工具数维持 **17**。M10 起 `schema` 与 `doctor` capabilities 声明稳定的 **`surfaceVersion`**——面向 AI 的契约版本，独立于工具包版本（见 [CONTRACT.md](../CONTRACT.md)）；1.0.0 起其值为 **`1.0`**（M10 期间为 `1.0-rc`）。1.1.0 与 1.2.0（两个 1.0 之后功能版本）均**纯增量**：1.1 扩图表/iconSet/引用/媒体/效果/切换；1.2 加 pptx SmartArt 创建/连接符/分组（`group`·`ungroup` 是 `add` type 值而非新 op kind）、docx 图表目录/索引/邮件合并、xlsx 表单控件/轻量保护/numberFormat 命名预设——全部搭载既有 `office_edit`/`office_read`/`office_get`，工具数维持 **17**、`surfaceVersion` 维持 **`1.0`**，仅包版本递增到 **1.2.0**。
 
 ### 2.1 全局约定
 

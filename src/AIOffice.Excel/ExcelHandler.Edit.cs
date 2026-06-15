@@ -15,12 +15,19 @@ public sealed partial class ExcelHandler
         "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "color", "merge", "name",
         "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
         "height", "width", "hidden", "hyperlink", "hyperlinkTooltip", "cellStyle",
+        // v1.2 (additive): per-cell lock + sheet/workbook protection.
+        "locked", "protected", "password", "protectStructure", "protectWindows",
+        "allowFormatCells", "allowFormatColumns", "allowFormatRows", "allowInsertColumns", "allowInsertRows",
+        "allowDeleteColumns", "allowDeleteRows", "allowSort", "allowAutoFilter", "allowPivotTables",
+        "allowSelectLockedCells", "allowSelectUnlockedCells",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
     [
         "sheet", "table", "row", "col", "chart", "pivot", "conditionalFormat", "image", "name", "note",
         "dataValidation", "sparkline", "comment", "reply", "group", "slicer", "embed",
+        // v1.2 (additive): interactive form controls.
+        "formControl",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -58,6 +65,7 @@ public sealed partial class ExcelHandler
         var charts = new ChartOpBatch(file);
         var slicers = new ExcelSlicers.Batch(file);
         var embeds = new ExcelEmbeds.Batch(file);
+        var formControls = new ExcelFormControls.Batch(file);
         var post = new PostSaveWork();
         var opWarnings = new List<Warning>();
         var details = new List<object>(ops.Count);
@@ -67,7 +75,7 @@ public sealed partial class ExcelHandler
             // before any later op that addresses the same sheet (it would
             // otherwise replay after that op and clobber its cells).
             FlushStreamedWritesFor(post, ops[i].Path);
-            ApplyOp(ctx, workbook, ops[i], i, details, charts, slicers, embeds, post, opWarnings);
+            ApplyOp(ctx, workbook, ops[i], i, details, charts, slicers, embeds, formControls, post, opWarnings);
         }
 
         if (ArgBool(ctx, "dryRun"))
@@ -128,6 +136,22 @@ public sealed partial class ExcelHandler
                 // Slicers ride the same post-save discipline as charts: ClosedXML
                 // cannot author them and preserves them byte-identical once present.
                 ExcelSlicers.Apply(file, slicers.Ops);
+            }
+
+            if (!formControls.IsEmpty)
+            {
+                // Form controls ride the same post-save discipline as charts and
+                // slicers: ClosedXML cannot author the legacy VML/ctrlProp parts
+                // and preserves them byte-identical once present (measured).
+                ExcelFormControls.Apply(file, formControls.Ops);
+            }
+
+            if (post.HasProtection)
+            {
+                // Sheet/workbook protection is authored raw post-save: ClosedXML
+                // cannot lift a password-protected sheet without the password,
+                // and this is documented light protection aioffice always owns.
+                ExcelProtection.Apply(file, post.SheetProtections, post.WorkbookProtection);
             }
 
             if (!embeds.IsEmpty)
@@ -292,6 +316,19 @@ public sealed partial class ExcelHandler
         /// cannot see threadedComments parts).
         /// </summary>
         public ExcelComments.Model? Comments { get; set; }
+
+        /// <summary>
+        /// Sheet-protection changes queued for the post-save raw pass (v1.2).
+        /// ClosedXML cannot unprotect a password-protected sheet without the
+        /// password, so the sheetProtection bytes are owned directly.
+        /// </summary>
+        public List<SheetProtectionSpec> SheetProtections { get; } = [];
+
+        /// <summary>Workbook-structure-protection change queued for the post-save raw pass (v1.2).</summary>
+        public WorkbookProtectionSpec? WorkbookProtection { get; set; }
+
+        /// <summary>True when any protection change must be written after the save.</summary>
+        public bool HasProtection => SheetProtections.Count > 0 || WorkbookProtection is not null;
     }
 
     /// <summary>The batch's comment model, loaded lazily from the on-disk file.</summary>
@@ -363,18 +400,26 @@ public sealed partial class ExcelHandler
 
     private static void ApplyOp(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post,
-        List<Warning> warnings)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds,
+        ExcelFormControls.Batch formControls, PostSaveWork post, List<Warning> warnings)
     {
-        // "/" (document root) is meaningful only as a replace scope (expanded
-        // upstream into per-sheet ops). Any other root-targeted op has no xlsx
-        // surface — address a sheet/cell/range instead.
+        // "/" (document root) is a replace scope (expanded upstream into
+        // per-sheet ops) AND, since v1.2, the workbook-structure protection
+        // target ({op:set, path:/, props:{protectStructure:true}}). Any other
+        // root-targeted op has no xlsx surface.
+        if (op.Op == "set" && op.Path == "/")
+        {
+            ApplyWorkbookProtection(op, index, details, post);
+            return;
+        }
+
         if (op.Op != "replace" && op.Path == "/")
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"ops[{index}]: xlsx has no document-root edit target ('/').",
-                "Address a sheet (/Sheet1), cell (/Sheet1/A1) or range; document-wide find/replace uses 'replace' with path '/'.");
+                "Address a sheet (/Sheet1), cell (/Sheet1/A1) or range; document-wide find/replace uses 'replace' with path '/'. " +
+                "Workbook structure protection uses {op:set, path:/, props:{protectStructure:true}}.");
         }
 
         // Workbook-level edit targets (document properties, named cell styles)
@@ -432,10 +477,10 @@ public sealed partial class ExcelHandler
                 ApplySet(workbook, op, index, details, post);
                 break;
             case "add":
-                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, post);
+                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
                 break;
             case "remove":
-                ApplyRemove(ctx, workbook, op, index, details, charts, slicers, embeds, post);
+                ApplyRemove(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
                 break;
             case "replace":
                 ApplyReplace(workbook, op, index, details, warnings);
@@ -532,12 +577,13 @@ public sealed partial class ExcelHandler
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
             or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image
             or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment
-            or ExcelTargetKind.Table or ExcelTargetKind.Embed)
+            or ExcelTargetKind.Table or ExcelTargetKind.Embed or ExcelTargetKind.FormControl)
         {
             var kindName = target.Kind switch
             {
                 ExcelTargetKind.ConditionalFormat => "conditionalFormat",
                 ExcelTargetKind.DataValidation => "dataValidation",
+                ExcelTargetKind.FormControl => "formControl",
                 _ => target.Kind.ToString().ToLowerInvariant(),
             };
             throw new AiofficeException(
@@ -548,6 +594,18 @@ public sealed partial class ExcelHandler
         }
 
         var applied = new List<string>();
+
+        // v1.2 protection props, routed before the cell-style props. 'locked'
+        // targets a cell/range/row/col; the sheet-protection props target a sheet.
+        if (props.TryGetPropertyValue("locked", out var lockedNode) && lockedNode is not null)
+        {
+            ExcelProtection.ApplyLocked(target, BoolPropValue(lockedNode, "locked", index), index, applied);
+        }
+
+        if (props.Any(p => ExcelProtection.SheetProps.Contains(p.Key, StringComparer.Ordinal)))
+        {
+            ApplySheetProtection(target, props, index, applied, post);
+        }
 
         if (props.TryGetPropertyValue("value", out var valueNode))
         {
@@ -561,7 +619,10 @@ public sealed partial class ExcelHandler
 
         if (props.TryGetPropertyValue("numberFormat", out var formatNode) && formatNode is not null)
         {
-            StyleOf(target).NumberFormat.Format = formatNode.GetValue<string>();
+            // A named preset (v1.2, additive) resolves to its OOXML format code;
+            // any other string is a literal custom format and passes through
+            // unchanged (the v1.0 behavior — never broken).
+            StyleOf(target).NumberFormat.Format = ExcelNumberFormats.Resolve(formatNode.GetValue<string>());
             applied.Add("numberFormat");
         }
 
@@ -690,6 +751,103 @@ public sealed partial class ExcelHandler
         }
 
         details.Add(new { op = "set", path = DocPath.Parse(op.Path).ToCanonicalString(), applied });
+    }
+
+    // ----- protection (v1.2) -----------------------------------------------------
+
+    /// <summary>Routes the sheet-protection props ({protected, password?, allow*?}) to the protection layer.</summary>
+    private static void ApplySheetProtection(
+        ExcelTarget target, JsonObject props, int index, List<string> applied, PostSaveWork post)
+    {
+        bool? protect = props.TryGetPropertyValue("protected", out var protectedNode) && protectedNode is not null
+            ? BoolPropValue(protectedNode, "protected", index)
+            : null;
+        var password = props.TryGetPropertyValue("password", out var passwordNode) &&
+                       passwordNode is JsonValue passwordValue &&
+                       passwordValue.GetValueKind() == JsonValueKind.String
+            ? passwordValue.GetValue<string>()
+            : null;
+
+        if (protect is null)
+        {
+            // allow*/password without 'protected' is ambiguous — name the fix.
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: sheet-protection props need 'protected' to say whether to protect or unprotect.",
+                "Pass {protected:true} (with optional password / allow* flags) or {protected:false} to lift protection.");
+        }
+
+        var flags = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var prop in ExcelProtection.SheetProps)
+        {
+            if (prop is "protected" or "password")
+            {
+                continue;
+            }
+
+            if (props.TryGetPropertyValue(prop, out var node) && node is not null)
+            {
+                flags[prop] = BoolPropValue(node, prop, index);
+            }
+        }
+
+        // Queue the raw post-save write (one entry per sheet; a later op on the
+        // same sheet replaces the earlier queued state).
+        post.SheetProtections.RemoveAll(s =>
+            string.Equals(s.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase));
+        post.SheetProtections.Add(ExcelProtection.BuildSheetSpec(target, protect.Value, password, flags, index));
+        applied.Add(protect.Value ? "protected" : "unprotected");
+    }
+
+    /// <summary>Handles {op:set, path:/, props:{protectStructure, protectWindows?, password?}}.</summary>
+    private static void ApplyWorkbookProtection(EditOp op, int index, List<object> details, PostSaveWork post)
+    {
+        var props = op.Props;
+        if (props is null || props.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: workbook-root set needs props.",
+                "Use {op:set, path:/, props:{protectStructure:true, password:\"secret\"}}.");
+        }
+
+        foreach (var (key, _) in props)
+        {
+            if (!ExcelProtection.WorkbookProps.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: unknown workbook-root prop '{key}'.",
+                    "The workbook root ('/') supports only structure protection: " +
+                    string.Join(", ", ExcelProtection.WorkbookProps) + ".",
+                    candidates: ExcelProtection.WorkbookProps);
+            }
+        }
+
+        bool? structure = props.TryGetPropertyValue("protectStructure", out var sNode) && sNode is not null
+            ? BoolPropValue(sNode, "protectStructure", index)
+            : null;
+        bool? windows = props.TryGetPropertyValue("protectWindows", out var wNode) && wNode is not null
+            ? BoolPropValue(wNode, "protectWindows", index)
+            : null;
+        var password = props.TryGetPropertyValue("password", out var pwNode) &&
+                       pwNode is JsonValue pwValue && pwValue.GetValueKind() == JsonValueKind.String
+            ? pwValue.GetValue<string>()
+            : null;
+
+        if (structure is null && windows is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: workbook protection needs protectStructure (and/or protectWindows).",
+                "Use {op:set, path:/, props:{protectStructure:true}} to lock the sheet structure.");
+        }
+
+        post.WorkbookProtection = ExcelProtection.BuildWorkbookSpec(structure, windows, password, index);
+        var applied = post.WorkbookProtection.Clear
+            ? new List<string> { "structureUnprotected" }
+            : [structure == true ? "structureProtected" : "windowsProtected"];
+        details.Add(new { op = "set", path = "/", applied });
     }
 
     private static string? ValueTypeOf(JsonObject props) =>
@@ -1063,12 +1221,16 @@ public sealed partial class ExcelHandler
 
     private static void ApplyAdd(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds,
+        ExcelFormControls.Batch formControls, PostSaveWork post)
     {
         switch (op.Type)
         {
             case "sheet":
                 AddSheet(workbook, op, index, details);
+                break;
+            case "formControl":
+                AddFormControl(workbook, op, index, details, formControls);
                 break;
             case "table":
                 details.Add(ExcelTables.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
@@ -1290,6 +1452,31 @@ public sealed partial class ExcelHandler
     }
 
     /// <summary>
+    /// Validates an <c>add formControl</c> op against the live workbook and queues
+    /// the raw OpenXml write (VML drawing + ctrlProp + worksheet controls) for the
+    /// post-save pass; ClosedXML cannot author these parts.
+    /// </summary>
+    private static void AddFormControl(
+        XLWorkbook workbook, EditOp op, int index, List<object> details, ExcelFormControls.Batch formControls)
+    {
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        var spec = ExcelFormControls.ParseAdd(target, op, index);
+        var controlIndex = formControls.Add(spec);
+        details.Add(new
+        {
+            op = "add",
+            type = "formControl",
+            path = ExcelPaths.FormControlPath(target.Sheet, controlIndex),
+            kind = op.Props is not null && op.Props.TryGetPropertyValue("kind", out var kindNode) &&
+                   kindNode is JsonValue kindValue && kindValue.GetValueKind() == JsonValueKind.String
+                ? kindValue.GetValue<string>()
+                : null,
+            cell = spec.Cell,
+            linkedCell = spec.LinkedCell,
+        });
+    }
+
+    /// <summary>
     /// Validates an <c>add embed</c> op against the live workbook (the sheet must
     /// exist and the src must resolve inside the sandbox) and queues the raw
     /// EmbeddedPackagePart write for the post-save pass.
@@ -1316,7 +1503,8 @@ public sealed partial class ExcelHandler
 
     private static void ApplyRemove(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
-        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds, PostSaveWork post)
+        ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds,
+        ExcelFormControls.Batch formControls, PostSaveWork post)
     {
         // Group spans (row[a]:row[b] / col[a]:col[b]) are an element-range form
         // the shared grammar cannot parse; peel them off first (precedent:
@@ -1473,6 +1661,12 @@ public sealed partial class ExcelHandler
             case ExcelTargetKind.Slicer:
                 slicers.Remove(target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.SlicerIndex!.Value, index);
                 details.Add(new { op = "remove", path = canonical, removed = "slicer" });
+                break;
+
+            case ExcelTargetKind.FormControl:
+                formControls.Remove(
+                    target.Sheet.Name, ExcelPaths.SheetPath(target.Sheet), target.FormControlIndex!.Value, index);
+                details.Add(new { op = "remove", path = canonical, removed = "formControl" });
                 break;
 
             case ExcelTargetKind.Cell:

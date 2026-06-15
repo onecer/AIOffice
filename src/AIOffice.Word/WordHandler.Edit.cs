@@ -151,6 +151,14 @@ public sealed partial class WordHandler
             "add" when op.Type == "endnote" => ApplyAddEndnote(doc, op),
             "add" when op.Type == "toc" && session.Track => throw TrackedStructureUnsupported("toc"),
             "add" when op.Type == "toc" => ApplyAddToc(doc, file, op, session),
+            "add" when op.Type == "tableOfFigures" && session.Track => throw TrackedStructureUnsupported("tableOfFigures"),
+            "add" when op.Type == "tableOfFigures" => ApplyAddTableOfFigures(doc, op, session),
+            "add" when op.Type == "indexEntry" && session.Track => throw TrackedStructureUnsupported("indexEntry"),
+            "add" when op.Type == "indexEntry" => ApplyAddIndexEntry(doc, op),
+            "add" when op.Type == "index" && session.Track => throw TrackedStructureUnsupported("index"),
+            "add" when op.Type == "index" => ApplyAddIndex(doc, op, session),
+            "add" when op.Type == "mergeField" && session.Track => throw TrackedStructureUnsupported("mergeField"),
+            "add" when op.Type == "mergeField" => ApplyAddMergeField(doc, op),
             "add" when op.Type == "watermark" && session.Track => throw TrackedStructureUnsupported("watermark"),
             "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op),
             "add" when op.Type == "sectionBreak" && session.Track => throw TrackedStructureUnsupported("sectionBreak"),
@@ -179,6 +187,8 @@ public sealed partial class WordHandler
             "remove" when rootName == "footnote" => ApplyRemoveFootnote(doc, op),
             "remove" when rootName == "endnote" => ApplyRemoveEndnote(doc, op),
             "remove" when rootName == "toc" => ApplyRemoveToc(doc, op),
+            "remove" when rootName == "tableOfFigures" => ApplyRemoveTableOfFigures(doc, op),
+            "remove" when rootName == "index" => ApplyRemoveIndex(doc, op),
             "remove" when rootName == "watermark" => ApplyRemoveWatermark(doc, op),
             "remove" when rootName == "section" => ApplyRemoveSection(doc, op),
             "remove" when rootName == "sdt" => ApplyRemoveContentControl(doc, op),
@@ -303,6 +313,9 @@ public sealed partial class WordHandler
                 "sectionBreak (props.kind), field (props.kind=pageNumber|numPages|date|docTitle), " +
                 "equation (props.latex, props.display), columnBreak, " +
                 "caption (props.label=Figure|Table|Equation, props.text), crossRef (props.to, props.show), " +
+                "tableOfFigures (props.label — lists captions of one label), " +
+                "indexEntry (props.text — marks an XE field), index (props.columns — builds the index), " +
+                "mergeField (props.name — a MERGEFIELD the template verb fills by name), " +
                 "embed (props.src — embeds any file as an OLE package object), " +
                 "source (props.tag/kind/title — adds a bibliography source at /sources), " +
                 "citation (props.source — cites a source by tag), bibliography (props.style), " +
@@ -310,7 +323,8 @@ public sealed partial class WordHandler
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
                     "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
-                    "caption", "crossRef", "embed", "source", "citation", "bibliography"]),
+                    "caption", "crossRef", "tableOfFigures", "indexEntry", "index", "mergeField",
+                    "embed", "source", "citation", "bibliography"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

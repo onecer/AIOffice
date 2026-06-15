@@ -70,6 +70,12 @@ public static class WarningCodes
     /// <summary>A diff change list exceeded its cap and was truncated; narrow the comparison.</summary>
     public const string DiffTruncated = "diff_truncated";
 
+    /// <summary>A table of figures' entries were pre-rendered from the cached captions; Word repaginates page numbers on open/refresh.</summary>
+    public const string FiguresCached = "figures_cached";
+
+    /// <summary>An index's entries were pre-rendered/alphabetized from the marked XE fields; Word computes page numbers on open/refresh.</summary>
+    public const string IndexCached = "index_cached";
+
     /// <summary>An equation carried a LaTeX construct the converter only partially rendered.</summary>
     public const string EquationPartial = "equation_partial";
 
@@ -113,7 +119,7 @@ public static class WarningCodes
     public static readonly IReadOnlyList<string> All =
     [
         AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
-        EquationPartial, FindNoMatch, FormulaNotEvaluated, MdBlockSkipped, MdHtmlSkipped,
+        EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, IndexCached, MdBlockSkipped, MdHtmlSkipped,
         MdImageSkipped, MdLinkSkipped, ResultTruncated, ScopeDefaulted, StreamFallback,
         TemplateUnresolved, TocPagesUnknown, TocRefreshed,
     ];

@@ -39,6 +39,16 @@ public sealed partial class WordHandler
                     MetaFor(file, Rev.OfBytes(bytes)));
             }
 
+            // Merge fields use a /mergeField[@name=X] virtual path, addressed by
+            // name (like captions), so intercept before the core path grammar.
+            if (pathArg.StartsWith("/mergeField[", StringComparison.Ordinal))
+            {
+                var (mergeFieldPath, mergeFieldProps) = GetMergeFieldProperties(doc, pathArg);
+                return Envelope.Ok(
+                    new { path = mergeFieldPath, type = "mergeField", properties = mergeFieldProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
             var docPath = DocPath.Parse(pathArg);
             var meta = MetaFor(file, Rev.OfBytes(bytes));
 
@@ -150,6 +160,22 @@ public sealed partial class WordHandler
                     var properties = GetTocProperties(doc, docPath);
                     return Envelope.Ok(
                         new { path = "/toc[1]", type = "toc", properties },
+                        meta);
+                }
+
+                case "tableOfFigures":
+                {
+                    var properties = GetTableOfFiguresProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = "/tableOfFigures[1]", type = "tableOfFigures", properties },
+                        meta);
+                }
+
+                case "index":
+                {
+                    var properties = GetIndexProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = "/index[1]", type = "index", properties },
                         meta);
                 }
 

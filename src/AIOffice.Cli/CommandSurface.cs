@@ -97,7 +97,7 @@ public static class CommandSurface
                 new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject|extract, path, type?, props?, position?}]. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does not modify the source."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
-                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video)."),
+                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video). v1.2: smartart/connector/group/ungroup (pptx), tableOfFigures/indexEntry/index/mergeField (docx), formControl (xlsx)."),
                 new("remove", "<path>", "Sugar: remove the node at <path>.", Repeatable: true),
                 new("find", "<text>", "Sugar: document-wide find/replace (docx body+headers+footers, every sheet, every slide incl. notes); aggregate {replacements, locations} in the result."),
                 new("replace", "<text>", "Replacement text for --find (default: empty = delete matches); in --regex mode $1 etc. substitute groups."),
@@ -202,7 +202,7 @@ public static class CommandSurface
         new("help",
             "Progressive documentation: addressing grammar, selectors, per-format properties, errors.",
             "aioffice help [topic]",
-            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert (or any verb name). Omit for the index.")],
+            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert, smartart, connectors, number-formats, structural-fields (or any verb name). Omit for the index.")],
             [],
             "office_help"),
 

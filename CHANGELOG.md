@@ -4,6 +4,66 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.2.0 — second post-1.0 feature release (additive)
+
+`surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0
+contract line (new `add` type values, new prop keys, two new warnings). Nothing was
+removed or renamed; the op **kinds** are unchanged (`group`/`ungroup` are `add`
+**types**, not new op kinds) and the 18 CLI verbs / 17 MCP tools stand. **1807
+tests** across 7 projects (Core 124 · Word 529 · Excel 477 · Pptx 535 · MCP 87 ·
+Preview 24 · Render 31), green on macOS + Windows.
+
+### Added
+
+- **SmartArt** (pptx, create + read): a new `add` type `smartart` builds a real
+  diagram — layouts `list` · `process` · `hierarchy` · `orgChart` · `cycle`, each
+  mapping to a built-in PowerPoint layout that regenerates on open. Nodes are a flat
+  `{text, level}` list (0-based level builds the hierarchy). `office_get
+  /slide[i]/smartart[k]` returns the layout and node tree; `read --view structure`
+  lists each diagram. Editing nodes in place is `unsupported_feature` (rebuild).
+- **Connectors** (pptx): a new `add` type `connector` wires a `p:cxnSp` between two
+  shapes — `kind` straight/elbow/curved, `startArrow`/`endArrow` none/arrow/triangle,
+  `color`, `width`, `name`. Returns `/slide[i]/shape[@id=N]`.
+- **Grouping** (pptx): new `add` types `group` (wrap two or more shapes →
+  `/slide[i]/group[@id=N]`, children addressable as `…/group[@id=N]/shape[@id=M]`) and
+  `ungroup` (dissolve a group, promoting children with absolute coordinates). These
+  are `add` **types**, not new op kinds.
+- **Table of figures** (docx): a new `add` type `tableOfFigures` collects
+  Figure/Table/Equation captions into a navigable list; entries come from cached
+  captions with a `figures_cached` warning (Word repaginates on open).
+- **Index** (docx): new `add` types `indexEntry` (marks an `XE` field) and `index`
+  (builds the alphabetized index, `columns` configurable); page numbers cached with an
+  `index_cached` warning.
+- **Mail-merge fields** (docx): a new `add` type `mergeField` inserts a `MERGEFIELD`
+  the `template` verb fills by name — from the **same** `--data` map that fills
+  `{{key}}` placeholders.
+- **Form controls** (xlsx): a new `add` type `formControl` authors interactive legacy
+  controls — `checkbox`, `optionButton`, `spinner`, `comboBox`, `listBox`, `button` —
+  with `linkedCell`, `items`/`listFillRange`, `min`/`max`/`increment`. `read --view
+  structure` lists per-sheet controls.
+- **Protection** (xlsx): per-cell `locked`; sheet-path `protected` (+ `password` and
+  `allow*` action flags); workbook-root `protectStructure` (+ `protectWindows`).
+  Excel's light UI protection (not encryption); AIOffice always owns and can lift it.
+  `office_get` reflects the state.
+- **numberFormat presets** (xlsx): named codes for the `numberFormat` prop —
+  `accounting-usd`, `currency-usd/eur/gbp/jpy`, `percent`, `percent2`, `scientific`,
+  `fraction`, `thousands`, `integer`, `date-iso`, `datetime-iso`, `time`, `duration`,
+  `text`. A preset resolves to its Excel code; any non-preset string stays a literal.
+- **Structure / fields surfacing** (docx, existing views): `read --view structure`
+  now lists `tablesOfFigures`, `indexes` and `mergeFields`; `read --view fields` lists
+  merge fields alongside content controls.
+- New `office_help` topics: `smartart`, `connectors`, `number-formats`,
+  `structural-fields`; the `properties-pptx` and `properties-xlsx` topics document the
+  new vocabulary.
+- New warnings: `figures_cached`, `index_cached`.
+
+### Changed
+
+- Package `Version` → `1.2.0`. `surfaceVersion` unchanged at `1.0`.
+- CLI `schema` / MCP `office_schema` and `office_help` surface the additive
+  vocabulary; the `SchemaConsistencyTests` and token-budget guards stay green (the MCP
+  tool surface grew by enum text only and stays inside its 3500-token ceiling).
+
 ## 1.1.0 — first post-1.0 feature release (additive)
 
 `surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0

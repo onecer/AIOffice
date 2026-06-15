@@ -619,6 +619,84 @@ internal static class PptxQueryEngine
             Media = view.Element is P.Picture picture && PptxMedia.MediaKindOf(picture) is { } mediaKind
                 ? new { Kind = mediaKind, Path = Units.Inv($"{address.CanonicalSlidePath}/media[@id={view.Id}]") }
                 : null,
+            Connector = view.Element is P.ConnectionShape connector ? ConnectorInfo(connector) : null,
+        };
+    }
+
+    /// <summary>The endpoints a connector references (the from/to shape ids), when it has cxn refs.</summary>
+    private static object? ConnectorInfo(P.ConnectionShape connector)
+    {
+        var (startId, endId) = PptxConnectors.Endpoints(connector);
+        if (startId is null && endId is null)
+        {
+            return null;
+        }
+
+        return new { From = startId, To = endId };
+    }
+
+    /// <summary>
+    /// The `get` projection for a group path: identity, geometry, and either the group's
+    /// children (/slide[i]/group[@id=N]) or the addressed child's shape detail
+    /// (/slide[i]/group[@id=N]/shape[...]).
+    /// </summary>
+    public static object GroupDetail(PresentationPart presentation, PptxAddress address)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var group = PptxGroups.ResolveGroup(tree, address);
+
+        if (address.HasShape)
+        {
+            var child = PptxGroups.ResolveChild(group, address);
+            var childGeometry = PptxDoc.Geometry(child.Element);
+            var childParagraph = (child.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
+            return new
+            {
+                Path = Units.Inv($"{address.CanonicalGroupPath}/shape[@id={child.Id}]"),
+                GroupPath = address.CanonicalGroupPath,
+                Slide = address.SlideIndex,
+                Id = child.Id,
+                Ordinal = child.Ordinal,
+                Kind = child.Kind,
+                Name = child.Name,
+                AltText = PptxDoc.AltText(child.Element),
+                Geometry = PptxDoc.GeometryToken(child.Element),
+                Text = PptxDoc.ShapeText(child.Element),
+                X = childGeometry is { } cg1 ? Units.EmuToCm(cg1.X) : (double?)null,
+                Y = childGeometry is { } cg2 ? Units.EmuToCm(cg2.Y) : (double?)null,
+                W = childGeometry is { } cg3 ? Units.EmuToCm(cg3.Cx) : (double?)null,
+                H = childGeometry is { } cg4 ? Units.EmuToCm(cg4.Cy) : (double?)null,
+                Fill = PptxDoc.FillHex(child.Element),
+                Font = childParagraph is null ? null : FontInfo(childParagraph),
+            };
+        }
+
+        var geometry = PptxDoc.Geometry(group);
+        var children = PptxGroups.Children(group);
+        var nv = group.NonVisualGroupShapeProperties?.NonVisualDrawingProperties;
+        return new
+        {
+            Path = address.CanonicalGroupPath,
+            Slide = address.SlideIndex,
+            Id = address.GroupId,
+            Kind = "group",
+            Name = nv?.Name?.Value,
+            AltText = PptxDoc.AltText(group),
+            AltTitle = PptxDoc.AltTitle(group),
+            X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
+            Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
+            W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
+            H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
+            ChildCount = children.Count,
+            Children = children.Select(c => new
+            {
+                Path = Units.Inv($"{address.CanonicalGroupPath}/shape[@id={c.Id}]"),
+                Id = c.Id,
+                Kind = c.Kind,
+                Name = c.Name,
+                Text = Snippet(PptxDoc.ShapeText(c.Element)),
+            }).ToList<object>(),
         };
     }
 

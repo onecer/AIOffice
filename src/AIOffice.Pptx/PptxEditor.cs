@@ -27,7 +27,8 @@ internal sealed record PptxOpOutcome(
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "equation"];
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "equation",
+         "smartart", "connector", "group", "ungroup"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
@@ -160,6 +161,57 @@ internal static class PptxEditor
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
+            case "smartart":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "smartart");
+                return PptxDiagrams.Add(slidePart, address.SlideIndex, op.Props);
+            }
+
+            case "connector":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "connector");
+                var id = PptxConnectors.Add(slidePart, op.Props);
+                return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
+            }
+
+            case "group":
+            {
+                if (address.IsNotes)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add group targets a slide, not '{op.Path}'.",
+                        "Use the slide path with a shapes list: {\"op\":\"add\",\"path\":\"/slide[1]\"," +
+                        "\"type\":\"group\",\"props\":{\"shapes\":[\"@id1\",\"@id2\"]}}.");
+                }
+
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "group");
+                return PptxGroups.Group(slidePart, address.SlideIndex, op.Props);
+            }
+
+            case "ungroup":
+            {
+                if (!address.IsGroup || address.HasShape)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add ungroup targets a group, not '{op.Path}'.",
+                        "Use a group path: {\"op\":\"add\",\"path\":\"/slide[1]/group[@id=5]\",\"type\":\"ungroup\"} — " +
+                        "it dissolves the group, promoting its children back onto the slide with absolute coordinates.");
+                }
+
+                if (op.Props is { Count: > 0 })
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        "ungroup takes no props.",
+                        "Send it without props: {\"op\":\"add\",\"path\":\"" + op.Path + "\",\"type\":\"ungroup\"}.");
+                }
+
+                var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, op.Path);
+                return PptxGroups.Ungroup(slidePart, address);
+            }
+
             case "embed":
             {
                 var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "embed");
@@ -242,7 +294,9 @@ internal static class PptxEditor
                     "table (with rows/cols), row (on a table path), " +
                     "animation (on a shape path), comment and reply (on a comment path), embed (a file as an OLE object), " +
                     "media (an mp4/mov video or m4a/mp3/wav audio clip), " +
-                    "equation (LaTeX -> OMML math in a text box).",
+                    "equation (LaTeX -> OMML math in a text box), " +
+                    "smartart (a list/process/hierarchy/orgChart/cycle diagram), connector (a line/elbow/curved link between two shapes), " +
+                    "group (wrap shapes in a group), ungroup (dissolve a group, on a group path).",
                     candidates: AddTypes);
         }
     }
@@ -320,7 +374,8 @@ internal static class PptxEditor
 
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment || address.IsEmbed || address.IsMedia)
+        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment ||
+            address.IsEmbed || address.IsMedia || address.IsGroup || address.IsSmartArt)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -551,6 +606,11 @@ internal static class PptxEditor
                 "position/size sets target its shape path (/slide[i]/shape[@id=N]).");
         }
 
+        if (address.IsGroup)
+        {
+            return SetGroupProps(presentation, address, op.Props);
+        }
+
         if (!address.HasShape)
         {
             return SetSlideProps(presentation, address, op.Props);
@@ -631,6 +691,59 @@ internal static class PptxEditor
         }
 
         return PptxCharts.EmbedData(presentation, address);
+    }
+
+    /// <summary>
+    /// set on a group path: a group child (/group[@id=N]/shape[...]) takes normal shape
+    /// props; the group itself (/group[@id=N]) takes name, altText and altTitle (resize a
+    /// group by ungrouping first, then move/resize the shapes).
+    /// </summary>
+    private static string SetGroupProps(PresentationPart presentation, PptxAddress address, JsonObject props)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var group = PptxGroups.ResolveGroup(tree, address);
+
+        if (address.HasShape)
+        {
+            var child = PptxGroups.ResolveChild(group, address);
+            SetShapeProps(child, props);
+            return Units.Inv($"{address.CanonicalGroupPath}/shape[@id={child.Id}]");
+        }
+
+        var groupView = new ShapeView(
+            group,
+            group.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value ?? address.GroupId ?? 0,
+            0,
+            "group",
+            group.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Name?.Value ?? string.Empty);
+
+        foreach (var (key, value) in props)
+        {
+            switch (key)
+            {
+                case "name":
+                    var nonVisual = group.NonVisualGroupShapeProperties?.NonVisualDrawingProperties
+                        ?? throw CorruptPresentation("group has no p:cNvPr");
+                    nonVisual.Name = value is null ? string.Empty : J.ScalarText(value);
+                    break;
+                case "altText":
+                    SetAltText(groupView, value);
+                    break;
+                case "altTitle":
+                    SetAltTitle(groupView, value);
+                    break;
+                default:
+                    throw new AiofficeException(
+                        ErrorCodes.UnsupportedFeature,
+                        $"Prop '{key}' cannot be set on a group.",
+                        "A group takes name, altText and altTitle; set geometry/fill/text on its child shapes " +
+                        "(/slide[i]/group[@id=N]/shape[...]), or ungroup first to move/resize the shapes freely.",
+                        candidates: ["name", "altText", "altTitle"]);
+            }
+        }
+
+        return address.CanonicalGroupPath;
     }
 
     /// <summary>Slide-level set: solid background, transition and transition duration.</summary>
@@ -784,6 +897,26 @@ internal static class PptxEditor
                 "Remove the paragraph (/slide[i]/shape[j]/p[k]) or set the paragraph text instead.");
         }
 
+        if (address.IsGroup)
+        {
+            var groupSlidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, op.Path);
+            var groupTree = PptxDoc.RequireShapeTree(groupSlidePart);
+            var group = PptxGroups.ResolveGroup(groupTree, address);
+
+            // remove on a group child deletes just that child; on the group itself it
+            // deletes the whole group (use type ungroup to dissolve and keep the children).
+            if (address.HasShape)
+            {
+                var child = PptxGroups.ResolveChild(group, address);
+                var childPath = Units.Inv($"{address.CanonicalGroupPath}/shape[@id={child.Id}]");
+                child.Element.Remove();
+                return childPath;
+            }
+
+            group.Remove();
+            return address.CanonicalGroupPath;
+        }
+
         if (!address.HasShape)
         {
             RemoveSlide(presentation, address);
@@ -887,6 +1020,11 @@ internal static class PptxEditor
                 $"'{op.Path}' cannot be moved; rows and cells stay in grid order.",
                 "Add/remove rows to restructure, or move the whole table: " +
                 "{\"op\":\"move\",\"path\":\"" + address.CanonicalTablePath + "\",\"position\":\"front\"}.");
+        }
+
+        if (address.IsGroup)
+        {
+            return MoveGroupZOrder(presentation, address, op.Position);
         }
 
         if (address.HasShape || address.IsChart || address.IsTable)
@@ -1006,6 +1144,63 @@ internal static class PptxEditor
         }
 
         return view.CanonicalPath(address.SlideIndex);
+    }
+
+    /// <summary>
+    /// Z-order move for a top-level group: reorders the p:grpSp among the slide's spTree
+    /// children (front/back/forward/backward). A group child cannot be reordered on its
+    /// own — ungroup first.
+    /// </summary>
+    private static string MoveGroupZOrder(PresentationPart presentation, PptxAddress address, string? position)
+    {
+        if (address.HasShape)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "A group's child shapes cannot be reordered on their own.",
+                "Move the whole group ({\"op\":\"move\",\"path\":\"" + address.CanonicalGroupPath + "\",\"position\":\"front\"}), " +
+                "or ungroup first to reorder the shapes individually.");
+        }
+
+        var token = position?.Trim().ToLowerInvariant();
+        if (token is null || !ZOrderPositions.Contains(token, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown z-order position '{position ?? "(none)"}'.",
+                "Use front (paint last/topmost), back (paint first/bottom), forward or backward.",
+                candidates: ZOrderPositions);
+        }
+
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var group = PptxGroups.ResolveGroup(tree, address);
+        var siblings = PptxDoc.Shapes(tree).Select(s => s.Element).ToList();
+        var index = siblings.FindIndex(s => ReferenceEquals(s, group));
+
+        switch (token)
+        {
+            case "front" when index < siblings.Count - 1:
+                group.Remove();
+                tree.InsertAfter(group, siblings[^1]);
+                break;
+            case "back" when index > 0:
+                group.Remove();
+                tree.InsertBefore(group, siblings[0]);
+                break;
+            case "forward" when index < siblings.Count - 1:
+                group.Remove();
+                tree.InsertAfter(group, siblings[index + 1]);
+                break;
+            case "backward" when index > 0:
+                group.Remove();
+                tree.InsertBefore(group, siblings[index - 1]);
+                break;
+            default:
+                break;
+        }
+
+        return address.CanonicalGroupPath;
     }
 
     /// <summary>Parses a "readingOrder N" position into its 1-based target, or null when not that form.</summary>

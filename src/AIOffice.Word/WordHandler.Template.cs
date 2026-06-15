@@ -52,6 +52,10 @@ public sealed partial class WordHandler
             {
                 replaced += MergeParagraph(paragraph, data, resolvedKeys, unresolvedKeys);
             }
+
+            // The same data map fills MERGEFIELD complex fields by name, alongside
+            // the {{key}} markers; unresolved field names join the same report.
+            replaced += MergeMergeFields(doc, data, resolvedKeys, unresolvedKeys);
         }
 
         var newBytes = ms.ToArray();

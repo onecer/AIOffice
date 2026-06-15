@@ -102,6 +102,7 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Slicer => Envelope.Ok(SlicerTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.Embed => Envelope.Ok(
                 ExcelEmbeds.Describe(ExcelEmbeds.Resolve(file, target)), MetaFor(file, sw)),
+            ExcelTargetKind.FormControl => Envelope.Ok(FormControlTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -189,6 +190,47 @@ public sealed partial class ExcelHandler
         return ExcelSlicers.Describe(info);
     }
 
+    /// <summary>One form control, read back from the raw package (ClosedXML cannot see controls).</summary>
+    private static object FormControlTargetInfo(string file, ExcelTarget target)
+    {
+        List<FormControlInfo> controls;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            controls = ExcelFormControls.Read(document)
+                .Where(c => string.Equals(c.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var wanted = target.FormControlIndex!.Value;
+        var info = controls.FirstOrDefault(c => c.Index == wanted);
+        if (info is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No formControl[{wanted}] on sheet '{target.Sheet.Name}' ({controls.Count} control(s) exist).",
+                controls.Count > 0
+                    ? "Form-control indices are 1-based per sheet; pick one of the candidates."
+                    : "This sheet has no form controls; add one with edit op {op:add, type:formControl, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + ", props:{kind:\"checkbox\", cell:\"E2\", linkedCell:\"F2\"}}.",
+                candidates: controls.Count > 0
+                    ? [.. controls.Select(c => c.Path)]
+                    : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return new
+        {
+            path = info.Path,
+            kind = "formControl",
+            sheet = target.Sheet.Name,
+            controlKind = info.Kind,
+            cell = info.Cell,
+            linkedCell = info.LinkedCell,
+            min = info.Min,
+            max = info.Max,
+            increment = info.Increment,
+        };
+    }
+
     /// <summary>One chart, read back from the raw package (ClosedXML cannot see charts).</summary>
     private static object ChartTargetInfo(string file, ExcelTarget target)
     {
@@ -251,6 +293,10 @@ public sealed partial class ExcelHandler
             // surface a count so 'get' on a sheet hints at them (polish, M10).
             embeds = ExcelEmbeds.ListOnSheet(file, sheet.Name).Count,
             pageSetup = PageSetupInfo(sheet),
+            // v1.2: protection state (null/omitted when the sheet is unprotected),
+            // plus the workbook-structure protection (omitted when not set).
+            protection = ExcelProtection.SheetInfo(sheet),
+            workbookProtection = ExcelProtection.WorkbookInfo(sheet.Workbook),
         };
     }
 
@@ -283,6 +329,10 @@ public sealed partial class ExcelHandler
             numberFormat = string.IsNullOrEmpty(numberFormat) ? null : numberFormat,
             bold = cell.Style.Font.Bold ? true : (bool?)null,
             italic = cell.Style.Font.Italic ? true : (bool?)null,
+            // v1.2: only surface 'locked' when it deviates from the OOXML default
+            // (locked) — i.e. report an explicitly UNLOCKED cell so an editable
+            // window under sheet protection is visible.
+            locked = ExcelProtection.IsLocked(cell) ? (bool?)null : false,
             merged = MergedRangeOf(sheet, cell),
             hyperlink = hyperlink is null
                 ? null

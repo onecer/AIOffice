@@ -282,3 +282,36 @@ one slide; `--to html` renders a simple HTML projection; `--to png` screenshots
 one slide via a local Chrome/Edge (default `/slide[1]` — pass `--scope`);
 `--to pdf` (M3) prints the WHOLE deck to one PDF, one page per slide
 (`--scope /slide[N]` narrows it to a single page).
+
+## SmartArt, connectors, grouping (v1.2)
+
+Three structural shape operations on a slide (all `add` ops, all validate clean).
+See `aioffice help smartart` and `aioffice help connectors` for full prop tables.
+
+- **SmartArt** — a real diagram (regenerates in PowerPoint from layout + data):
+
+      {op:"add", path:"/slide[1]", type:"smartart",
+        props:{layout:"process", nodes:[{text:"Plan",level:0},{text:"Build",level:0}]}}
+
+  `layout` is one of `list`, `process`, `hierarchy`, `orgChart`, `cycle`;
+  `nodes` is a flat `{text, level}` list (0-based level builds the hierarchy).
+  Create + read only — `get /slide[1]/smartart[1]` returns the layout and node
+  tree; editing nodes in place is `unsupported_feature` (rebuild instead).
+
+- **Connector** — a line between two shapes (`@id` or name):
+
+      {op:"add", path:"/slide[1]", type:"connector",
+        props:{from:"@2", to:"@3", kind:"elbow", endArrow:"arrow"}}
+
+  `kind` straight|elbow|curved; `startArrow`/`endArrow` none|arrow|triangle;
+  `color`, `width`, `name`. Returns `/slide[i]/shape[@id=N]`.
+
+- **Group / ungroup** — wrap or dissolve a set of shapes:
+
+      {op:"add", path:"/slide[1]", type:"group", props:{shapes:["@2","@3"]}}
+      {op:"add", path:"/slide[1]/group[@id=5]", type:"ungroup"}
+
+  `group` needs two or more distinct shapes and returns
+  `/slide[i]/group[@id=N]`; a group child is
+  `/slide[i]/group[@id=N]/shape[@id=M]`. `ungroup` (on the group path, no props)
+  promotes children back onto the slide with absolute coordinates.

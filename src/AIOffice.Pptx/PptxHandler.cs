@@ -138,6 +138,11 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
             return PptxSmartArt.Detail(presentation, address);
         }
 
+        if (address.IsGroup)
+        {
+            return PptxQueryEngine.GroupDetail(presentation, address);
+        }
+
         if (address.IsAnimation)
         {
             return PptxAnimations.Detail(presentation, address);

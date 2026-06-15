@@ -69,6 +69,10 @@ public static class HelpTopics
                 - pptx/chart      native charts + cross-doc dataFrom (M3, kinds expanded 1.1)
                 - pptx/media      embedded audio/video: add type "media" (1.1)
                 - pptx/effect     shape effects: shadow/glow/reflection/outline (1.1)
+                - smartart        create + read a SmartArt diagram on a slide (1.2)
+                - connectors      connectors + group/ungroup shapes on a slide (1.2)
+                - number-formats  named numberFormat presets for xlsx cells (1.2)
+                - structural-fields  docx table of figures, index, mail-merge fields (1.2)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
@@ -731,6 +735,53 @@ public static class HelpTopics
                 Each takes true (default) or an object: shadow {color}, glow {color,radius-pt}, reflection {transparency,size 0-100}, outline {color,width-pt}. false clears.
                 """,
                 ["docx/paragraph", "edit-ops"]),
+
+            ["smartart"] = (
+                """
+                ## pptx SmartArt (1.2) — add type "smartart" on /slide[i] (create + read)
+                {"op":"add","path":"/slide[1]","type":"smartart","props":{"layout":"process",
+                 "nodes":[{"text":"Plan","level":0},{"text":"Build","level":0}]}}
+                layout: list | process | hierarchy | orgChart | cycle (maps to a built-in PowerPoint layout, regenerates on open).
+                nodes:  flat {text, level} list; level is 0-based, a node attaches under the most recent node one level shallower.
+                Optional x/y/w/h, name, colorStyle. get /slide[i]/smartart[k] -> {layout, nodeCount, texts:[{text,level,children?}]}.
+                read {view:"structure"} lists each diagram. Editing nodes in place is unsupported_feature (rebuild with a fresh add).
+                """,
+                ["connectors", "pptx/shape", "edit-ops"]),
+
+            ["connectors"] = (
+                """
+                ## pptx connectors + group/ungroup (1.2) — add ops on /slide[i] (group/ungroup are add TYPES, not new op kinds)
+                connector: {"op":"add","path":"/slide[1]","type":"connector","props":{"from":"@2","to":"@3","kind":"elbow"}}
+                           kind straight|elbow|curved; startArrow/endArrow none|arrow|triangle; color, width, name. from/to are @id or shape name (distinct).
+                           Returns /slide[i]/shape[@id=N]; get reports the endpoint shape ids.
+                group:     {"op":"add","path":"/slide[1]","type":"group","props":{"shapes":["@2","@3"]}} -> /slide[i]/group[@id=N] (>=2 distinct shapes).
+                           Child path /slide[i]/group[@id=N]/shape[@id=M]; set on the group takes name/altText/altTitle.
+                ungroup:   {"op":"add","path":"/slide[1]/group[@id=5]","type":"ungroup"} (no props) — promotes children to the slide with absolute coords.
+                """,
+                ["smartart", "pptx/shape", "edit-ops"]),
+
+            ["number-formats"] = (
+                """
+                ## xlsx numberFormat presets (1.2) — named codes for the numberFormat prop
+                {"op":"set","path":"/Sheet1/B2","props":{"numberFormat":"accounting-usd"}}  -> get reports the resolved code + cached display.
+                presets: accounting-usd, currency-usd/eur/gbp/jpy, percent, percent2, scientific, fraction,
+                         thousands, thousands2, integer, number2, date-iso, datetime-iso, time, duration, text.
+                A preset name (case-insensitive) resolves to its Excel format code; any non-preset string (e.g. "0.00%", "yyyy-mm-dd")
+                is preserved verbatim. A misspelled preset is stored as a literal, not an error. Works on cells and named cellStyles.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["structural-fields"] = (
+                """
+                ## docx structural fields (1.2) — table of figures, index, mail-merge (run WITHOUT --track)
+                tableOfFigures: {"op":"add","path":"/body","type":"tableOfFigures","props":{"label":"Figure","title"?,"position"?}}
+                                label Figure|Table|Equation; entries from cached captions -> figures_cached warning (Word repaginates on open).
+                indexEntry:     {"op":"add","path":"/body/p[3]","type":"indexEntry","props":{"text":"AI","subEntry"?,"find"?}}  (marks an XE field; no quotes)
+                index:          {"op":"add","path":"/body","type":"index","props":{"columns":2}}  alphabetized from XE fields; page numbers cached "?" -> index_cached warning.
+                mergeField:     {"op":"add","path":"/body/p[2]","type":"mergeField","props":{"name":"Name","find"?}}  shows «Name»; the template verb fills it by name (alongside {{key}}).
+                read {view:"structure"} lists TOF/indexes/mergeFields; read {view:"fields"} lists merge fields with content controls.
+                """,
+                ["docx/caption", "docx/field", "edit-ops"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

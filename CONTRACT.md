@@ -74,6 +74,8 @@ Every command prints **exactly one** JSON object to stdout:
   | `diff_truncated` | a diff change list hit its cap and was trimmed |
   | `already_running` | a live preview server was already up; the existing one was reused |
   | `bibliography_cached` | (1.1) a docx bibliography's entries came from cached values; Word rebuilds on field refresh |
+  | `figures_cached` | (1.2) a docx table of figures' entries came from cached captions; Word repaginates page numbers on open/refresh |
+  | `index_cached` | (1.2) a docx index's entries were alphabetized from XE fields with cached page numbers; Word recomputes them on open/refresh |
   | `caption_numbers_cached` | caption/cross-ref numbers came from cached SEQ values |
   | `csv_empty` | a csv import/export produced no rows |
   | `md_block_skipped` · `md_html_skipped` · `md_image_skipped` · `md_link_skipped` | a markdown source had content with no neutral equivalent |
@@ -221,6 +223,42 @@ Package **1.1.0** stays on **`surfaceVersion 1.0`** — every change below is pu
 - **New pptx transition kinds**: `split`, `reveal`, `cut`, `zoom`, added to the
   existing `none` · `fade` · `push` · `wipe`.
 - **New warning** (§1): `bibliography_cached`.
+
+## 7b. 1.2.0 additions (additive within the frozen 1.0 line)
+
+Package **1.2.0** stays on **`surfaceVersion 1.0`** — every change below is purely
+**additive** (new `add` type values, new prop keys, new warnings), so nothing in
+§§1–7 was removed or renamed. The op **kinds** in §5 are unchanged
+(`group`/`ungroup` are `add` **types**, not new op kinds). The 18 CLI verbs / 17 MCP
+tools are unchanged.
+
+- **New pptx `add` types** (§5): `smartart` (a list/process/hierarchy/orgChart/cycle
+  diagram — **create + read**; editing nodes in place is `unsupported_feature`),
+  `connector` (a straight/elbow/curved link between two shapes), `group` (wrap two or
+  more shapes in a group) and `ungroup` (dissolve a group on its `/slide[i]/group[@id=N]`
+  path). `group`/`ungroup` are `add` type values, **not** new `op` kinds. See
+  `office_help {topic:"smartart"}` and `{topic:"connectors"}`.
+- **New docx `add` types** (§5): `tableOfFigures` (a Figure/Table/Equation caption
+  list), `indexEntry` (marks an `XE` field), `index` (builds the alphabetized index)
+  and `mergeField` (a `MERGEFIELD` the `office_template` verb fills by name, alongside
+  `{{key}}` placeholders). See `office_help {topic:"structural-fields"}`.
+- **New xlsx `add` type** (§5): `formControl` (interactive `checkbox` / `optionButton`
+  / `spinner` / `comboBox` / `listBox` / `button` on a sheet). See
+  `office_help {topic:"properties-xlsx"}`.
+- **New xlsx protection props** (set): per-cell `locked`; sheet-path `protected`
+  (+ `password` and the `allow*` action flags); workbook-root `protectStructure`
+  (+ `protectWindows`). This is Excel's light UI protection (not encryption); AIOffice
+  always owns and can lift it. `office_get` reflects the state.
+- **New xlsx `numberFormat` presets** (prop-value enum): named codes such as
+  `accounting-usd`, `currency-usd/eur/gbp/jpy`, `percent`, `percent2`, `scientific`,
+  `fraction`, `thousands`, `integer`, `date-iso`, `datetime-iso`, `time`, `duration`,
+  `text`. A preset resolves to its Excel format code; any non-preset string is still
+  accepted verbatim as a literal code (existing custom formats are unaffected). See
+  `office_help {topic:"number-formats"}`.
+- **New structure/fields surfacing** (§6, existing views — no new view names): docx
+  `read --view structure` now lists `tablesOfFigures`, `indexes` and `mergeFields`;
+  `read --view fields` lists merge fields alongside content controls.
+- **New warnings** (§1): `figures_cached`, `index_cached`.
 
 ## 8. What is experimental (NOT frozen)
 

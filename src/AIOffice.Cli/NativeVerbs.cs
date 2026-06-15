@@ -16,6 +16,8 @@ public sealed class NativeVerbs
     [
         "addressing", "selectors", "properties-docx", "properties-xlsx", "properties-pptx", "errors",
         "equations", "embeds", "rtl", "sections", "audit", "diff", "convert",
+        // v1.2 additive topics.
+        "smartart", "connectors", "number-formats", "structural-fields",
     ];
 
     private readonly Workspace _workspace;

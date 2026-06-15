@@ -1982,3 +1982,94 @@ SchemaConsistencyTests / TokenBudgetTests / SchemaHelpStatusTests: 14/14 PASS
 - Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
 - Binary size 38,352,937 bytes (~36.6 MB).
 - No git commit/push, no tags (left for the human release engineer).
+
+---
+
+# AIOffice 1.2.0 — Integration Smoke Report
+
+Date: 2026-06-15 · Machine: macOS 26.3.0 (Darwin 25.3.0) arm64 · dotnet 10.0.300 (TFM net10.0)
+All commands below were actually executed against the published `dist/osx-arm64/aioffice`; outputs are trimmed but real.
+
+## Build & tests — PASS
+
+```
+$ dotnet build AIOffice.sln -warnaserror   → 0 warnings, 0 errors
+$ dotnet test  AIOffice.sln --no-build      → 1807 passed, 0 failed across 7 projects
+   Core 124 · Word 529 · Excel 477 · Pptx 535 · MCP 87 · Preview 24 · Render 31
+```
+
+The 1.0 guards stay green: `SchemaConsistencyTests` (verb set, `read --view` enum,
+`edit` op list, 17-tool catalog) and `TokenBudgetTests` (whole tool surface ~2970
+tokens ≤ 3500). The new 95 tests landed WITH the features (FormControl 15 ·
+NumberFormatPreset 8 · Protection 13 · Connector 11 · Group 16 · SmartArtCreate 11 ·
+Index 8 · MergeField 7 · TableOfFigures 6). CI-hygiene scan of the new tests: no
+`Environment.NewLine`, no exact-byte-size asserts, no unsorted-order asserts.
+
+## Surface wiring (additive within frozen 1.0)
+
+- New `office_edit` `add` types: pptx `smartart`/`connector`/`group`/`ungroup`,
+  docx `tableOfFigures`/`indexEntry`/`index`/`mergeField`, xlsx `formControl` —
+  wired into CLI `--type` doc, MCP `office_edit` schema, CONTRACT §7b.
+  `group`/`ungroup` are `add` **types**, NOT new op kinds (op kinds stay 8).
+- New props: cell `locked`, sheet/workbook protection (`protected`,
+  `protectStructure`, `protectWindows`, `password`, `allow*`), `numberFormat`
+  named presets — surfaced in `properties-xlsx` help.
+- Reused views (no new view names): docx `read --view structure` now lists
+  `tablesOfFigures`/`indexes`/`mergeFields`; `read --view fields` lists merge fields.
+- New warnings `figures_cached`/`index_cached` (Core `WarningCodes`, CONTRACT §1).
+- New help topics: `smartart`, `connectors`, `number-formats`, `structural-fields`
+  (CLI markdown + MCP `HelpTopics` dictionary), index topic extended.
+
+## Real end-to-end smoke (published binary)
+
+**pptx** — create deck; `add smartart` (process, 4 nodes) → validate 0 → `get`
+reads back `Plan/Build/Ship/Review`; `add` two shapes then a `connector` (elbow,
+endArrow) → validate 0; `group` the two shapes → `get /slide[1]/group[@id=N]` lists
+2 children → `ungroup` → validate 0.
+
+**docx** — add 2 Figure captions; `add tableOfFigures` → structure shows it +
+`figures_cached` warning + validate 0; `add indexEntry` then `add index` →
+`index_cached` + structure entryCount 1 + validate 0; `add mergeField "Name"`;
+`template --data {"Name":"Acme"}` filled **both** the MERGEFIELD «Name» and the
+`{{Name}}` placeholder (Acme ×2, no markers left), validate 0.
+
+**xlsx** — `add formControl` checkbox→F2 and a comboBox with items → validate 0 →
+structure lists 2 controls (checkbox, comboBox); unlock `A1:B2` then `protect` the
+sheet → `get /Sheet1` shows `protection.protected:true`, `get /Sheet1/A1` shows
+`locked:false` → validate 0; `set B2 numberFormat:"accounting-usd"` → `get` shows
+the resolved code `_("$"* #,##0.00…)` and cached display ` $ 1,234.50 `.
+
+```
+doctor: version 1.2.0 | surfaceVersion 1.0 | verbs 18 | mcpTools 17
+schema edit: type doc includes smartart/connector/group/tableOfFigures/formControl
+tools/list over stdio: exactly 17 tools (file_snapshot included)
+SchemaConsistencyTests / TokenBudgetTests: PASS
+```
+
+## Published-binary smoke loop (dist/osx-arm64/aioffice)
+
+- pptx SmartArt (cycle, 3 nodes) → validate 0 → reads back `A/B/C`.
+- xlsx formControl (checkbox→C2) → validate 0.
+- docx caption + tableOfFigures → validate 0 + `figures_cached` + structure
+  entryCount 1.
+
+## Manual-check fixtures (1.2) — added
+
+- `fixtures/manual-check/deck-1.2-smartart.pptx` — a **SmartArt** process diagram +
+  two rounded shapes joined by an **elbow connector** (validator-clean).
+- `fixtures/manual-check/doc-1.2-figures.docx` — two Figure captions, a **table of
+  figures** ("List of Figures") and a 2-column **index** (`figures_cached` +
+  `index_cached`; validator-clean).
+- `fixtures/manual-check/workbook-1.2-protected.xlsx` — a **checkbox** form control,
+  an `accounting-usd` numberFormat cell, an unlocked `A1:B2` range and a
+  **protected** sheet (validator-clean).
+
+## Invariants — held (1.2.0)
+- Published binary == `dotnet run` envelopes; **17 MCP tools**, **surfaceVersion
+  `1.0`** (unchanged), package version **1.2.0**.
+- All 1.2 changes are additive: nothing in CONTRACT §§1–7 removed or renamed; §7b
+  records the additions; op kinds unchanged (`group`/`ungroup` are `add` types);
+  `figures_cached`/`index_cached` added to the frozen warning list.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- Binary size 38,408,217 bytes (~36.6 MB).
+- No git commit/push, no tags (left for the human release engineer).

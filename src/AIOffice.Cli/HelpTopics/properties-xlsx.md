@@ -285,3 +285,55 @@ merged ranges inside a data region (`a11y_merged_data_cells`), images/charts wit
 no alt text (`a11y_no_alt_text`), and a missing workbook Title
 (`a11y_no_doc_title`). `--fix` safely sets a placeholder alt text and a title;
 formula errors and merged data cells are report-only. See `aioffice help audit`.
+
+## Protection (v1.2)
+
+Per-cell lock plus light sheet/workbook protection — Excel's UI guards (which
+actions Excel allows), NOT encryption. aioffice always owns and can lift this
+protection. `get` reflects the state.
+
+- Per-cell `locked` (round-trips natively):
+
+      {op:"set", path:"/Sheet1/A1:B2", props:{locked:false}}   # leave an editable window
+
+- Sheet protection on a sheet path (`/Sheet1`):
+
+      {op:"set", path:"/Sheet1", props:{protected:true}}
+      {op:"set", path:"/Sheet1", props:{protected:true, password:"pw", allowSort:true}}
+
+  Optional `allow*` flags relax a single action: `allowFormatCells`,
+  `allowFormatColumns`, `allowFormatRows`, `allowInsertColumns`,
+  `allowInsertRows`, `allowDeleteColumns`, `allowDeleteRows`, `allowSort`,
+  `allowAutoFilter`, `allowPivotTables`, `allowSelectLockedCells`,
+  `allowSelectUnlockedCells`. Cells default to locked, but the lock only bites
+  once the sheet is protected — unlock a range first to leave it editable.
+
+- Workbook structure protection on the root path (`/`):
+
+      {op:"set", path:"/", props:{protectStructure:true}}        # also protectWindows, password
+
+`get /Sheet1` shows `protected` and the relaxed actions; `get` on a cell shows
+its `locked` state.
+
+## numberFormat presets (v1.2)
+
+The `numberFormat` cell prop accepts a named preset (e.g. `accounting-usd`,
+`percent`, `date-iso`) in addition to a literal Excel format code. A preset
+resolves to its code; any non-preset string is preserved verbatim. Full table:
+`aioffice help number-formats`.
+
+      {op:"set", path:"/Sheet1/B2", props:{numberFormat:"accounting-usd"}}
+
+## Form controls (v1.2)
+
+Interactive legacy form controls on a sheet path; the anchor cell goes in
+`props.cell`. Kinds: `checkbox`, `optionButton`, `spinner`, `comboBox`,
+`listBox`, `button`.
+
+      {op:"add", path:"/Sheet1", type:"formControl", props:{kind:"checkbox", cell:"E2", linkedCell:"F2"}}
+      {op:"add", path:"/Sheet1", type:"formControl", props:{kind:"comboBox", cell:"E4", linkedCell:"F4", items:["Red","Green","Blue"]}}
+      {op:"add", path:"/Sheet1", type:"formControl", props:{kind:"spinner", cell:"E6", linkedCell:"F6", min:0, max:10, increment:1}}
+
+`linkedCell` is where the control writes its value; `comboBox`/`listBox` need
+`items` (a list) or `listFillRange` (a worksheet range). `read --view structure`
+lists per-sheet form controls (1-based); `remove` by `/Sheet1/formControl[N]`.

@@ -117,6 +117,23 @@ internal static class PptxRenderer
             return;
         }
 
+        // A connector with cxn endpoints draws a line between its two anchor shapes.
+        if (shape.Element is P.ConnectionShape connector && PptxConnectors.Endpoints(connector) is { StartId: not null } or { EndId: not null })
+        {
+            AppendConnector(svg, slidePart, connector, x, y, w, h);
+            svg.Append("  </g>\n");
+            return;
+        }
+
+        // A group renders its children at their absolute coordinates (the group's child
+        // space is the identity of its box, the way aioffice writes groups).
+        if (shape.Element is P.GroupShape groupShape)
+        {
+            AppendGroupChildren(svg, slidePart, groupShape, slideIndex);
+            svg.Append("  </g>\n");
+            return;
+        }
+
         AppendOutline(svg, shape, x, y, w, h, fill);
 
         if (shape.Kind == "picture")
@@ -184,6 +201,89 @@ internal static class PptxRenderer
 
         svg.Append(Units.Inv($"    <text x=\"{cx:0.#}\" y=\"{y + h - 6:0.#}\" font-size=\"11\" "));
         svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#e5e7eb\">[{Escape(mediaKind)}] {Escape(name)}</text>\n"));
+    }
+
+    /// <summary>
+    /// Draws a connector as a line between the centers of its two anchor shapes. An elbow
+    /// connector (bentConnector3) draws an orthogonal two-segment path; a curved connector
+    /// draws a quadratic curve; a straight connector draws a direct line. Falls back to the
+    /// connector's own box diagonal when an endpoint shape cannot be located.
+    /// </summary>
+    private static void AppendConnector(StringBuilder svg, SlidePart slidePart, P.ConnectionShape connector, double x, double y, double w, double h)
+    {
+        var (startId, endId) = PptxConnectors.Endpoints(connector);
+        var shapes = PptxDoc.Shapes(slidePart);
+
+        (double Cx, double Cy)? Center(uint? id)
+        {
+            if (id is null)
+            {
+                return null;
+            }
+
+            var anchor = shapes.FirstOrDefault(s => s.Id == id.Value);
+            if (anchor is null || PptxDoc.Geometry(anchor.Element) is not { } g)
+            {
+                return null;
+            }
+
+            return (Units.EmuToPx(g.X + (g.Cx / 2)), Units.EmuToPx(g.Y + (g.Cy / 2)));
+        }
+
+        var from = Center(startId) ?? (x, y);
+        var to = Center(endId) ?? (x + w, y + h);
+
+        var stroke = PptxDoc.LineHex(connector)?.ToLowerInvariant() ?? "333333";
+        var token = PptxDoc.GeometryToken(connector);
+
+        switch (token)
+        {
+            case "bentConnector3":
+                // An L-shaped elbow: go horizontally to the midpoint x, then vertically.
+                var midX = (from.Item1 + to.Item1) / 2;
+                svg.Append(Units.Inv($"    <polyline points=\"{from.Item1:0.#},{from.Item2:0.#} {midX:0.#},{from.Item2:0.#} {midX:0.#},{to.Item2:0.#} {to.Item1:0.#},{to.Item2:0.#}\" "));
+                svg.Append(Units.Inv($"fill=\"none\" stroke=\"#{stroke}\" stroke-width=\"2\"/>\n"));
+                break;
+            case "curvedConnector3":
+                var ctrlX = (from.Item1 + to.Item1) / 2;
+                svg.Append(Units.Inv($"    <path d=\"M {from.Item1:0.#} {from.Item2:0.#} Q {ctrlX:0.#} {from.Item2:0.#} {to.Item1:0.#} {to.Item2:0.#}\" "));
+                svg.Append(Units.Inv($"fill=\"none\" stroke=\"#{stroke}\" stroke-width=\"2\"/>\n"));
+                break;
+            default:
+                svg.Append(Units.Inv($"    <line x1=\"{from.Item1:0.#}\" y1=\"{from.Item2:0.#}\" x2=\"{to.Item1:0.#}\" y2=\"{to.Item2:0.#}\" "));
+                svg.Append(Units.Inv($"stroke=\"#{stroke}\" stroke-width=\"2\"/>\n"));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Draws a group's children at their absolute coordinates, each wrapped in its own
+    /// data-aio-path group (the /slide[i]/group[@id=N]/shape[...] path), so a click maps
+    /// back to the addressable child.
+    /// </summary>
+    private static void AppendGroupChildren(StringBuilder svg, SlidePart slidePart, P.GroupShape groupShape, int slideIndex)
+    {
+        var groupId = groupShape.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value;
+        foreach (var child in PptxGroups.Children(groupShape))
+        {
+            var geometry = PptxDoc.Geometry(child.Element) ?? new GeometryEmu(0, 0, Units.CmToEmu(4), Units.CmToEmu(1.5));
+            var cx = Units.EmuToPx(geometry.X);
+            var cy = Units.EmuToPx(geometry.Y);
+            var cw = Units.EmuToPx(geometry.Cx);
+            var ch = Units.EmuToPx(geometry.Cy);
+            var fill = PptxDoc.FillHex(child.Element);
+
+            var childPath = Units.Inv($"/slide[{slideIndex}]/group[@id={groupId}]/shape[@id={child.Id}]");
+            svg.Append(Units.Inv($"    <g data-aio-path=\"{Escape(childPath)}\" data-name=\"{Escape(child.Name)}\">\n"));
+            AppendOutline(svg, child, cx, cy, cw, ch, fill);
+            if (child.Element is P.Shape { TextBody: { } } && PptxDoc.ShapeText(child.Element) is { Length: > 0 } text)
+            {
+                svg.Append(Units.Inv($"      <text x=\"{cx + (cw / 2):0.#}\" y=\"{cy + (ch / 2):0.#}\" font-size=\"12\" "));
+                svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#111111\">{Escape(text.Split('\n')[0])}</text>\n"));
+            }
+
+            svg.Append("    </g>\n");
+        }
     }
 
     /// <summary>Draws the shape's outline truthfully per its preset geometry.</summary>

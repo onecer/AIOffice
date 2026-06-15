@@ -316,12 +316,17 @@ public sealed partial class WordHandler
 
     // ------------------------------------------------------------------- read
 
-    /// <summary>read --view fields: every content control with its current value.</summary>
+    /// <summary>read --view fields: every content control AND merge field with its current value.</summary>
     private static object FieldsView(WordprocessingDocument doc)
     {
         var fields = EnumerateContentControls(doc)
-            .Select((sdt, i) => ContentControlShape(doc, sdt, i + 1))
+            .Select((sdt, i) => (object)ContentControlShape(doc, sdt, i + 1))
             .ToList();
+
+        // Merge fields share the fields view: each lists its name and current value.
+        var mergeFields = MergeFieldsView(doc);
+        fields.AddRange(mergeFields);
+
         return new { view = "fields", count = fields.Count, fields };
     }
 

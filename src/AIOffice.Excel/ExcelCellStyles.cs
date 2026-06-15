@@ -328,7 +328,10 @@ internal static partial class ExcelCellStyles
     {
         if (definition.NumberFormat is { } numberFormat)
         {
-            style.NumberFormat.Format = numberFormat;
+            // A named preset (v1.2) resolves to its OOXML code; a literal code
+            // passes through unchanged. The stored definition keeps the original
+            // string so 'get' reflects exactly what the caller wrote.
+            style.NumberFormat.Format = ExcelNumberFormats.Resolve(numberFormat);
         }
 
         if (definition.Bold is { } bold)
@@ -484,7 +487,7 @@ internal static partial class ExcelCellStyles
             // written to the cells, so the gallery link is what matters here.
             var formatId = (uint)cellStyleFormats.Elements<S.CellFormat>().Count();
             var numberFormatId = style.NumberFormat is { } fmt
-                ? EnsureNumberFormat(stylesheet, fmt)
+                ? EnsureNumberFormat(stylesheet, ExcelNumberFormats.Resolve(fmt))
                 : 0u;
             var cellFormat = new S.CellFormat { NumberFormatId = numberFormatId, FontId = 0, FillId = 0, BorderId = 0 };
             if (numberFormatId != 0)

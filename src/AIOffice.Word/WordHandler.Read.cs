@@ -245,6 +245,12 @@ public sealed partial class WordHandler
 
         var captions = CaptionsStructure(doc);
 
+        var tablesOfFigures = TablesOfFiguresStructure(doc);
+
+        var indexes = IndexesStructure(doc);
+
+        var mergeFields = MergeFieldsView(doc);
+
         var embeds = EnumerateEmbeds(doc)
             .Select(e => new
             {
@@ -273,6 +279,9 @@ public sealed partial class WordHandler
             bookmarks = bookmarks.Count > 0 ? bookmarks : null,
             tocs = tocs.Count > 0 ? tocs : null,
             captions = captions.Count > 0 ? captions : null,
+            tablesOfFigures = tablesOfFigures.Count > 0 ? tablesOfFigures : null,
+            indexes = indexes.Count > 0 ? indexes : null,
+            mergeFields = mergeFields.Count > 0 ? mergeFields : null,
             embeds = embeds.Count > 0 ? embeds : null,
             sources = sources.Count > 0 ? sources : null,
             bibliographies = bibliographies.Count > 0 ? bibliographies : null,

@@ -299,6 +299,42 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law extended over the v1.2.0 structural surface: a table of
+    /// figures, an index with marked entries and a merge field must all survive a
+    /// no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_v120_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "v1.2.0 round trip");
+        Edit(file, """
+            [
+              {"op":"set","path":"/body/p[1]","props":{"text":"[chart]"}},
+              {"op":"add","path":"/body/p[1]","type":"caption","props":{"label":"Figure","text":"Revenue","position":"after"}},
+              {"op":"add","path":"/body","type":"tableOfFigures","props":{"label":"Figure","title":"Figures"}},
+              {"op":"add","path":"/body/p[1]","type":"indexEntry","props":{"text":"Revenue","subEntry":"chart"}},
+              {"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}},
+              {"op":"add","path":"/body","type":"index","props":{"columns":2}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads the TOF/index sdt + XE/MERGEFIELD field DOM
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

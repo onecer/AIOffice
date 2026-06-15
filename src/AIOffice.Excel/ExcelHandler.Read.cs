@@ -168,18 +168,21 @@ public sealed partial class ExcelHandler
         List<ChartInfo> allCharts;
         List<SlicerInfo> allSlicers;
         List<ExcelEmbeds.Info> allEmbeds;
+        List<FormControlInfo> allFormControls;
         Dictionary<(string, string), (string?, string?)> pivotSources;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
             allSlicers = ExcelSlicers.Read(document);
             allEmbeds = ExcelEmbeds.ReadAll(document);
+            allFormControls = ExcelFormControls.Read(document);
             pivotSources = ExcelPivots.ReadSources(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
         var slicersBySheet = allSlicers.ToLookup(s => s.SheetName, StringComparer.OrdinalIgnoreCase);
         var embedsBySheet = allEmbeds.ToLookup(e => e.SheetName, StringComparer.OrdinalIgnoreCase);
+        var formControlsBySheet = allFormControls.ToLookup(f => f.SheetName, StringComparer.OrdinalIgnoreCase);
         return new
         {
             view = "structure",
@@ -250,13 +253,29 @@ public sealed partial class ExcelHandler
                             source = e.Source,
                         })
                         .ToList(),
+                    formControls = formControlsBySheet[ws.Name]
+                        .Select(f => new
+                        {
+                            path = f.Path,
+                            kind = f.Kind,
+                            cell = f.Cell,
+                            linkedCell = f.LinkedCell,
+                            min = f.Min,
+                            max = f.Max,
+                            increment = f.Increment,
+                        })
+                        .ToList(),
                     notes = NoteList(ws),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
                     autoFilter = ws.AutoFilter.IsEnabled ? ws.AutoFilter.Range?.RangeAddress.ToString() : null,
                     outline = OutlineInfo(ws),
+                    // v1.2: protection state (null/omitted when the sheet is unprotected).
+                    protection = ExcelProtection.SheetInfo(ws),
                 })
                 .ToList(),
             definedNames = ExcelNames.ListAll(workbook),
+            // v1.2: workbook structure protection (null/omitted when not set).
+            workbookProtection = ExcelProtection.WorkbookInfo(workbook),
         };
     }
 
