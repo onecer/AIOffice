@@ -90,6 +90,9 @@ public static class WarningCodes
     /// <summary>An equation carried a LaTeX construct the converter only partially rendered.</summary>
     public const string EquationPartial = "equation_partial";
 
+    /// <summary>(1.7) Numbered display equations were assigned cached sequence numbers; Word recomputes SEQ fields on open/refresh (F9).</summary>
+    public const string EquationNumbersCached = "equation_numbers_cached";
+
     /// <summary>A replace op matched nothing (replacements = 0); the edit still succeeded.</summary>
     public const string FindNoMatch = "find_no_match";
 
@@ -98,6 +101,9 @@ public static class WarningCodes
 
     /// <summary>(1.5) A goal-seek solve did not converge; the changing cell was left unchanged.</summary>
     public const string GoalSeekNoSolution = "goal_seek_no_solution";
+
+    /// <summary>(1.7) An xlsx linked picture (camera tool) was embedded as a static snapshot of the source range, not a live link; re-add it to refresh.</summary>
+    public const string LinkedPictureStatic = "linked_picture_static";
 
     /// <summary>A markdown block had no neutral equivalent and was skipped on import.</summary>
     public const string MdBlockSkipped = "md_block_skipped";
@@ -136,9 +142,10 @@ public static class WarningCodes
     public static readonly IReadOnlyList<string> All =
     [
         AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
-        EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, GoalSeekNoSolution, IndexCached,
-        MdBlockSkipped, MdHtmlSkipped, MdImageSkipped, MdLinkSkipped, Model3DAsMedia, ResultTruncated,
-        ScopeDefaulted, StreamFallback, TableFormulaCached, TemplateUnresolved, TocPagesUnknown, TocRefreshed,
+        EquationNumbersCached, EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, GoalSeekNoSolution,
+        IndexCached, LinkedPictureStatic, MdBlockSkipped, MdHtmlSkipped, MdImageSkipped, MdLinkSkipped, Model3DAsMedia,
+        ResultTruncated, ScopeDefaulted, StreamFallback, TableFormulaCached, TemplateUnresolved, TocPagesUnknown,
+        TocRefreshed,
     ];
 }
 

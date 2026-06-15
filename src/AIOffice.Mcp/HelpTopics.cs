@@ -93,6 +93,8 @@ public static class HelpTopics
                 - page-borders    docx page borders + «IF» merge fields: add type "ifField" (1.4)
                 - zoom            pptx slide/section/summary zoom navigation: add type "zoom" (1.4)
                 - table-styles    pptx built-in table styles + banded rows on add type "table" (1.4)
+                - print-setup     xlsx print completeness (titles/breaks/fit/center/header-footer) + calc mode/iterative (1.7)
+                - masters         pptx slide/notes/handout masters: set /master[i], /notesMaster, /handoutMaster (M6/1.7)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
@@ -197,9 +199,12 @@ public static class HelpTopics
 
             ["docx/field"] = (
                 """
-                ## docx fields (M5)
+                ## docx fields (M5, +1.7 kinds)
                 Add: {"op":"add","path":"/footer[1]/p[1]","type":"field","props":{"kind":"pageNumber"}}
                 kinds: pageNumber (PAGE), numPages (NUMPAGES), date (DATE, optional format:"yyyy"), docTitle (TITLE).
+                1.7 kinds: styleRef (STYLEREF; props.styleRef = a style name, e.g. "Heading 1" — running headers),
+                  symbol (SYMBOL; props.charCode = decimal or 0x-hex code, e.g. 169 -> ©; optional props.symbolFont),
+                  quote (QUOTE; props.quoteText = the literal text to insert). Word refreshes them on open / F9.
                 leadingText prefixes literal text: 'Page X of Y' = a pageNumber field, then a numPages field with
                 {"leadingText":" of "}. Fields live in body or header/footer paragraphs; get/render show kind + instruction.
                 """,
@@ -260,6 +265,8 @@ public static class HelpTopics
                 styles: light | medium | dark — direct paint (banded rows + header fill), no theme dependency.
                 Cells: {"op":"set","path":"/slide[1]/table[1]/tr[1]/tc[1]","props":{"text":"Q3","mergeRight":2,"mergeDown"?}}
                 — pptx mergeRight/mergeDown = how many cells to ABSORB (mergeRight:1 -> span 2; docx counts total span instead).
+                1.7 cell alignment/spacing: valign top|middle|bottom (a:tcPr anchor); marginLeft/marginRight/marginTop/marginBottom (lengths);
+                  textDirection horizontal|vertical|vertical270|stacked.
                 get /slide[1]/table[1] reports rows/cols/headerRow/rowsDetail with per-cell paths + merge shape.
                 render {to:"svg"} draws the real grid. Remove by the table path.
                 """,
@@ -298,6 +305,10 @@ public static class HelpTopics
                 set/add/remove /master[m]/shape[i], /master[m]/layout[l]/shape[i]  reuse the slide shape ops
                 Use a cloned layout on a new slide: add type:slide props:{layout:N} (1-based). remove a layout only
                 when no slide references it. get /master[m] lists layouts (name, type, usedBySlides).
+                1.7 notes/handout masters (singletons, no index):
+                  set /notesMaster   {background, bodyFont}
+                  set /handoutMaster {background, headerFooter:{header,footer (text), date,pageNumber (bool)}, slidesPerPage 1|2|3|4|6|9}
+                Both are created on first edit and reported by get + read {view:"structure"}. office_help {topic:"masters"}.
                 """,
                 ["pptx/slide", "pptx/shape"]),
 
@@ -514,6 +525,9 @@ public static class HelpTopics
                 size     unit-qualified, e.g. "12pt"
                 color    hex "FF0000" or named
                 align    left | center | right | justify
+                rtl      "true" | "false" (M6 right-to-left flow; also right-aligns)
+                dropCap  (1.7) "drop" (inside the column) | "margin" (in the margin) | "none"/"false" (remove);
+                         pair with dropCapLines (height in lines, default 3) + dropCapFont (font for the dropped letter).
                 add child runs with type "run" for mixed formatting inside one paragraph.
                 """,
                 ["edit-ops", "addressing"]),
@@ -596,10 +610,17 @@ public static class HelpTopics
                 Read: office_get <omath path> -> {latex, ...} (your source, stored verbatim).
                       docx office_read {view:"text"} shows $…$ (inline) / $$…$$ (display) markers.
                 Subset (the SAME shared converter for both formats): x^2 a_i ; \\frac \\dfrac \\sqrt ;
-                        \\sum \\prod \\int \\lim with _/^ ;
+                        \\sum \\prod \\int \\iint \\iiint \\lim with _/^ ;
                         \\begin{pmatrix|bmatrix|Bmatrix|vmatrix|matrix}…&…\\\\…\\end{…} ; \\left( \\right) ;
-                        \\bar \\overline ; \\text \\mathrm \\mathbf ; Greek \\alpha..\\omega ;
-                        \\pm \\times \\cdot \\leq \\geq \\neq \\infty \\partial \\nabla \\rightarrow ; spacing \\, \\quad.
+                        (1.7) \\begin{aligned|gathered|cases}…&…\\\\…\\end{…} (m:eqArr) ; \\binom \\dbinom \\tbinom ;
+                        \\overbrace \\underbrace ;
+                        \\bar \\overline \\hat \\vec \\tilde ; \\text \\mathrm \\mathbf ; Greek \\alpha..\\omega ;
+                        \\pm \\times \\cdot \\leq \\geq \\neq \\infty \\partial \\nabla \\rightarrow ; (1.7) many more
+                        relations/arrows: \\prec \\succ \\preceq \\lesssim \\leqslant \\subsetneq \\longrightarrow
+                        \\Longrightarrow \\hookrightarrow \\rightleftharpoons \\nrightarrow \\triangleq … ; spacing \\, \\quad.
+                Numbered display equations (1.7, docx): props.number — true auto-increments (1,2,3…), or a string
+                        sets the label verbatim ("(1.1)"); needs display:true (number on inline = invalid_args).
+                        Address by number: /equation[@num=1.1] (numeric core matches a "(1.1)" label; whole number -> /equation[@num=1]).
                 Unknown commands degrade to literal runs + an equation_partial warning (file still validates).
                 xlsx has NO equation object (Excel carries cell formulas, not OMML math): add type "equation"
                 on xlsx returns unsupported_feature — put the math in a cell formula or embed a rendered image.
@@ -658,6 +679,14 @@ public static class HelpTopics
                 freeze:     {"op":"set","path":"/Sheet1","props":{"freezeRows":"1","freezeCols":"2"}} (0 clears an axis)
                 autoFilter: {"op":"set","path":"/Sheet1/A1:D20","props":{"autoFilter":"true"}} (one per sheet; false clears)
                 print:      {"op":"set","path":"/Sheet1","props":{"orientation":"landscape","paperSize":"A4","fitToWidth":"1","printArea":"A1:F40"}}
+                print 1.7:  printTitleRows "1:1" / printTitleCols "A:A" (repeat bands) ; pageBreaks {rows:[20],cols:["F"]} ;
+                            fitToPage {fitToWidth:1,fitToHeight:0} or {scale:80} ; centerHorizontally/centerVertically (bool) ;
+                            printGridlines/printHeadings (bool) ; printHeader/printFooter {left,center,right} field-code strings
+                            (&P page &N pages &D date &T time &F file &A sheet). office_help {topic:"print-setup"}.
+                calc 1.7 (workbook root path "/"): {"op":"set","path":"/","props":{"calculationMode":"manual","iterativeCalc":true,
+                            "maxIterations":100,"maxChange":0.001,"fullPrecision":true}} — modes auto|manual|autoExceptTables.
+                camera 1.7: {"op":"add","path":"/Sheet1","type":"linkedPicture","props":{"sourceRange":"A1:C5","anchor":"G2","sheet"?,"name"?}}
+                            — a STATIC snapshot of the range (linked_picture_static warning); /Sheet1/linkedPicture[i] get/remove.
                 names:      {"op":"add","path":"/Sheet1/B2:C5","type":"name","props":{"name":"SalesData","scope"?:"workbook|sheet"}}
                             then formulas just use it: {"op":"set","path":"/Sheet1/D6","props":{"value":"=SUM(SalesData)"}} (evaluates).
                             get /name[@name=X] or /Sheet1/name[@name=X].
@@ -867,6 +896,7 @@ public static class HelpTopics
                 entrance appear|fade|flyIn|wipe · emphasis pulse|grow|spin|colorPulse · exit fadeOut|flyOut|wipeOut
                 1.3 motion: effect "motionPath", path line|arc|circle|custom; custom takes a points[] of normalized [x,y] pairs; direction orients line/arc.
                 1.4 click trigger: triggerOn:"@N" plays the effect when ANOTHER shape (stable id N) is clicked — it joins N's interactive onClick seq, not the main click sequence. N must be a different shape on the slide; a bad id is invalid_path.
+                1.7 timing (retime via set /slide[i]/animation[k], not add props): repeat "none"|N|"untilClick"|"untilNext" (loop count/forever); rewind (bool, Rewind-when-done); autoReverse (bool, play then reverse). read {view:"structure"} reports them.
                 trigger click(default)|afterPrevious|withPrevious. read {view:"structure"} lists each animation (incl. motionPath + triggerOn). set /slide[i]/animation[k] retimes; move reorders.
                 """,
                 ["pptx/animation", "pptx/shape", "edit-ops"]),
@@ -1020,6 +1050,34 @@ public static class HelpTopics
                 Every style+option combo validates clean; read {view:"structure"} / get /slide[i]/table[k] report the style + flags.
                 """,
                 ["pptx/table", "edit-ops"]),
+
+            ["print-setup"] = (
+                """
+                ## print-setup (1.7) — xlsx print completeness + calculation settings; set props on /Sheet1 (calc on "/")
+                Titles:  printTitleRows "1:1" (repeat header rows) / printTitleCols "A:A" (repeat columns); "" clears.
+                Breaks:  pageBreaks {rows:[20,40],cols:["F"]} — rows = 1-based row a break sits above; cols = column-letter; [] clears an axis.
+                Fit:     fitToPage {fitToWidth:1,fitToHeight:0} (page counts, 0 = automatic) OR {scale:80} (10-400%); not both.
+                Center:  centerHorizontally / centerVertically (bool). printGridlines / printHeadings (bool) print the lines/headings.
+                Header/footer: printHeader / printFooter {left,center,right} field-code strings; any subset; null/"" clears a section.
+                  Field codes: &P page, &N pages, &D date, &T time, &F file, &A sheet. e.g. printFooter {center:"Page &P of &N"}.
+                Calc (workbook root "/"): calculationMode auto|manual|autoExceptTables; iterativeCalc (bool) with maxIterations (100),
+                  maxChange (0.001); fullPrecision (bool). Rides the same root set as protectStructure. get / reflects them.
+                The M3/v1.4 props (orientation, paperSize, margins, fitToWidth, printArea, scale) still apply. get /Sheet1 reflects page setup.
+                """,
+                ["xlsx/sheet", "xlsx/cell"]),
+
+            ["masters"] = (
+                """
+                ## masters (M6 slide/layout, 1.7 notes/handout) — pptx
+                Slide master/layout (M6): set /master[m] {background, accent1..accent6}; set /master[m]/layout[l] {background};
+                  add /master[m] {type:layout, props:{name, basedOn?}} clones a layout; set/add/remove shapes on master/layout.
+                Notes master (1.7): set /notesMaster {background, bodyFont} — the shared look of every slide's notes page.
+                Handout master (1.7): set /handoutMaster {background, headerFooter:{header,footer (text), date,pageNumber (bool)},
+                  slidesPerPage 1|2|3|4|6|9} — the print-handout layout.
+                Both /notesMaster and /handoutMaster are singletons (no index), created on first edit, reported by get + read {view:"structure"}.
+                Every master edit stays validator-clean.
+                """,
+                ["pptx/master", "pptx/slide"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

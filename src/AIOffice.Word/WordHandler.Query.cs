@@ -218,6 +218,16 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "equation":
+                {
+                    // /equation[@num=(1.1)] (or the bare number) addresses a numbered
+                    // display equation by its label.
+                    var properties = GetNumberedEquationProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = (string)properties["path"]!, type = "equation", properties },
+                        meta);
+                }
+
                 case "watermark":
                 {
                     var properties = GetWatermarkProperties(doc, docPath);
@@ -421,6 +431,13 @@ public sealed partial class WordHandler
         if (fields.Count > 0)
         {
             properties["fields"] = fields;
+        }
+
+        // A drop cap precedes the paragraph in its own framed paragraph; surface it
+        // here so an agent that set it can read it back from the body paragraph.
+        if (DropCapShape(p) is { } dropCap)
+        {
+            properties["dropCap"] = dropCap;
         }
 
         WithTextEffects(properties, p.ChildElements.OfType<Run>().FirstOrDefault()?.RunProperties);

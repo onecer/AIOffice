@@ -167,7 +167,7 @@ public sealed partial class WordHandler
             "add" when op.Type == "ifField" && session.Track => throw TrackedStructureUnsupported("ifField"),
             "add" when op.Type == "ifField" => ApplyAddIfField(doc, op),
             "add" when op.Type == "watermark" && session.Track => throw TrackedStructureUnsupported("watermark"),
-            "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op),
+            "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op, session),
             "add" when op.Type == "sectionBreak" && session.Track => throw TrackedStructureUnsupported("sectionBreak"),
             "add" when op.Type == "sectionBreak" => ApplyAddSectionBreak(doc, op),
             "add" when op.Type == "equation" && session.Track => throw TrackedStructureUnsupported("equation"),
@@ -260,6 +260,18 @@ public sealed partial class WordHandler
         // run text. They can be the whole op, or ride alongside plain formatting.
         var effectProps = ExtractTextEffectProps(props);
 
+        // (1.7) Drop-cap props restructure the paragraph (the first letter moves to
+        // a framed paragraph). Peel them out so the formatting loop never sees them;
+        // apply after the loop so a same-op text change has already rebuilt the runs.
+        var dropCapProps = ExtractDropCapProps(props);
+        if (dropCapProps is not null && node.Element is not Paragraph)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"dropCap applies to a paragraph, not '{node.Type}'.",
+                "Target a paragraph path, e.g. {\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"dropCap\":\"drop\"}}.");
+        }
+
         foreach (var (name, value) in OrderedProps(props))
         {
             switch (node.Element)
@@ -291,6 +303,13 @@ public sealed partial class WordHandler
         }
 
         var effects = effectProps is null ? [] : ApplyTextEffects(doc, node, effectProps);
+
+        if (dropCapProps is not null && node.Element is Paragraph dropCapParagraph)
+        {
+            var dropCap = ApplyDropCap(dropCapParagraph, dropCapProps);
+            return new { op = "set", path = node.CanonicalPath, type = node.Type, dropCap };
+        }
+
         return effects.Count > 0
             ? (object)new { op = "set", path = node.CanonicalPath, type = node.Type, effects }
             : new { op = "set", path = node.CanonicalPath, type = node.Type };

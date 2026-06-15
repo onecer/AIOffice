@@ -61,7 +61,8 @@ internal static class PptxTables
          "firstRow", "lastRow", "bandRow", "firstCol"];
 
     private static readonly IReadOnlyList<string> CellPropKeys =
-        ["text", "bold", "color", "fontSize", "align", "fill", "mergeRight", "mergeDown"];
+        ["text", "bold", "color", "fontSize", "align", "fill", "mergeRight", "mergeDown",
+         "valign", "marginLeft", "marginRight", "marginTop", "marginBottom", "textDirection"];
 
     private const int MaxRows = 100;
     private const int MaxCols = 30;
@@ -642,7 +643,9 @@ internal static class PptxTables
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown cell prop '{key}'.",
-                    "Cell props: text, bold, color, fontSize, align, fill, mergeRight, mergeDown.",
+                    "Cell props: text, bold, color, fontSize, align, fill, mergeRight, mergeDown, " +
+                    "valign (top/middle/bottom), marginLeft/marginRight/marginTop/marginBottom (lengths), " +
+                    "textDirection (horizontal/vertical).",
                     candidates: CellPropKeys);
             }
         }
@@ -700,12 +703,83 @@ internal static class PptxTables
                 case "fill":
                     SetCellFill(cell, Units.ParseColorHex(key, value));
                     break;
+                case "valign":
+                    EnsureCellProperties(cell).Anchor = ParseVAlign(value);
+                    break;
+                case "marginLeft":
+                    EnsureCellProperties(cell).LeftMargin = ParseMarginEmu(key, value);
+                    break;
+                case "marginRight":
+                    EnsureCellProperties(cell).RightMargin = ParseMarginEmu(key, value);
+                    break;
+                case "marginTop":
+                    EnsureCellProperties(cell).TopMargin = ParseMarginEmu(key, value);
+                    break;
+                case "marginBottom":
+                    EnsureCellProperties(cell).BottomMargin = ParseMarginEmu(key, value);
+                    break;
+                case "textDirection":
+                    EnsureCellProperties(cell).Vertical = ParseTextDirection(value);
+                    break;
                 default:
                     break; // mergeRight/mergeDown already handled
             }
         }
 
         return cellPath;
+    }
+
+    /// <summary>The cell's a:tcPr, created (before any fill child, which the SDK keeps in order) when absent.</summary>
+    private static A.TableCellProperties EnsureCellProperties(A.TableCell cell) =>
+        cell.TableCellProperties ??= cell.AppendChild(new A.TableCellProperties());
+
+    /// <summary>Parses valign top/middle/bottom into the a:tcPr anchor (TextAnchoringType).</summary>
+    private static A.TextAnchoringTypeValues ParseVAlign(JsonNode? value)
+    {
+        var token = J.ScalarText(value ?? string.Empty).Trim().ToLowerInvariant();
+        return token switch
+        {
+            "top" => A.TextAnchoringTypeValues.Top,
+            "middle" or "center" or "centre" => A.TextAnchoringTypeValues.Center,
+            "bottom" => A.TextAnchoringTypeValues.Bottom,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid valign value: {value?.ToJsonString() ?? "null"}",
+                "Use top, middle or bottom.",
+                candidates: ["top", "middle", "bottom"]),
+        };
+    }
+
+    /// <summary>Parses textDirection horizontal/vertical into the a:tcPr vert (TextVertical).</summary>
+    private static A.TextVerticalValues ParseTextDirection(JsonNode? value)
+    {
+        var token = J.ScalarText(value ?? string.Empty).Trim().ToLowerInvariant();
+        return token switch
+        {
+            "horizontal" => A.TextVerticalValues.Horizontal,
+            "vertical" or "vertical90" or "vert" => A.TextVerticalValues.Vertical,
+            "vertical270" => A.TextVerticalValues.Vertical270,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid textDirection value: {value?.ToJsonString() ?? "null"}",
+                "Use horizontal or vertical.",
+                candidates: ["horizontal", "vertical"]),
+        };
+    }
+
+    /// <summary>Parses a cell-margin length into EMU (the a:tcPr margin attributes are Int32 EMU).</summary>
+    private static int ParseMarginEmu(string key, JsonNode? value)
+    {
+        var emu = Units.ParseLengthEmu(key, value);
+        if (emu < 0 || emu > int.MaxValue)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Cell margin '{key}' is out of range: {value?.ToJsonString() ?? "null"}.",
+                "Use a small non-negative length like \"0.2cm\" or \"6pt\".");
+        }
+
+        return (int)emu;
     }
 
     private static int MergeCount(JsonObject props, string key)
@@ -1179,6 +1253,7 @@ internal static class PptxTables
     private static object CellProjection(A.TableCell cell, string tablePath, int row, int col, A.Table table)
     {
         var covered = IsCovered(cell);
+        var tcPr = cell.TableCellProperties;
         return new
         {
             Path = Units.Inv($"{tablePath}/tr[{row}]/tc[{col}]"),
@@ -1190,7 +1265,58 @@ internal static class PptxTables
             Covered = covered ? true : (bool?)null,
             MergedInto = covered ? MergeOriginPath(table, tablePath, row, col) : null,
             Fill = CellFillHex(cell),
+            VAlign = VAlignToken(tcPr?.Anchor?.Value),
+            MarginLeft = tcPr?.LeftMargin is { } ml ? Units.EmuToCm(ml) : (double?)null,
+            MarginRight = tcPr?.RightMargin is { } mr ? Units.EmuToCm(mr) : (double?)null,
+            MarginTop = tcPr?.TopMargin is { } mt ? Units.EmuToCm(mt) : (double?)null,
+            MarginBottom = tcPr?.BottomMargin is { } mb ? Units.EmuToCm(mb) : (double?)null,
+            TextDirection = TextDirectionToken(tcPr?.Vertical?.Value),
         };
+    }
+
+    private static string? VAlignToken(A.TextAnchoringTypeValues? anchor)
+    {
+        if (anchor is null)
+        {
+            return null;
+        }
+
+        if (anchor == A.TextAnchoringTypeValues.Top)
+        {
+            return "top";
+        }
+
+        if (anchor == A.TextAnchoringTypeValues.Center)
+        {
+            return "middle";
+        }
+
+        return anchor == A.TextAnchoringTypeValues.Bottom ? "bottom" : null;
+    }
+
+    private static string? TextDirectionToken(A.TextVerticalValues? vert)
+    {
+        if (vert is null)
+        {
+            return null;
+        }
+
+        if (vert == A.TextVerticalValues.Horizontal)
+        {
+            return "horizontal";
+        }
+
+        if (vert == A.TextVerticalValues.Vertical)
+        {
+            return "vertical";
+        }
+
+        if (vert == A.TextVerticalValues.Vertical270)
+        {
+            return "vertical270";
+        }
+
+        return null;
     }
 
     /// <summary>The path of the merge origin covering the 1-based (row, col), when resolvable.</summary>

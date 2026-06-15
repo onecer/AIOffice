@@ -2479,3 +2479,93 @@ aioffice-install: installed. {"ok":true,"data":{"name":"aioffice","version":"1.5
   smoke green.
 - No npm publish, no homebrew push, no signing/notarization, no git commit/push/tag —
   all left for the human release engineer.
+
+# AIOffice 1.7.0 — Print Readiness, Camera Tool, Calc Mode & Deeper Equations Smoke Report
+
+**Sixth post-1.0 feature release — purely additive.** `surfaceVersion` stays `1.0`; **18 CLI
+verbs / 17 MCP tools** unchanged; no new verb or tool. New `set` props on existing paths, one
+new `add` type (`linkedPicture`), two new `set`-paths (`/notesMaster`, `/handoutMaster`), one
+new addressing form (`/equation[@num=…]`), two new warnings (`linked_picture_static`,
+`equation_numbers_cached`), and a deeper LaTeX→OMML converter shared by docx + pptx.
+
+## Build & tests — PASS (2331/2331 across 7 projects, at version 1.7.0)
+
+`dotnet build AIOffice.sln -c Debug -warnaserror` → **0 warnings, 0 errors**.
+`dotnet test AIOffice.sln` → **2331 passed, 0 failed** across 7 projects:
+Core **180** · Word **681** · Excel **619** · Pptx **709** · MCP **87** · Preview **24** ·
+Render **31**. The 1.0 guards stay green: `SchemaConsistencyTests` (18 verbs / 17 tools, the
+`read --view` enum, the 8 `edit` op kinds, the 17-tool catalog) and `TokenBudgetTests` (the
+MCP tool surface still ≤ 3500 tokens after the additive `office_edit` description + help
+topics). CI-hygiene grep over the new test files: no `Environment.NewLine`, no exact-byte-size
+asserts, no unsorted-order asserts.
+
+## Surface wiring (additive within frozen 1.0)
+
+- `office_edit` schema (`ToolCatalog`) + `aioffice schema` (`SurfaceSchema`/`CommandSurface`)
+  extended: `linkedPicture` add type, the new xlsx print/calc props, docx dropCap/picture
+  watermark/STYLEREF·SYMBOL·QUOTE/equation-number, pptx notes/handout master set-paths +
+  animation timing + table-cell alignment, and the deeper LaTeX constructs — all as additive
+  description text.
+- `office_help` / `aioffice help`: new topics `print-setup` and `masters`; `equations`,
+  `animations`, `properties-docx`, `properties-xlsx`, `properties-pptx`, `addressing`
+  deepened (both the CLI embedded `.md` topics and the MCP `HelpTopics` dictionary).
+- `doctor` reports **version 1.7.0 / surfaceVersion 1.0 / verbs 18 / tools 17**.
+
+## Real end-to-end smoke (`dotnet run`, fresh temp workspace) — PASS
+
+- **docx**: `\begin{cases}` display equation with `number:true` → validate 0, fires
+  `equation_numbers_cached`; `get /equation[@num=1]` reports `number:"(1)"`. `\begin{aligned}`
+  display equation → validate 0. Drop cap (`dropCap=drop dropCapLines=3`) on a paragraph →
+  validate 0. Picture watermark from a generated PNG → validate 0, `get /watermark[1]` →
+  `{kind:picture, washout:true}`; an escaping picture path → `sandbox_denied`. STYLEREF (in a
+  header) + SYMBOL (©) + QUOTE fields → validate 0.
+- **xlsx**: print titles `1:1` + manual page break (row 3) + `fitToPage.fitToWidth 1` + print
+  footer `{center:"Page &P of &N"}` → `get /Sheet1` reflects them under `pageSetup` → validate
+  0. `add linkedPicture` of `A1:C5` at `G2` → validate 0, fires `linked_picture_static`,
+  `get /Sheet1/linkedPicture[1]` → `{sourceRange:"A1:C5", anchor:"G2", …}`. `calculationMode
+  manual` + `iterativeCalc` on `/` → `get /` reflects `{calculationMode:"manual",
+  iterativeCalc:true, …}`.
+- **pptx**: handout master header/footer + `slidesPerPage 3` → validate 0, `get /handoutMaster`
+  reflects them. Animation `repeat:"untilClick"` + `autoReverse:true` via
+  `set /slide[1]/animation[1]` → validate 0, `read --view structure` / `get` report
+  `repeat:"indefinite", autoReverse:true`. Table cell `valign:middle` + four margins →
+  validate 0. A pptx equation with `\begin{cases}` → validate 0 (confirms the deepened shared
+  Core converter reaches pptx with no `equation_partial`).
+
+> Note: two smoke steps invoke an existing convention rather than the literal phrasing —
+> a new slide is added via `/slide[i]` (not `/`), and animation timing props are applied via
+> `set /slide[i]/animation[k]` after the `add` (they are retime props, not add props). The help
+> docs and CONTRACT describe both accurately.
+
+## Published-binary smoke loop (dist/osx-arm64/aioffice) — PASS
+
+`dotnet publish -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true` → the
+single-file binary copied to `dist/osx-arm64/aioffice`. **doctor** → version **1.7.0**,
+surfaceVersion **1.0**, **18 verbs / 17 tools**. One-loop check: docx `\begin{cases}` numbered
+equation (validate 0, `equation_numbers_cached`); xlsx print titles `1:1` + print footer
+(validate 0); pptx handout master header + `slidesPerPage 3` (validate 0). Binary size
+**38,636,745 bytes (~36.85 MB)**.
+
+## Fixtures — refreshed (1.7)
+
+The manual-check fixtures (`fixtures/manual-check/word-sample.docx`,
+`excel-sample.xlsx`, `pptx-showcase.pptx`) were refreshed by the per-format owners to exercise
+the 1.7 surface (a cases/aligned equation + drop cap doc, a print-ready workbook, a deck with a
+handout master + table-cell alignment).
+
+## Invariants — held (1.7.0)
+
+- One JSON envelope per call; errors carry a non-empty `suggestion`; unsupported →
+  `unsupported_feature` naming the workaround. Exit codes 0/2/3/4/5 unchanged.
+- `OpenXmlValidator` 0 errors after every mutating smoke. 1-based addressing throughout. The
+  picture-watermark `image` and linked-picture source are sandbox-resolved (escaping →
+  `sandbox_denied`).
+- CONTRACT §§1–7 unchanged; the additive 1.7.0 surface is recorded in **§7g** (new add type,
+  new set-paths, new props, new field kinds, the two new warnings, and the
+  backward-compatible deeper-equation note: more LaTeX now renders, fewer `equation_partial`
+  warnings). `surfaceVersion` stays `1.0`; 18 verbs / 17 tools unchanged.
+- Version bumped to **1.7.0** in `Directory.Build.props`, `npm/package.json`,
+  `dist/Formula/aioffice.rb`, and the `install.sh` / `install.ps1` fallback versions — all
+  consistent.
+- No npm publish, no homebrew push, no signing/notarization, no git commit/push/tag — all left
+  for the human release engineer.

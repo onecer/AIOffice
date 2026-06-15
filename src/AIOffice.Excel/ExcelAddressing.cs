@@ -26,6 +26,7 @@ internal enum ExcelTargetKind
     FormControl,
     DataTable,
     Scenario,
+    LinkedPicture,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -91,6 +92,9 @@ internal sealed record ExcelTarget
 
     /// <summary>Scenario name when <see cref="Kind"/> is Scenario (<c>scenario[@name=…]</c>, 1.5).</summary>
     public string? ScenarioName { get; init; }
+
+    /// <summary>1-based per-sheet linked-picture index when <see cref="Kind"/> is LinkedPicture (1.7).</summary>
+    public int? LinkedPictureIndex { get; init; }
 }
 
 /// <summary>
@@ -334,6 +338,16 @@ internal static partial class ExcelPaths
                 return new ExcelTarget { Kind = ExcelTargetKind.Image, Sheet = sheet, ImageIndex = imageIndex };
 
             case PathSegmentKind.Element when
+                string.Equals(segment.Name, "linkedPicture", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } linkedPictureIndex:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.LinkedPicture,
+                    Sheet = sheet,
+                    LinkedPictureIndex = linkedPictureIndex,
+                };
+
+            case PathSegmentKind.Element when
                 string.Equals(segment.Name, "dataValidation", StringComparison.OrdinalIgnoreCase) &&
                 segment.Index is { } validationIndex:
                 return new ExcelTarget
@@ -408,6 +422,9 @@ internal static partial class ExcelPaths
 
     public static string ImagePath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/image[{index}]");
+
+    public static string LinkedPicturePath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/linkedPicture[{index}]");
 
     public static string DataValidationPath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/dataValidation[{index}]");

@@ -370,6 +370,49 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the v1.7.0 surface: a numbered display equation
+    /// carrying a deepened LaTeX construct (\begin{cases}), a drop cap (w:framePr),
+    /// a picture watermark (header image part), and STYLEREF/SYMBOL/QUOTE fields
+    /// must all survive a no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_v170_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "v1.7.0 round trip");
+        WritePng("mark.png", width: 120, height: 80);
+        Edit(file, """
+            [
+              {"op":"set","path":"/body/p[1]","props":{"text":"Drop-capped opening line here.","dropCap":"drop","dropCapLines":3}},
+              {"op":"add","path":"/body","type":"p","props":{"text":"Body text."}},
+              {"op":"add","path":"/body","type":"equation","props":{"latex":"f(x)=\\begin{cases} 1 & x>0 \\\\ 0 & x\\leq 0 \\end{cases}","display":true,"number":true}},
+              {"op":"add","path":"/body","type":"equation","props":{"latex":"\\binom{n}{k}=\\frac{n!}{k!(n-k)!}","display":true,"number":"(1.2)"}},
+              {"op":"add","path":"/body/p[2]","type":"field","props":{"kind":"quote","quoteText":"Confidential"}},
+              {"op":"add","path":"/body/p[2]","type":"field","props":{"kind":"symbol","charCode":169,"symbolFont":"Symbol"}},
+              {"op":"add","path":"/body","type":"watermark","props":{"image":"mark.png"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads OMML equations, framePr, fields
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            foreach (var headerPart in doc.MainDocumentPart.HeaderParts)
+            {
+                _ = headerPart.Header; // loads the VML picture watermark + image part
+            }
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

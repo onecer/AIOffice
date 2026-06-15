@@ -71,7 +71,7 @@ public sealed record PathSegment
     /// <summary>Named-variant selector for the fixed variant vocabulary (docx M5 <c>header[firstPage]</c>, <c>footer[even]</c>); null otherwise.</summary>
     public string? Variant { get; init; }
 
-    /// <summary>The attribute the id selector matched on: "id" (default), "name" (e.g. bookmark[@name=Results]) or "tag" (e.g. sdt[@tag=clientName]); null for non-id segments.</summary>
+    /// <summary>The attribute the id selector matched on: "id" (default), "name" (e.g. bookmark[@name=Results]), "tag" (e.g. sdt[@tag=clientName]) or "num" (e.g. equation[@num=(1.1)]); null for non-id segments.</summary>
     public string? IdAttribute { get; init; }
 
     /// <summary>Cell (Cell kind) or top-left of a range.</summary>
@@ -132,7 +132,7 @@ public sealed partial record DocPath
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([A-Z]{1,3})\]$")]
     private static partial Regex LetterElement();
 
-    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name|tag)=([A-Za-z0-9_.-]+)\]$")]
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name|tag|num)=([A-Za-z0-9_.-]+)\]$")]
     private static partial Regex IdElement();
 
     // Named variants are a closed vocabulary (docx M5 header/footer types), so

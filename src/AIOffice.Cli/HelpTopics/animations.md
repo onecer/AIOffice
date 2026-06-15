@@ -37,6 +37,28 @@ trigger shape's interactive `onClick` sequence.
 - `read --view structure` and `get /slide[i]/animation[k]` report the trigger shape.
 - Works with every effect class, including `motionPath`. `validate` stays clean.
 
+## repeat / rewind / auto-reverse (1.7)
+
+Add the animation, then set its timing on the animation path
+`set /slide[i]/animation[k]` (timing is a retime, not an add prop):
+
+```jsonc
+{op:"add", path:"/slide[1]/shape[@id=5]", type:"animation", props:{effect:"pulse"}}
+{op:"set", path:"/slide[1]/animation[1]", props:{repeat:"untilClick", autoReverse:true, rewind:false}}
+```
+
+- `repeat`: `"none"` (play once, default) · a count `1..10000` (loop N times) ·
+  `"untilClick"` / `"untilNext"` (loop until the next click). Stored as the
+  effect's `repeatCount` (OOXML thousandths-of-an-iteration; `"indefinite"` for
+  the loop forms).
+- `rewind` (bool): PowerPoint's "Rewind when done playing" — `true` returns the
+  shape to its pre-animation state (`fill="remove"`); `false` (default) holds the
+  final state (`fill="hold"`).
+- `autoReverse` (bool): play the effect, then play it backwards.
+
+`read --view structure` and `get /slide[i]/animation[k]` report `repeat`,
+`rewind` and `autoReverse`. All combinations validate OpenXmlValidator-clean.
+
 ## motion paths (1.3)
 
 `effect:"motionPath"` moves the shape along a path instead of animating in place.

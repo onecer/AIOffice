@@ -102,6 +102,14 @@ public sealed partial class WordHandler
         var pPr = paragraph.ParagraphProperties;
         var style = pPr?.ParagraphStyleId?.Val?.Value;
 
+        // A numbered display equation lives inline in a tab-aligned paragraph with a
+        // trailing number run; render it as block math plus its label, skipping the
+        // tabs/number run so the markdown reads "$$latex$$ (1.1)".
+        if (NumberedEquationInParagraph(paragraph) is { } numbered)
+        {
+            return ("$$" + EquationLatex(numbered) + "$$ " + ReadStoredEquationNumber(numbered), false);
+        }
+
         // Code paragraphs (the import's "Code" style) become fenced blocks.
         if (string.Equals(style, "Code", StringComparison.Ordinal))
         {

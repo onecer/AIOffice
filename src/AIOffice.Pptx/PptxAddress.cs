@@ -21,6 +21,12 @@ internal enum PptxRootKind
 
     /// <summary>The deck's embedded-font list ("/fonts"): embed/list/remove fonts.</summary>
     Fonts,
+
+    /// <summary>The deck's notes master ("/notesMaster"): the shared layout/style behind every slide's notes page.</summary>
+    NotesMaster,
+
+    /// <summary>The deck's handout master ("/handoutMaster"): the print-handout layout (header/footer, slides per page).</summary>
+    HandoutMaster,
 }
 
 /// <summary>
@@ -61,6 +67,7 @@ internal sealed partial record PptxAddress
         "/slide[2]/shape[@id=7]/omath[1], " +
         "/master[1], /master[1]/layout[2], /master[1]/layout[@name=My Layout], /master[1]/shape[1], " +
         "/section[1] (a slide section), /properties (document core + custom metadata), " +
+        "/notesMaster (the notes master), /handoutMaster (the handout master), " +
         "/fonts (embedded fonts) or /fonts/font[@name=MyFont] " +
         "or / (the presentation: slide size and sections); " +
         "indices are 1-based, @id is the stable id from query/get.";
@@ -143,7 +150,7 @@ internal sealed partial record PptxAddress
     [GeneratedRegex(@"^omath\[([0-9]+)\]$")]
     private static partial Regex OMathSegment();
 
-    private static readonly string[] ReservedRoots = ["notes", "notesmaster", "handout", "handoutmaster"];
+    private static readonly string[] ReservedRoots = ["notes", "handout"];
 
     public required string Raw { get; init; }
 
@@ -278,6 +285,12 @@ internal sealed partial record PptxAddress
     /// <summary>True when the path is the embedded-font root ("/fonts" or "/fonts/font[@name=...]").</summary>
     public bool IsFonts => Root == PptxRootKind.Fonts;
 
+    /// <summary>True when the path addresses the deck's notes master ("/notesMaster").</summary>
+    public bool IsNotesMaster => Root == PptxRootKind.NotesMaster;
+
+    /// <summary>True when the path addresses the deck's handout master ("/handoutMaster").</summary>
+    public bool IsHandoutMaster => Root == PptxRootKind.HandoutMaster;
+
     /// <summary>Parses an address or throws a typed <c>invalid_path</c>/<c>unsupported_feature</c>.</summary>
     public static PptxAddress Parse(string raw)
     {
@@ -297,6 +310,18 @@ internal sealed partial record PptxAddress
         if (string.Equals(raw, "/fonts", StringComparison.OrdinalIgnoreCase))
         {
             return new PptxAddress { Raw = raw, Root = PptxRootKind.Fonts };
+        }
+
+        // "/notesMaster" and "/handoutMaster" are whole-part roots: set/get edit the
+        // notes/handout master part (created on first edit). They take no sub-segments.
+        if (string.Equals(raw, "/notesMaster", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PptxAddress { Raw = raw, Root = PptxRootKind.NotesMaster };
+        }
+
+        if (string.Equals(raw, "/handoutMaster", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PptxAddress { Raw = raw, Root = PptxRootKind.HandoutMaster };
         }
 
         if (raw.StartsWith("/fonts/", StringComparison.OrdinalIgnoreCase))
@@ -337,6 +362,14 @@ internal sealed partial record PptxAddress
         }
 
         var rootName = segments[0].Split('[')[0].ToLowerInvariant();
+        if (rootName is "notesmaster" or "handoutmaster")
+        {
+            // The exact "/notesMaster" / "/handoutMaster" forms are handled above; reaching
+            // here means a sub-segment or index was tacked on, which these roots do not take.
+            var which = rootName == "notesmaster" ? "/notesMaster" : "/handoutMaster";
+            throw Invalid(raw, $"{which} is a whole-part root — set/get it directly (no index or sub-segment).");
+        }
+
         if (ReservedRoots.Contains(rootName, StringComparer.Ordinal))
         {
             throw new AiofficeException(

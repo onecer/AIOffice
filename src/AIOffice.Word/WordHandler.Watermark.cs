@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using AIOffice.Core;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -15,9 +16,12 @@ public sealed partial class WordHandler
     /// the classic VML WordArt watermark (text-path shape 136, the one Word's
     /// Watermark gallery inserts), placed in every existing header — creating
     /// the default header first when the document has none. VML in headers is
-    /// valid OOXML, so the validator stays clean.
+    /// valid OOXML, so the validator stays clean. (1.7) Passing props.image
+    /// instead of props.text inserts a picture watermark: a centered VML image
+    /// shape filled from a sandbox-resolved PNG/JPEG, washed out (grayscale +
+    /// brightened) by default so body text stays legible over it.
     /// </summary>
-    private static object ApplyAddWatermark(WordprocessingDocument doc, string file, EditOp op)
+    private static object ApplyAddWatermark(WordprocessingDocument doc, string file, EditOp op, EditSession session)
     {
         var path = DocPath.Parse(op.Path);
         var root = path.Segments[0];
@@ -32,13 +36,17 @@ public sealed partial class WordHandler
 
         var props = op.Props?.DeepClone().AsObject() ?? [];
         props.Remove("author");
+
+        var image = props["image"] is { } imageNode ? NodeToString(imageNode) : null;
         var text = props["text"] is { } textNode ? NodeToString(textNode) : null;
-        if (string.IsNullOrEmpty(text))
+        var isPicture = !string.IsNullOrEmpty(image);
+        if (!isPicture && string.IsNullOrEmpty(text))
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                "add --type watermark needs props.text.",
-                "Example: {\"op\":\"add\",\"path\":\"/body\",\"type\":\"watermark\",\"props\":{\"text\":\"DRAFT\",\"diagonal\":true}}.");
+                "add --type watermark needs props.text (a text watermark) or props.image (a picture watermark).",
+                "Example: {\"op\":\"add\",\"path\":\"/body\",\"type\":\"watermark\",\"props\":{\"text\":\"DRAFT\",\"diagonal\":true}} " +
+                "or {\"op\":\"add\",\"path\":\"/body\",\"type\":\"watermark\",\"props\":{\"image\":\"logo.png\"}}.");
         }
 
         var color = props["color"] is { } colorNode
@@ -59,6 +67,10 @@ public sealed partial class WordHandler
             ErrorCodes.FormatCorrupt,
             $"The document has no main part: {file}",
             "The package is missing its main document part. Re-export the file from Word.");
+
+        // Picture watermarks resolve and size the image once; the same bytes feed
+        // an image part per header (each header references its own embedded copy).
+        PictureWatermark? picture = isPicture ? ResolvePictureWatermark(session, props, image!) : null;
 
         if (!main.HeaderParts.Any())
         {
@@ -91,11 +103,16 @@ public sealed partial class WordHandler
             }
 
             shapeIndex++;
-            paragraph.AppendChild(new Run(BuildWatermarkPicture(text, color, diagonal, shapeIndex)));
+            var pict = picture is { } p
+                ? BuildPictureWatermark(part, p, shapeIndex)
+                : BuildWatermarkPicture(text!, color, diagonal, shapeIndex);
+            paragraph.AppendChild(new Run(pict));
             headers++;
         }
 
-        return new { op = "add", type = "watermark", path = "/watermark[1]", text, headers };
+        return picture is { } resolved
+            ? new { op = "add", type = "watermark", path = "/watermark[1]", image = resolved.Name, headers }
+            : (object)new { op = "add", type = "watermark", path = "/watermark[1]", text, headers };
     }
 
     /// <summary>remove /watermark[1]: drops the w:pict run from every header; the headers themselves stay.</summary>
@@ -117,15 +134,29 @@ public sealed partial class WordHandler
 
     // ------------------------------------------------------------------ read
 
-    /// <summary>get /watermark[1] data.</summary>
+    /// <summary>get /watermark[1] data: text/color/diagonal for a text watermark, image/washout for a picture one.</summary>
     private static Dictionary<string, object?> GetWatermarkProperties(WordprocessingDocument doc, DocPath path)
     {
         var shapes = ResolveWatermark(doc, path);
         var shape = shapes[0];
         var style = shape.Style?.Value ?? string.Empty;
 
+        // A picture watermark carries a v:imagedata instead of a text path.
+        var imageData = shape.Descendants<V.ImageData>().FirstOrDefault();
+        if (imageData is not null)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["kind"] = "picture",
+                ["washout"] = imageData.Gain?.Value is { Length: > 0 } || imageData.BlackLevel?.Value is { Length: > 0 },
+                ["headers"] = shapes.Count,
+                ["note"] = "The watermark image bytes are embedded in the header; the original src path is not stored.",
+            };
+        }
+
         return new Dictionary<string, object?>
         {
+            ["kind"] = "text",
             ["text"] = shape.Descendants<V.TextPath>().FirstOrDefault()?.String?.Value,
             ["color"] = shape.FillColor?.Value?.TrimStart('#').ToUpperInvariant(),
             ["diagonal"] = style.Contains("rotation:315", StringComparison.Ordinal),
@@ -240,4 +271,81 @@ public sealed partial class WordHandler
         .Replace("<", "&lt;", StringComparison.Ordinal)
         .Replace(">", "&gt;", StringComparison.Ordinal)
         .Replace("\"", "&quot;", StringComparison.Ordinal);
+
+    // -------------------------------------------------------- picture watermark
+
+    /// <summary>A resolved picture watermark: the sanitized image bytes, format, aspect and display name.</summary>
+    private sealed record PictureWatermark(byte[] Bytes, string Format, double Aspect, bool Washout, string Name);
+
+    /// <summary>
+    /// Resolves props.image through the sandbox (SECURITY: the only road to the
+    /// bytes), sniffs PNG/JPEG by header (never extension), and reads washout/scale.
+    /// </summary>
+    private static PictureWatermark ResolvePictureWatermark(EditSession session, JsonObject props, string image)
+    {
+        // SECURITY: a picture-watermark image is a file-valued prop; it MUST resolve
+        // through the workspace sandbox, exactly like add --type image.
+        var resolved = session.Workspace.Resolve(image, mustExist: true);
+        if (!File.Exists(resolved))
+        {
+            throw new AiofficeException(
+                ErrorCodes.FileNotFound,
+                $"Watermark image not found: {image}",
+                "Check the path; it is resolved relative to the workspace root.");
+        }
+
+        var bytes = File.ReadAllBytes(resolved);
+        var (format, pixelWidth, pixelHeight) = SniffImage(bytes, image);
+        var aspect = pixelWidth > 0 && pixelHeight > 0 ? (double)pixelHeight / pixelWidth : 1.0;
+        var washout = props["washout"] is not { } washoutNode
+            || WordFormatting.ParseBool("washout", NodeToString(washoutNode));
+
+        return new PictureWatermark(bytes, format, aspect, washout, Path.GetFileName(image));
+    }
+
+    /// <summary>
+    /// The w:pict for a picture watermark: a centered VML image shape (shape type
+    /// 75, the picture frame) whose <c>v:imagedata</c> references an image part
+    /// embedded in this header. Washout maps to Word's grayscale gain/blacklevel so
+    /// the picture sits faintly behind the text. props.scale (a width in pt or a
+    /// fraction) sizes the shape; the default fills most of the text column.
+    /// </summary>
+    private static Picture BuildPictureWatermark(HeaderPart part, PictureWatermark picture, int index)
+    {
+        var imagePart = part.AddImagePart(picture.Format == "png" ? ImagePartType.Png : ImagePartType.Jpeg);
+        using (var stream = new MemoryStream(picture.Bytes, writable: false))
+        {
+            imagePart.FeedData(stream);
+        }
+
+        var relId = part.GetIdOfPart(imagePart);
+
+        // Default size: 6 inches wide (432pt), height by aspect; a reasonable
+        // page-filling watermark that stays inside default margins.
+        const double WidthPt = 432.0;
+        var heightPt = Math.Round(WidthPt * picture.Aspect, 2);
+        var spid = (2100 + index).ToString(CultureInfo.InvariantCulture);
+        var dimensions = string.Create(CultureInfo.InvariantCulture, $"width:{WidthPt}pt;height:{heightPt}pt");
+        var style =
+            "position:absolute;margin-left:0;margin-top:0;" + dimensions + ";" +
+            "z-index:-251653120;mso-position-horizontal:center;mso-position-horizontal-relative:margin;" +
+            "mso-position-vertical:center;mso-position-vertical-relative:margin";
+
+        // Washout: grayscale with Word's standard wash gain/blacklevel; otherwise a
+        // light overall opacity so the image still reads as a background watermark.
+        var imagedata = picture.Washout
+            ? $"<v:imagedata r:id=\"{relId}\" o:title=\"watermark\" gain=\"19661f\" blacklevel=\"22938f\" grayscale=\"t\"/>"
+            : $"<v:imagedata r:id=\"{relId}\" o:title=\"watermark\"/>";
+
+        const string ns = "xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" " +
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+
+        var xml =
+            $"<v:shape {ns} id=\"{WatermarkShapeIdPrefix}{index}\" o:spid=\"_x0000_s{spid}\" type=\"#_x0000_t75\" " +
+            $"style=\"{style}\" o:allowincell=\"f\" stroked=\"f\">" +
+            imagedata +
+            "</v:shape>";
+
+        return new Picture { InnerXml = xml };
+    }
 }

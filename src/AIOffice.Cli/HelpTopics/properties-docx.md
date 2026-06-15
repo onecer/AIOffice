@@ -13,6 +13,7 @@ listing the supported set; capabilities not built yet answer
 | style     | string | named paragraph style, e.g. Heading1, Normal     |
 | align     | string | left · center · right · justify                  |
 | rtl       | bool   | M6: right-to-left flow (`w:bidi`); turning it on also right-aligns the paragraph. `get` reports `rtl` |
+| dropCap   | string | **1.7**: `drop` (dropped inside the text column) · `margin` (in the margin) · `none`/`false` (remove). The first letter moves to a framed paragraph (`w:framePr w:dropCap`). Pair with `dropCapLines` (height in lines, default 3) and `dropCapFont` (font for the dropped letter) |
 
 ## run
 
@@ -65,16 +66,42 @@ with `{op:"add", path:"/header[1]", type:"header", props:{text, align?}}`
 (same for footers) — adding them wires `w:titlePg` / `w:evenAndOddHeaders`
 automatically, all three variants coexist, and `get` reports the variant.
 
-## field (M5)
+## field (M5, +1.7 kinds)
 
 | prop        | type   | notes                                          |
 |-------------|--------|------------------------------------------------|
-| kind        | string | pageNumber (PAGE) · numPages (NUMPAGES) · date (DATE) · docTitle (TITLE) |
+| kind        | string | pageNumber (PAGE) · numPages (NUMPAGES) · date (DATE) · docTitle (TITLE) · **styleRef (STYLEREF, 1.7)** · **symbol (SYMBOL, 1.7)** · **quote (QUOTE, 1.7)** |
 | format      | string | date only: a format picture, e.g. `"yyyy"`     |
 | leadingText | string | literal text emitted before the field          |
+| styleRef    | string | **styleRef kind**: the style name to echo, e.g. `"Heading 1"` (running headers) |
+| charCode    | int    | **symbol kind**: a decimal or `0x`-hex character code, e.g. `169` → © |
+| symbolFont  | string | **symbol kind**, optional: the glyph font, e.g. `"Wingdings"` |
+| quoteText   | string | **quote kind**: the literal text the QUOTE field inserts |
 
 `'Page X of Y'` footer: add a `pageNumber` field to `/footer[1]/p[1]`, then a
 `numPages` field with `leadingText:" of "`.
+
+v1.7 reference/insertion fields (all write a real Word field; Word refreshes on
+open / `F9`):
+
+    aioffice edit r.docx --ops '[{"op":"add","path":"/header[1]/p[1]","type":"field","props":{"kind":"styleRef","styleRef":"Heading 1"}}]'   # running header echoing the nearest Heading 1
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"symbol","charCode":169,"symbolFont":"Symbol"}}]'   # © glyph
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"quote","quoteText":"Confidential"}}]'
+
+## watermark (M4 text, +1.7 picture)
+
+`add type:watermark` on `/body` stamps a watermark into every section's header.
+A **text** watermark (M4) takes `props.text` (+ `color`, `diagonal`); a
+**picture** watermark (1.7) takes `props.image` instead:
+
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body","type":"watermark","props":{"image":"logo.png"}}]'
+
+- `image` is a sandbox-resolved PNG/JPEG (sniffed by header, not extension); an
+  escaping path is denied with `sandbox_denied`.
+- `washout` (bool, default true) greys/lightens it like Word's washout. The
+  image is centered and scaled to fit, preserving aspect ratio.
+- `get /watermark[1]` reports `{image, washout}` for a picture watermark (or
+  `{text, color, diagonal}` for a text one). `validate` stays clean.
 
 ## markdown bridge (M5)
 

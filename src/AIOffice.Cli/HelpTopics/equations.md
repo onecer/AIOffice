@@ -31,6 +31,21 @@ type:equation` on an `.xlsx` returns `unsupported_feature` with the workaround.
 - The result path is `/slide[i]/shape[@id=N]/omath[k]`. The OMML lands natively
   inside the text box (`mc:AlternateContent`/`a14:m`/`m:oMathPara`).
 
+## Numbered display equations (1.7, docx)
+
+A display equation can carry an equation number on the right margin:
+
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body","type":"equation","props":{"latex":"E = mc^2","display":true,"number":true}}]'
+
+- `number:true` auto-increments the document's equation counter (1, 2, 3, …).
+- `number:"(1.1)"` (or any string) sets the label verbatim.
+- A number on an **inline** equation is `invalid_args` — pass `display:true`.
+- Address a numbered equation by its number:
+  `get r.docx "/equation[@num=1.1]"` (the numeric core matches a `"(1.1)"`
+  label; a whole-number label answers to `/equation[@num=1]`). `get` on the omath
+  path also reports the `number`.
+- pptx/xlsx do not number equations (display equations there are plain).
+
 ## Read it back
 
 - `get <omath path>` → `{ latex, … }` (your stored source).
@@ -46,11 +61,15 @@ type:equation` on an `.xlsx` returns `unsupported_feature` with the workaround.
 | radicals             | `\sqrt{x}`, `\sqrt 3` (unbraced single token)             |
 | big operators        | `\sum`, `\prod`, `\int`, `\oint`, `\lim` with `_`/`^`     |
 | matrices/environments| `\begin{pmatrix}1&0\\0&1\end{pmatrix}` (also bmatrix, Bmatrix, vmatrix, Vmatrix, plain matrix; `&` = column, `\\` = row) |
+| equation arrays (1.7)| `\begin{aligned} … \end{aligned}`, `\begin{gathered}`, `\begin{cases} x & x\geq 0 \\ -x & x<0 \end{cases}` (emit `m:eqArr`; cases wraps in a `{` brace) |
+| binomials (1.7)      | `\binom{n}{k}`, `\dbinom`, `\tbinom` (no-bar fraction in parentheses) |
+| horizontal braces (1.7)| `\overbrace{a+b}^{n}`, `\underbrace{x+y}_{m}` (`m:groupChr`) |
+| multi-integrals (1.7)| `\iint`, `\iiint` (double/triple integral) alongside `\int \oint` |
 | delimiters           | `\left( … \right)`, `\left[ … \right]`                    |
-| accents              | `\bar{x}`, `\overline{x}`                                 |
+| accents              | `\bar{x}`, `\overline{x}`, `\hat{x}`, `\vec{x}`, `\tilde{x}` |
 | text runs            | `\text{…}`, `\mathrm`, `\mathbf`, `\mathit`, `\operatorname` |
 | Greek letters        | `\alpha \beta \gamma … \omega` (lower + upper)            |
-| operators/relations  | `\pm \times \cdot \leq \geq \neq \approx \infty \partial \nabla \rightarrow \cdot` and more |
+| operators/relations  | `\pm \times \cdot \leq \geq \neq \approx \infty \partial \nabla \rightarrow` plus (1.7) `\prec \succ \preceq \succeq \lesssim \gtrsim \leqslant \geqslant \subsetneq \supsetneq \longrightarrow \Longrightarrow \hookrightarrow \rightleftharpoons \nrightarrow \triangleq \doteq` and many more arrows/relations |
 | spacing              | `\,` `\;` `\quad` `\qquad` (consumed; no visible glyph)   |
 
 ## Partial equations (honesty)

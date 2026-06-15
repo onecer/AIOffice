@@ -254,4 +254,183 @@ public sealed class EquationParserTests
     {
         AssertOmmlValidates("\\frac{\\sqrt[3]{x^2 + 1}}{\\sum_{k=0}^{\\infty} \\frac{1}{k!}}");
     }
+
+    // ------------------------------------------------------- v1.7 deepened set
+
+    [Theory]
+    [InlineData("\\begin{cases} a & x > 0 \\\\ b & x \\leq 0 \\end{cases}")]
+    [InlineData("f(x) = \\begin{cases} 1 \\\\ 0 \\end{cases}")]
+    [InlineData("\\begin{aligned} a &= b + c \\\\ &= d \\end{aligned}")]
+    [InlineData("\\begin{align} x &= 1 \\\\ y &= 2 \\end{align}")]
+    [InlineData("\\begin{alignedat}{2} a &= b & c &= d \\end{alignedat}")]
+    [InlineData("\\binom{n}{k}")]
+    [InlineData("\\binom{n}{k} + \\binom{n}{k-1}")]
+    [InlineData("\\overbrace{a+b+c}^{n}")]
+    [InlineData("\\underbrace{x_1 + x_2}_{\\text{sum}}")]
+    [InlineData("\\overline{AB} \\perp \\underline{CD}")]
+    [InlineData("\\lim_{x \\to \\infty} f(x)")]
+    [InlineData("\\max_{i} a_i + \\min_{j} b_j")]
+    [InlineData("\\iint_D f \\, dA + \\iiint_V g \\, dV + \\oint_C h")]
+    [InlineData("\\forall x \\in S \\; \\exists y \\notin S")]
+    [InlineData("\\langle u, v \\rangle \\perp \\parallel")]
+    [InlineData("\\Re z + \\Im z = \\hbar \\ell")]
+    [InlineData("A \\Rightarrow B \\Leftarrow C \\Leftrightarrow D \\mapsto E")]
+    [InlineData("\\lceil x \\rceil + \\lfloor y \\rfloor")]
+    [InlineData("\\varepsilon \\vartheta \\varphi \\varpi \\varrho \\varsigma")]
+    public void Deepened_constructs_emit_validator_clean_omml(string latex) =>
+        AssertOmmlValidates(latex);
+
+    [Fact]
+    public void Cases_emits_an_equation_array_in_a_left_brace()
+    {
+        var math = Emit("\\begin{cases} a & x>0 \\\\ b & x \\leq 0 \\end{cases}");
+        var delimiter = Assert.Single(math.Elements<M.Delimiter>());
+        Assert.Equal("{", delimiter.DelimiterProperties?.GetFirstChild<M.BeginChar>()?.Val?.Value);
+        Assert.Equal(".", delimiter.DelimiterProperties?.GetFirstChild<M.EndChar>()?.Val?.Value); // open-only brace
+        var array = Assert.Single(delimiter.Descendants<M.EquationArray>());
+        Assert.Equal(2, array.Elements<M.Base>().Count()); // two rows
+    }
+
+    [Fact]
+    public void Aligned_emits_a_bare_equation_array_with_a_row_per_line()
+    {
+        var math = Emit("\\begin{aligned} a &= b \\\\ &= c \\\\ &= d \\end{aligned}");
+        Assert.Empty(math.Elements<M.Delimiter>()); // aligned has no surrounding brace
+        var array = Assert.Single(math.Elements<M.EquationArray>());
+        Assert.Equal(3, array.Elements<M.Base>().Count());
+    }
+
+    [Fact]
+    public void Binomial_emits_a_no_bar_fraction_in_parentheses()
+    {
+        var math = Emit("\\binom{n}{k}");
+        var delimiter = Assert.Single(math.Elements<M.Delimiter>());
+        Assert.Equal("(", delimiter.DelimiterProperties?.GetFirstChild<M.BeginChar>()?.Val?.Value);
+        Assert.Equal(")", delimiter.DelimiterProperties?.GetFirstChild<M.EndChar>()?.Val?.Value);
+        var fraction = Assert.Single(delimiter.Descendants<M.Fraction>());
+        Assert.Equal(M.FractionTypeValues.NoBar, fraction.FractionProperties?.GetFirstChild<M.FractionType>()?.Val?.Value);
+        Assert.Equal("n", fraction.Numerator!.InnerText);
+        Assert.Equal("k", fraction.Denominator!.InnerText);
+    }
+
+    [Fact]
+    public void Overbrace_emits_a_top_group_char_with_its_label_as_an_upper_limit()
+    {
+        var math = Emit("\\overbrace{a+b}^{n}");
+        var limit = Assert.Single(math.Elements<M.LimitUpper>());
+        var groupChar = Assert.Single(limit.Descendants<M.GroupChar>());
+        Assert.Equal("⏞", groupChar.GroupCharProperties?.GetFirstChild<M.AccentChar>()?.Val?.Value);
+        Assert.Equal(M.VerticalJustificationValues.Top, groupChar.GroupCharProperties?.GetFirstChild<M.Position>()?.Val?.Value);
+        Assert.Equal("n", limit.Limit!.InnerText);
+    }
+
+    [Fact]
+    public void Underbrace_emits_a_bottom_group_char_with_a_lower_limit_label()
+    {
+        var math = Emit("\\underbrace{x}_{k}");
+        var limit = Assert.Single(math.Elements<M.LimitLower>());
+        var groupChar = Assert.Single(limit.Descendants<M.GroupChar>());
+        Assert.Equal("⏟", groupChar.GroupCharProperties?.GetFirstChild<M.AccentChar>()?.Val?.Value);
+        Assert.Equal(M.VerticalJustificationValues.Bottom, groupChar.GroupCharProperties?.GetFirstChild<M.Position>()?.Val?.Value);
+        Assert.Equal("k", limit.Limit!.InnerText);
+    }
+
+    [Fact]
+    public void Bare_brace_without_label_emits_a_plain_group_char()
+    {
+        var math = Emit("\\overbrace{a+b}");
+        Assert.Empty(math.Elements<M.LimitUpper>());
+        Assert.Single(math.Elements<M.GroupChar>());
+    }
+
+    [Fact]
+    public void Underline_emits_a_bottom_bar()
+    {
+        var bar = Assert.Single(Emit("\\underline{x+y}").Elements<M.Bar>());
+        Assert.Equal(M.VerticalJustificationValues.Bottom, bar.BarProperties?.GetFirstChild<M.Position>()?.Val?.Value);
+    }
+
+    [Fact]
+    public void Overline_stays_a_top_bar()
+    {
+        var bar = Assert.Single(Emit("\\overline{x}").Elements<M.Bar>());
+        Assert.Equal(M.VerticalJustificationValues.Top, bar.BarProperties?.GetFirstChild<M.Position>()?.Val?.Value);
+    }
+
+    [Fact]
+    public void Lim_with_subscript_emits_a_lower_limit_not_a_subscript()
+    {
+        var math = Emit("\\lim_{x \\to 0} f");
+        var lim = Assert.Single(math.Elements<M.LimitLower>());
+        Assert.Empty(math.Elements<M.Subscript>()); // the bound is a lower limit, not a subscript
+        Assert.Equal("lim", lim.Base!.InnerText);
+        Assert.Contains("x", lim.Limit!.InnerText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Lim_function_name_renders_upright()
+    {
+        var lim = Assert.Single(Emit("\\lim_{n} a").Elements<M.LimitLower>());
+        var run = Assert.Single(lim.Base!.Descendants<M.Run>());
+        Assert.NotNull(run.MathRunProperties?.GetFirstChild<M.NormalText>());
+    }
+
+    [Fact]
+    public void Multi_integrals_carry_their_own_operator_glyphs()
+    {
+        Assert.Equal("∬", Assert.Single(Emit("\\iint_D f").Elements<M.Nary>())
+            .NaryProperties?.GetFirstChild<M.AccentChar>()?.Val?.Value);
+        Assert.Equal("∭", Assert.Single(Emit("\\iiint_V g").Elements<M.Nary>())
+            .NaryProperties?.GetFirstChild<M.AccentChar>()?.Val?.Value);
+        Assert.Equal("∮", Assert.Single(Emit("\\oint_C h").Elements<M.Nary>())
+            .NaryProperties?.GetFirstChild<M.AccentChar>()?.Val?.Value);
+    }
+
+    [Fact]
+    public void New_symbols_map_to_their_unicode_glyphs()
+    {
+        Assert.Contains("⊥", Emit("a \\perp b").InnerText);
+        Assert.Contains("∥", Emit("a \\parallel b").InnerText);
+        Assert.Contains("∀", Emit("\\forall x").InnerText);
+        Assert.Contains("∃", Emit("\\exists y").InnerText);
+        Assert.Contains("∈", Emit("x \\in S").InnerText);
+        Assert.Contains("∉", Emit("x \\notin S").InnerText);
+        Assert.Contains("⟨", Emit("\\langle u \\rangle").InnerText);
+        Assert.Contains("⌈", Emit("\\lceil x \\rceil").InnerText);
+        Assert.Contains("⌊", Emit("\\lfloor x \\rfloor").InnerText);
+        Assert.Contains("ℜ", Emit("\\Re z").InnerText);
+        Assert.Contains("ℏ", Emit("\\hbar").InnerText);
+        Assert.Contains("ℓ", Emit("\\ell").InnerText);
+        Assert.Contains("ε", Emit("\\varepsilon").InnerText);
+        Assert.Contains("ϑ", Emit("\\vartheta").InnerText);
+        Assert.Contains("⟹", Emit("a \\Longrightarrow b").InnerText);
+    }
+
+    [Fact]
+    public void Cases_shorthand_brace_form_parses_like_the_environment()
+    {
+        var math = Emit("\\cases{ a & b \\\\ c & d }");
+        var delimiter = Assert.Single(math.Elements<M.Delimiter>());
+        Assert.Equal("{", delimiter.DelimiterProperties?.GetFirstChild<M.BeginChar>()?.Val?.Value);
+        Assert.Equal(2, Assert.Single(delimiter.Descendants<M.EquationArray>()).Elements<M.Base>().Count());
+    }
+
+    [Fact]
+    public void Deepened_constructs_report_no_unknown_tokens()
+    {
+        var parsed = LatexParser.Parse(
+            "\\begin{cases} \\binom{n}{k} \\\\ \\lim_{x\\to0} \\overbrace{a}^{b} \\end{cases}");
+        Assert.Empty(parsed.UnknownTokens);
+    }
+
+    [Fact]
+    public void Unknown_command_still_degrades_to_literal_and_warns()
+    {
+        // The honest degrade path must survive the deepening: a still-unknown command
+        // appears literally and is reported.
+        var parsed = LatexParser.Parse("\\frobnicate{x} + \\binom{n}{k}");
+        Assert.Contains("\\frobnicate", parsed.UnknownTokens);
+        Assert.DoesNotContain("\\binom", parsed.UnknownTokens);
+        Assert.Contains("\\frobnicate", OmmlEmitter.ToOfficeMath(parsed.Root).InnerText);
+    }
 }

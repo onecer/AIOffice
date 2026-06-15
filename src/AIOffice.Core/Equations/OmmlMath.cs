@@ -95,6 +95,10 @@ public static class OmmlMath
         MathAccent accent => Accent(accent),
         MathBar bar => Bar(bar),
         MathMatrix matrix => Matrix(matrix),
+        MathEqArray eqArray => EqArray(eqArray),
+        MathBinomial binom => Binomial(binom),
+        MathBrace brace => GroupCharBrace(brace),
+        MathLowerLimit lim => LowerLimit(lim),
         _ => Run(string.Empty),
     };
 
@@ -238,8 +242,113 @@ public static class OmmlMath
 
     private static XElement Bar(MathBar bar) => new(
         M + "bar",
-        new XElement(M + "barPr", Val("pos", "top")),
+        new XElement(M + "barPr", Val("pos", bar.Below ? "bot" : "top")),
         Argument("e", bar.Base));
+
+    /// <summary>
+    /// A binomial coefficient: a no-bar fraction (<c>m:type val="noBar"</c>) inside
+    /// a grow-operator parenthesis delimiter, exactly as Word stores <c>\binom</c>.
+    /// </summary>
+    private static XElement Binomial(MathBinomial binom)
+    {
+        var fraction = new XElement(
+            M + "f",
+            new XElement(M + "fPr", Val("type", "noBar")),
+            Argument("num", binom.Top),
+            Argument("den", binom.Bottom));
+
+        var props = new XElement(
+            M + "dPr",
+            Val("begChr", "("),
+            Val("endChr", ")"),
+            OnOff("grow", true));
+        return new XElement(M + "d", props, new XElement(M + "e", fraction));
+    }
+
+    /// <summary>
+    /// <c>\overbrace</c>/<c>\underbrace</c>: an OMML group-character object whose
+    /// brace glyph sits above (top) or below (bottom) the base, with an optional
+    /// label stacked on the far side as a lower/upper limit.
+    /// </summary>
+    private static XElement GroupCharBrace(MathBrace brace)
+    {
+        var glyph = brace.Below ? "⏟" : "⏞"; // bottom / top curly bracket
+        var position = brace.Below ? "bot" : "top";
+
+        var groupChar = new XElement(
+            M + "groupChr",
+            new XElement(
+                M + "groupChrPr",
+                Val("chr", glyph),
+                Val("pos", position),
+                Val("vertJc", position)),
+            Argument("e", brace.Base));
+
+        if (brace.Label is null)
+        {
+            return groupChar;
+        }
+
+        var limitName = brace.Below ? "limLow" : "limUpp";
+        return new XElement(
+            M + limitName,
+            new XElement(M + (brace.Below ? "limLowPr" : "limUppPr")),
+            new XElement(M + "e", groupChar),
+            Argument("lim", brace.Label));
+    }
+
+    /// <summary>
+    /// <c>\lim_{…}</c> and friends: a lower-limit object so the bound sits centered
+    /// under the upright operator name (Word's <c>m:limLow</c>).
+    /// </summary>
+    private static XElement LowerLimit(MathLowerLimit lim) => new(
+        M + "limLow",
+        new XElement(M + "limLowPr"),
+        Argument("e", lim.Base),
+        Argument("lim", lim.Limit));
+
+    /// <summary>
+    /// An equation array (<c>aligned</c>/<c>cases</c>/…): each <c>\\</c>-row becomes
+    /// one <c>m:e</c> whose alignment cells are concatenated in order. A brace pair
+    /// (cases) wraps the array in a grow-operator delimiter with one open/close side.
+    /// </summary>
+    private static XElement EqArray(MathEqArray eqArray)
+    {
+        var array = new XElement(
+            M + "eqArr",
+            new XElement(M + "eqArrPr", Val("baseJc", "center")));
+
+        foreach (var row in eqArray.Rows)
+        {
+            var rowBase = new XElement(M + "e");
+            foreach (var cell in row)
+            {
+                foreach (var element in EmitNodes(cell))
+                {
+                    rowBase.Add(element);
+                }
+            }
+
+            if (!rowBase.HasElements)
+            {
+                rowBase.Add(Run(string.Empty));
+            }
+
+            array.Add(rowBase);
+        }
+
+        if (eqArray.Open.Length == 0 && eqArray.Close.Length == 0)
+        {
+            return array;
+        }
+
+        var props = new XElement(
+            M + "dPr",
+            Val("begChr", eqArray.Open.Length > 0 ? eqArray.Open : "."),
+            Val("endChr", eqArray.Close.Length > 0 ? eqArray.Close : "."),
+            OnOff("grow", true));
+        return new XElement(M + "d", props, new XElement(M + "e", array));
+    }
 
     /// <summary>
     /// A matrix. A plain <c>matrix</c> emits a bare <c>m:m</c>; a bracketed

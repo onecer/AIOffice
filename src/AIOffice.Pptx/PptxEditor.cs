@@ -132,6 +132,14 @@ internal static class PptxEditor
                 candidates: ["font"]);
         }
 
+        if (address.IsNotesMaster || address.IsHandoutMaster)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' is a whole-part root; nothing is added to it.",
+                "Edit it with set, e.g. {\"op\":\"set\",\"path\":\"" + op.Path + "\",\"props\":{\"background\":\"0F172A\"}}.");
+        }
+
         if (address.IsMaster)
         {
             return PptxMasters.Add(presentation, address, op);
@@ -642,6 +650,11 @@ internal static class PptxEditor
             return PptxSections.Set(presentation, address, op.Props);
         }
 
+        if (address.IsNotesMaster || address.IsHandoutMaster)
+        {
+            return PptxNotesHandoutMasters.Set(presentation, address, op.Props);
+        }
+
         if (address.IsMaster)
         {
             return PptxMasters.Set(presentation, address, op.Props);
@@ -991,6 +1004,15 @@ internal static class PptxEditor
         if (address.IsSection)
         {
             return PptxSections.Remove(presentation, address);
+        }
+
+        if (address.IsNotesMaster || address.IsHandoutMaster)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"The {(address.IsNotesMaster ? "notes" : "handout")} master cannot be removed (every deck keeps one).",
+                "Reset its look with set, e.g. {\"op\":\"set\",\"path\":\"" + op.Path +
+                "\",\"props\":{\"background\":\"FFFFFF\"}}.");
         }
 
         if (address.IsMaster)

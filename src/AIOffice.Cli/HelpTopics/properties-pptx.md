@@ -141,6 +141,17 @@ mergeRight?:2, mergeDown?:2}}` — pptx merge counts are the cells to **absorb**
 for rows/cols/headerRow plus per-cell paths and merge shape; `render --to svg`
 draws the real grid; `remove` by the table path.
 
+Cell alignment & spacing (**1.7**), set on a cell path:
+
+| prop          | type   | notes                                              |
+|---------------|--------|----------------------------------------------------|
+| valign        | string | `top` · `middle` · `bottom` (the `a:tcPr` anchor)  |
+| marginLeft    | length | internal cell padding, e.g. `"0.2cm"` / `"6pt"`    |
+| marginRight   | length | "                                                  |
+| marginTop     | length | "                                                  |
+| marginBottom  | length | "                                                  |
+| textDirection | string | `horizontal` · `vertical` · `vertical270` · `stacked` |
+
 ## animation (M4 entrance, M5 emphasis + exit; `add` on the shape path)
 
 `{op:"add", path:"/slide[1]/shape[@id=4]", type:"animation",

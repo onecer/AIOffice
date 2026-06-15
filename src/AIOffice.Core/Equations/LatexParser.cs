@@ -207,8 +207,34 @@ public sealed class LatexParser
             case "bar" or "overline":
                 return new MathBar(ParseArgument());
 
+            case "underline":
+                return new MathBar(ParseArgument(), Below: true);
+
+            case "binom" or "dbinom" or "tbinom" or "choose":
+            {
+                var top = ParseArgument();
+                var bottom = ParseArgument();
+                return new MathBinomial(top, bottom);
+            }
+
+            case "overbrace" or "underbrace":
+                return ParseBrace(below: name == "underbrace");
+
+            case "cases":
+                // \cases{...} shorthand: braces hold the rows the same way \begin{cases} does.
+                return ParseCasesShorthand();
+
             case "frac{}{}": // never produced; defensive
                 return new MathList([]);
+        }
+
+        // \lim (and limsup/liminf/max/min/…) with a following _subscript become a
+        // lower-limit object so the bound sits under the operator, the way Word renders it.
+        if (LatexSymbols.LowerLimitFunctions.Contains(name) && Peek.Kind == LatexTokenKind.Underscore)
+        {
+            Advance(); // _
+            var limit = ParseArgument();
+            return new MathLowerLimit(new MathFunctionName(name), limit);
         }
 
         if (LatexSymbols.NaryOperators.TryGetValue(name, out var naryGlyph))
@@ -414,11 +440,27 @@ public sealed class LatexParser
     /// <summary>
     /// <c>\begin{env} … \end{env}</c> for matrix environments. Cells are split on
     /// <c>&amp;</c>, rows on <c>\\</c>. pmatrix/bmatrix/Bmatrix/vmatrix carry the
-    /// bracket pair; plain matrix has none.
+    /// bracket pair; plain matrix has none. The aligned/align/cases family routes
+    /// to <see cref="ParseEqArray"/> (an OMML <c>m:eqArr</c>) instead.
     /// </summary>
     private MathNode ParseEnvironment()
     {
         var env = ReadRawGroupText();
+
+        // The aligned / cases family becomes an equation array, not a matrix.
+        switch (env)
+        {
+            case "aligned" or "align" or "align*" or "alignedat" or "alignat" or "alignat*"
+                or "gathered" or "gather" or "gather*" or "split" or "multline" or "multline*":
+                return ParseEqArray(env, string.Empty, string.Empty);
+            case "cases":
+                return ParseEqArray(env, "{", string.Empty);
+            case "rcases":
+                return ParseEqArray(env, string.Empty, "}");
+            default:
+                break;
+        }
+
         var (open, close) = env switch
         {
             "pmatrix" => ("(", ")"),
@@ -429,6 +471,51 @@ public sealed class LatexParser
             _ => (string.Empty, string.Empty),
         };
 
+        return new MathMatrix(open, close, ReadEnvironmentRows());
+    }
+
+    /// <summary>
+    /// An aligned/cases environment: the same <c>&amp;</c>-cell, <c>\\</c>-row grid
+    /// as a matrix, but emitted as an OMML <c>m:eqArr</c> (left-aligned rows with
+    /// alignment columns) optionally wrapped in an open/close brace.
+    /// <c>alignedat</c>/<c>alignat</c> carry a mandatory <c>{n}</c> column-count
+    /// argument that is consumed and ignored (OMML sizes columns automatically).
+    /// </summary>
+    private MathNode ParseEqArray(string env, string open, string close)
+    {
+        if (env is "alignedat" or "alignat" or "alignat*")
+        {
+            _ = ReadRawGroupText(); // consume the {n} column-pair count
+        }
+
+        return new MathEqArray(open, close, ReadEnvironmentRows());
+    }
+
+    /// <summary>
+    /// <c>\cases{ a &amp; b \\ c &amp; d }</c> brace-shorthand: the rows live in a
+    /// single braced group rather than a <c>\begin…\end</c> pair, but split on
+    /// <c>&amp;</c>/<c>\\</c> identically and emit the same braced equation array.
+    /// </summary>
+    private MathNode ParseCasesShorthand()
+    {
+        if (Peek.Kind != LatexTokenKind.OpenBrace)
+        {
+            return new MathEqArray("{", string.Empty, [[new MathList([])]]);
+        }
+
+        Advance(); // {
+        var rows = ReadEnvironmentRows(untilCloseBrace: true);
+        Expect(LatexTokenKind.CloseBrace);
+        return new MathEqArray("{", string.Empty, rows);
+    }
+
+    /// <summary>
+    /// Collects environment rows: cells split on <c>&amp;</c>, rows on <c>\\</c>,
+    /// stopping at the matching <c>\end{…}</c> (default) or a <c>}</c> (shorthand).
+    /// Shared by matrix, aligned and cases parsing so they segment identically.
+    /// </summary>
+    private List<IReadOnlyList<MathNode>> ReadEnvironmentRows(bool untilCloseBrace = false)
+    {
         var rows = new List<IReadOnlyList<MathNode>>();
         var currentRow = new List<MathNode>();
         var cell = new List<MathNode>();
@@ -442,7 +529,12 @@ public sealed class LatexParser
 
         while (!AtEnd)
         {
-            if (Peek.Kind == LatexTokenKind.Command && Peek.Value == "end")
+            if (untilCloseBrace && Peek.Kind == LatexTokenKind.CloseBrace)
+            {
+                break;
+            }
+
+            if (!untilCloseBrace && Peek.Kind == LatexTokenKind.Command && Peek.Value == "end")
             {
                 Advance();
                 _ = ReadRawGroupText(); // consume {env}
@@ -495,7 +587,28 @@ public sealed class LatexParser
             rows.Add([new MathList([])]);
         }
 
-        return new MathMatrix(open, close, rows);
+        return rows;
+    }
+
+    /// <summary>
+    /// <c>\overbrace{body}^{label}</c> / <c>\underbrace{body}_{label}</c>: the body
+    /// is the required argument; a brace label is the optional script on the far
+    /// side (above for overbrace, below for underbrace).
+    /// </summary>
+    private MathNode ParseBrace(bool below)
+    {
+        var body = ParseArgument();
+        MathNode? label = null;
+
+        // The label is attached with ^ (overbrace) or _ (underbrace); accept either
+        // and treat it as the brace label rather than an ordinary script.
+        if (Peek.Kind is LatexTokenKind.Caret or LatexTokenKind.Underscore)
+        {
+            Advance();
+            label = ParseArgument();
+        }
+
+        return new MathBrace(body, below, label);
     }
 
     /// <summary>

@@ -78,6 +78,8 @@ Every command prints **exactly one** JSON object to stdout:
   | `index_cached` | (1.2) a docx index's entries were alphabetized from XE fields with cached page numbers; Word recomputes them on open/refresh |
   | `caption_numbers_cached` | caption/cross-ref numbers came from cached SEQ values |
   | `model3d_as_media` | (1.3) a pptx 3D model was embedded as a 3D part behind a poster picture fallback; PowerPoint 2019+ renders the model |
+  | `linked_picture_static` | (1.7) an xlsx linked picture (camera tool) was embedded as a static snapshot of the source range, not a live link; re-add to refresh |
+  | `equation_numbers_cached` | (1.7) a docx numbered display equation's number was written as a cached value; Word recomputes the sequence on open/refresh |
   | `csv_empty` | a csv import/export produced no rows |
   | `md_block_skipped` · `md_html_skipped` · `md_image_skipped` · `md_link_skipped` | a markdown source had content with no neutral equivalent |
   | `scope_defaulted` | a render scope was defaulted (e.g. a deck rendered slide 1) |
@@ -503,6 +505,93 @@ only packaging and onboarding artifacts *around* the binary (an npm package, a H
 formula, one-line install scripts, and the `SKILL.md` / `docs/COOKBOOK.md` /
 `docs/INSTALL.md` / `docs/MCP-SETUP.md` / `docs/SIGNING.md` guides). Agents that target the
 1.5.0 surface are byte-for-byte compatible with 1.6.0.
+
+## 7g. 1.7.0 — print readiness, camera tool, calc mode (additive, surface 1.0)
+
+Package **1.7.0** keeps **`surfaceVersion 1.0`**, the **18 CLI verbs / 17 MCP tools**, and
+every envelope shape, error code, exit code, op/view/tool vocabulary in §§1–7. The changes
+are **additive** (new `set` props on an existing path, one new `add` type, one new
+addressing form, one new warning, one new behavior on `get /`); nothing in §§1–7 was
+removed or renamed.
+
+### xlsx — print completeness (additive `set` props on `/SheetN`)
+
+- **New `set` props** (§4, additive) on a sheet path, extending the M3/1.4 page setup:
+  `printTitleRows` (`"1:1"` repeat header rows), `printTitleCols` (`"A:A"`),
+  `pageBreaks` (`{rows:[20,40], cols:["F"]}`; `rowBreaks`/`colBreaks` aliases; `[]`
+  clears an axis), `fitToPage` (`{fitToWidth, fitToHeight}` page counts **or**
+  `{scale}` percent — mutually exclusive), `fitToHeight` (flat twin of the M3
+  `fitToWidth`), `centerHorizontally`, `centerVertically`, `printGridlines`,
+  `printHeadings`, and `printHeader`/`printFooter`
+  (`{left, center, right}` with Excel field codes: `&P` page, `&N` pages, `&D` date,
+  `&T` time, `&F` file, `&A` sheet; a section sent as `null`/`""` clears it). `get
+  /SheetN` reflects everything under `pageSetup`.
+
+### xlsx — linked picture / camera tool (additive `add` type)
+
+- **New `add` type** (§5, additive): `linkedPicture` on a sheet (`{op:add,
+  path:/Sheet1, type:linkedPicture, props:{sourceRange:"A1:D10", anchor:"G2",
+  sheet?}}`) mirrors a cell range as a picture. It is an **honest static snapshot** of
+  the range's values as of the edit (a true live link is validator-fragile), embedded
+  as a real PNG picture; re-add it to refresh. The add fires the new
+  `linked_picture_static` warning (§2 table additive).
+- **New addressing form** (§4, additive): `/Sheet1/linkedPicture[i]` (1-based per
+  sheet, ordered by picture name) — `get` reports `{sourceRange, anchor, …}`; `remove`
+  drops it. A linked picture is a real picture, so it ALSO appears under `image[i]`.
+
+### xlsx — workbook calculation mode (additive `set /` props + `get /`)
+
+- **New `set /` props** (§4, additive on the workbook-root set that already carries
+  structure protection): `calculationMode` (`auto|manual|autoExceptTables`),
+  `iterativeCalc`, `maxIterations`, `maxChange`, `fullPrecision` — write the workbook
+  `calcPr`. A single root set may carry both protection and calc props.
+- **New behavior on `get /`** (additive): an xlsx `get /` previously returned
+  `unsupported_feature`; it now returns `{calculation, workbookProtection}`. An agent
+  that handled the old error keeps working (the call no longer errors — it succeeds).
+
+### docx — drop caps, picture watermark, more fields, numbered/deeper equations
+
+- **New `set` props** (§4, additive) on a body paragraph: `dropCap`
+  (`drop|margin|none`), `dropCapLines` (height in lines, default 3), `dropCapFont`
+  (font of the dropped letter) — restructure the paragraph into Word's drop-cap shape
+  (`w:framePr w:dropCap`); `dropCap:"none"|false` removes it.
+- **New `add` prop on the existing `watermark` type** (§5, additive): `props.image`
+  (a sandbox-resolved PNG/JPEG, optional `washout`) makes a **picture** watermark
+  instead of a text one; `get /watermark[1]` reports `{image, washout}`.
+- **New `field` kinds** (§5, additive — the existing `field` add type gains kinds):
+  `styleRef` (STYLEREF; `props.styleRef` = style name), `symbol` (SYMBOL;
+  `props.charCode` decimal/`0x`-hex, optional `props.symbolFont`), `quote` (QUOTE;
+  `props.quoteText`). All write real Word fields; Word refreshes on open / F9.
+- **New `add type:equation` prop** (§5, additive): `props.number` on a **display**
+  equation — `true` auto-increments the document equation counter, a string sets the
+  label verbatim. Cached numbering fires the new `equation_numbers_cached` warning;
+  a number on an inline equation is `invalid_args`.
+- **New addressing form** (§4, additive): `/equation[@num=...]` addresses a numbered
+  display equation by its number (`/equation[@num=1.1]` — the numeric core matches a
+  `"(1.1)"` label; a whole-number label answers to `/equation[@num=1]`).
+- **Deeper LaTeX→OMML** (backward-compatible — strictly *more* LaTeX now renders, so
+  *fewer* `equation_partial` warnings; no previously-supported input changed meaning):
+  equation arrays `\begin{aligned|gathered|cases}` (`m:eqArr`), `\binom`/`\dbinom`/
+  `\tbinom`, `\overbrace`/`\underbrace`, multi-integrals `\iint`/`\iiint`, more accents
+  (`\hat`/`\vec`/`\tilde`), and many more relations/arrows. The **same shared Core
+  converter** drives docx and pptx, so pptx equations gain all of these automatically.
+
+### pptx — notes/handout masters, animation timing, table-cell alignment
+
+- **New `set` set-paths** (§4, additive — singletons, no index): `/notesMaster`
+  (`{background, bodyFont}`) and `/handoutMaster` (`{background,
+  headerFooter:{header, footer, date, pageNumber}, slidesPerPage}`,
+  `slidesPerPage ∈ {1,2,3,4,6,9}`). Both parts are created on first edit and reported
+  by `get` and `read --view structure`.
+- **New `animation` timing props** (§4, additive on `set /slide[i]/animation[k]` — a
+  retime, applied after the animation is added): `repeat`
+  (`none | N | untilClick | untilNext`), `rewind` (bool), `autoReverse` (bool).
+  `read --view structure` reports them.
+- **New `set` props on a pptx table cell** (§4, additive): `valign`
+  (`top|middle|bottom`), `marginLeft`/`marginRight`/`marginTop`/`marginBottom`
+  (lengths), `textDirection` (`horizontal|vertical|vertical270|stacked`).
+
+Agents that target the 1.6.0 surface are byte-for-byte compatible with 1.7.0.
 
 ## 8. What is experimental (NOT frozen)
 

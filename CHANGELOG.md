@@ -4,6 +4,71 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.7.0 — print readiness, camera tool, calc mode, deeper equations (additive)
+
+`surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Every change is
+**additive** — new `set` props on existing paths, one new `add` type (`linkedPicture`), two
+new `set`-paths (`/notesMaster`, `/handoutMaster`), one new addressing form
+(`/equation[@num=…]`), two new warnings, deeper LaTeX support — nothing removed or renamed.
+Agents that target the 1.6.0 surface are byte-for-byte compatible with 1.7.0.
+**2331 tests** across 7 projects (Core 180 · Word 681 · Excel 619 · Pptx 709 · MCP 87 ·
+Preview 24 · Render 31), green on macOS + Windows.
+
+### Added — xlsx
+
+- **Print completeness** (`set` props on `/SheetN`): `printTitleRows`/`printTitleCols`
+  (repeat bands), `pageBreaks` (`{rows,cols}`), `fitToPage` (`{fitToWidth,fitToHeight}` or
+  `{scale}`), `fitToHeight`, `centerHorizontally`/`centerVertically`,
+  `printGridlines`/`printHeadings`, and `printHeader`/`printFooter`
+  (`{left,center,right}` field-code strings: `&P &N &D &T &F &A`). `get /SheetN` reflects them.
+- **Linked picture / camera tool** (`add type:linkedPicture` on a sheet): mirrors a cell
+  range as a picture — an honest **static snapshot** (a true live link is validator-fragile),
+  fired with the new `linked_picture_static` warning. Addressed as
+  `/SheetN/linkedPicture[i]` (`get`/`remove`).
+- **Workbook calculation settings** (`set /`): `calculationMode`
+  (`auto|manual|autoExceptTables`), `iterativeCalc`, `maxIterations`, `maxChange`,
+  `fullPrecision` — one root set can carry these alongside structure protection. `get /`
+  now returns `{calculation, workbookProtection}` (was `unsupported_feature`).
+
+### Added — docx
+
+- **Drop caps** (`set` props on a paragraph): `dropCap` (`drop|margin|none`),
+  `dropCapLines`, `dropCapFont`.
+- **Picture watermark** (`add type:watermark` with `props.image` + optional `washout`)
+  alongside the existing text watermark.
+- **New field kinds** (`add type:field`): `styleRef` (STYLEREF), `symbol` (SYMBOL,
+  `charCode` + optional `symbolFont`), `quote` (QUOTE).
+- **Numbered display equations**: `add type:equation` `props.number` (`true` auto-increments,
+  or a verbatim label); cached numbering fires the new `equation_numbers_cached` warning;
+  addressed by `/equation[@num=…]`.
+
+### Added — equations (shared Core converter — docx + pptx)
+
+- **Deeper LaTeX→OMML**: equation arrays `\begin{aligned|gathered|cases}` (`m:eqArr`),
+  `\binom`/`\dbinom`/`\tbinom`, `\overbrace`/`\underbrace`, multi-integrals
+  `\iint`/`\iiint`, more accents (`\hat`/`\vec`/`\tilde`), and many more relations/arrows.
+  Backward-compatible — strictly *more* LaTeX renders, so *fewer* `equation_partial`
+  warnings. pptx equations inherit all of this automatically (same Core converter).
+
+### Added — pptx
+
+- **Notes & handout masters** (`set` set-paths): `/notesMaster` (`{background, bodyFont}`)
+  and `/handoutMaster` (`{background, headerFooter:{header,footer,date,pageNumber},
+  slidesPerPage∈{1,2,3,4,6,9}}`). Created on first edit; reported by `get` + structure.
+- **Animation timing** (`set /slide[i]/animation[k]` retime, applied after the add):
+  `repeat` (`none|N|untilClick|untilNext`), `rewind`, `autoReverse`.
+- **Table-cell alignment & spacing** (`set` on a cell): `valign` (`top|middle|bottom`),
+  `marginLeft`/`marginRight`/`marginTop`/`marginBottom`, `textDirection`.
+
+### Changed
+
+- `Directory.Build.props` `Version` → **1.7.0**; npm `package.json`, the Homebrew formula
+  `version`, and the `install.sh`/`install.ps1` fallback versions all pin to **1.7.0**.
+- `office_edit` schema + `aioffice schema`/help surfaces and `office_help`/`aioffice help`
+  topics extended additively (new `print-setup` and `masters` topics; equations, animations,
+  fields, watermark, drop-cap, table-cell, calc docs deepened). MCP tool surface stays inside
+  its 3500-token budget.
+
 ## 1.6.0 — distribution & onboarding release (no capability change)
 
 `surfaceVersion` stays **1.0** and the native binary is **byte-for-byte the same surface**

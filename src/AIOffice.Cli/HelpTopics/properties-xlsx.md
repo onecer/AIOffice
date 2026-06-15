@@ -80,8 +80,18 @@ props:{value:"=SUM(SalesData)"}}` evaluates and caches a real value.
 | orientation, paperSize  | sheet       | landscape/portrait; A4/Letter/…    |
 | fitToWidth, fitToHeight | sheet       | print scaling, pages               |
 | printArea               | sheet       | e.g. "A1:F40"                      |
+| printTitleRows/Cols     | sheet       | **1.7**: repeat bands, e.g. "1:1" / "A:A" |
+| pageBreaks              | sheet       | **1.7**: `{rows:[20],cols:["F"]}`  |
+| fitToPage               | sheet       | **1.7**: `{fitToWidth,fitToHeight}` or `{scale}` |
+| centerHorizontally/Vertically | sheet | **1.7**: bools                     |
+| printGridlines/printHeadings  | sheet | **1.7**: bools                     |
+| printHeader/printFooter | sheet       | **1.7**: `{left,center,right}` field-code strings |
+| calculationMode, iterativeCalc, maxIterations, maxChange, fullPrecision | **`/` (workbook root)** | **1.7**: `manual`/`auto`/`autoExceptTables` + iteration settings |
 
-`get /Sheet1` reflects freeze/autoFilter/pageSetup. Streaming reads (M3): files
+Full grammar + examples: `aioffice help print-setup`.
+
+`get /Sheet1` reflects freeze/autoFilter/pageSetup; `get /` reflects the
+workbook calculation settings. Streaming reads (M3): files
 over 20 MB (or `stream:true`) answer `read --view stats|text` and cell/range
 `get` via a SAX scan without loading the workbook DOM.
 
@@ -194,6 +204,23 @@ after a remove).
 | widthPx, heightPx | number | omit either to keep the aspect ratio       |
 
 `{op:"add", path:"/Sheet1", type:"image", props:{src:"logo.png", anchor:"E2"}}`.
+
+## linkedPicture (1.7, `/Sheet1/linkedPicture[1]` — the camera tool)
+
+Mirrors a cell range as a picture (Excel's camera tool). aioffice renders a
+**static snapshot** of the range to a PNG and embeds it, raising a
+`linked_picture_static` warning (the picture is the values as of this edit, not
+a live mirror). The source range/anchor are recorded in a workbook registry so
+`get`/`remove` of `/Sheet1/linkedPicture[i]` distinguish it from a plain image.
+
+| prop        | type   | notes                                                  |
+|-------------|--------|--------------------------------------------------------|
+| sourceRange | string | required; the range to snapshot, e.g. `A1:C5`          |
+| anchor      | string | required; top-left cell where the picture lands, e.g. `G2` |
+| sheet       | string | optional; sheet the source range lives on (default: the target sheet) |
+| name        | string | optional picture name (also the ordering key)          |
+
+`{op:"add", path:"/Sheet1", type:"linkedPicture", props:{sourceRange:"A1:C5", anchor:"G2"}}`.
 
 ## dataValidation (M5, `/Sheet1/dataValidation[1]`)
 

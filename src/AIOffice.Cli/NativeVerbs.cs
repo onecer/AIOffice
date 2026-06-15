@@ -25,6 +25,8 @@ public sealed class NativeVerbs
         // v1.5 additive topics.
         "scenarios", "goal-seek", "table-formulas", "building-blocks", "embedded-fonts",
         "action-buttons", "layouts", "line-numbers",
+        // v1.7 additive topics.
+        "print-setup", "masters",
     ];
 
     private readonly Workspace _workspace;

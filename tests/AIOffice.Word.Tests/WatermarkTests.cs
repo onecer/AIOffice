@@ -127,4 +127,103 @@ public sealed class WatermarkTests : WordTestBase
 
         Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
     }
+
+    // ----------------------------------------------- v1.7 picture watermark
+
+    [Fact]
+    public void Picture_watermark_embeds_an_image_in_the_header_and_validates()
+    {
+        var file = CreateDoc(title: "Logo doc");
+        WritePng("logo.png", width: 200, height: 100);
+
+        var envelope = Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"logo.png"}}]""");
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("/watermark[1]", summary["path"]!.GetValue<string>());
+        Assert.Equal("logo.png", summary["image"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var part = Assert.Single(doc.MainDocumentPart!.HeaderParts);
+            var shape = Assert.Single(part.Header!.Descendants<V.Shape>());
+            Assert.StartsWith("PowerPlusWaterMarkObject", shape.Id!.Value!, StringComparison.Ordinal);
+            var imageData = Assert.Single(shape.Descendants<V.ImageData>());
+            // Washed out by default: the grayscale gain/blacklevel are present.
+            Assert.False(string.IsNullOrEmpty(imageData.Gain?.Value));
+            // The referenced image part is embedded in the header.
+            Assert.Single(part.ImageParts);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Picture_watermark_without_washout_omits_the_grayscale_gain()
+    {
+        var file = CreateDoc(title: "Crisp logo");
+        WritePng("logo.png");
+
+        Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"logo.png","washout":false}}]""");
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var imageData = Assert.Single(doc.MainDocumentPart!.HeaderParts.Single().Header!.Descendants<V.ImageData>());
+        Assert.True(string.IsNullOrEmpty(imageData.Gain?.Value));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Get_picture_watermark_reports_kind_picture()
+    {
+        var file = CreateDoc(title: "Read it");
+        WritePng("logo.png");
+        Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"logo.png"}}]""");
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/watermark[1]" })));
+        Assert.Equal("picture", got["properties"]!["kind"]!.GetValue<string>());
+        Assert.True(got["properties"]!["washout"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Picture_watermark_image_must_resolve_in_the_sandbox()
+    {
+        var file = CreateDoc(title: "Escape attempt");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"../../../etc/passwd"}}]"""));
+
+        // Escaping the workspace is denied (sandbox), not a generic not-found.
+        Assert.Equal(ErrorCodes.SandboxDenied, ex.Code);
+    }
+
+    [Fact]
+    public void Picture_watermark_missing_file_is_file_not_found()
+    {
+        var file = CreateDoc(title: "Missing");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"nope.png"}}]"""));
+        Assert.Equal(ErrorCodes.FileNotFound, ex.Code);
+    }
+
+    [Fact]
+    public void Watermark_needs_text_or_image()
+    {
+        var file = CreateDoc(title: "Neither");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("image", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Remove_picture_watermark_clears_the_shape()
+    {
+        var file = CreateDoc(title: "Cleanup pic");
+        WritePng("logo.png");
+        Edit(file, """[{"op":"add","path":"/body","type":"watermark","props":{"image":"logo.png"}}]""");
+
+        Edit(file, """[{"op":"remove","path":"/watermark[1]"}]""");
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.HeaderParts.Single().Header!.Descendants<V.Shape>());
+        AssertValidatesClean(file);
+    }
 }

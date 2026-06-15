@@ -38,8 +38,31 @@ public sealed record MathDelimiter(string Open, string Close, MathNode Body) : M
 /// <summary>An accented base: <c>\hat{x}</c>, <c>\vec{v}</c>, … (Char is the combining glyph).</summary>
 public sealed record MathAccent(string Char, MathNode Base) : MathNode;
 
-/// <summary>An overbar: <c>\bar{x}</c> / <c>\overline{…}</c>.</summary>
-public sealed record MathBar(MathNode Base) : MathNode;
+/// <summary>An overbar (<c>\bar</c>/<c>\overline</c>) or underline (<c>\underline</c>): a bar above or below the base.</summary>
+public sealed record MathBar(MathNode Base, bool Below = false) : MathNode;
 
 /// <summary>A matrix/array: rows of cells, each cell a node, with the bracket pair (empty = plain matrix).</summary>
 public sealed record MathMatrix(string Open, string Close, IReadOnlyList<IReadOnlyList<MathNode>> Rows) : MathNode;
+
+/// <summary>
+/// An equation array (<c>\begin{aligned}</c>, <c>\begin{cases}</c>, …): rows
+/// separated by <c>\\</c>, each row split into alignment columns on <c>&amp;</c>.
+/// Open/Close hold an optional surrounding brace pair (<c>{</c> for cases, empty
+/// for aligned). Emits an OMML <c>m:eqArr</c> (optionally inside a delimiter).
+/// </summary>
+public sealed record MathEqArray(string Open, string Close, IReadOnlyList<IReadOnlyList<MathNode>> Rows) : MathNode;
+
+/// <summary>A binomial coefficient <c>\binom{n}{k}</c> — a no-bar fraction inside parentheses.</summary>
+public sealed record MathBinomial(MathNode Top, MathNode Bottom) : MathNode;
+
+/// <summary>
+/// A horizontal brace group: <c>\overbrace{…}</c> (above) or <c>\underbrace{…}</c>
+/// (below), with an optional script label attached on the far side via <c>^</c>/<c>_</c>.
+/// </summary>
+public sealed record MathBrace(MathNode Base, bool Below, MathNode? Label) : MathNode;
+
+/// <summary>
+/// A function/operator carrying a limit placed directly below it (<c>\lim_{x\to0}</c>,
+/// <c>\max_i</c>): emits an OMML <c>m:limLow</c> so the bound sits under the operator.
+/// </summary>
+public sealed record MathLowerLimit(MathNode Base, MathNode Limit) : MathNode;

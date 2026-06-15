@@ -22,6 +22,10 @@ public sealed partial class ExcelHandler
         "allowSelectLockedCells", "allowSelectUnlockedCells",
         // v1.5 (additive): compute actions that persist their result on a cell/sheet.
         "applyScenario", "goalSeek",
+        // v1.7 (additive): print completeness on a sheet path.
+        "printTitleRows", "printTitleCols", "pageBreaks", "fitToPage", "fitToHeight",
+        "centerHorizontally", "centerVertically", "printGridlines", "printHeadings",
+        "printHeader", "printFooter",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -34,6 +38,8 @@ public sealed partial class ExcelHandler
         "dataTable",
         // v1.5 (additive): scenario manager.
         "scenario",
+        // v1.7 (additive): linked picture (camera tool) mirroring a cell range.
+        "linkedPicture",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -175,6 +181,26 @@ public sealed partial class ExcelHandler
             if (post.RemovedScenarios.Count > 0)
             {
                 ExcelScenarios.RemoveAfterSave(file, post.RemovedScenarios);
+            }
+
+            // (1.7) Print header/footer field codes: populate the headerFooter element
+            // ClosedXML emits (its IXLHFItem text does not persist in 0.105).
+            if (post.HeaderFooters.Count > 0)
+            {
+                ExcelPrintHeaderFooter.Apply(file, post.HeaderFooters);
+            }
+
+            // (1.7) Workbook calculation settings: layer the calcPr mode/iteration/
+            // precision onto the recalc flags the normal save already wrote.
+            if (post.CalcSettings is { } calcSettings)
+            {
+                ExcelCalculation.Apply(file, calcSettings);
+            }
+
+            // (1.7) Print-title band clears (ClosedXML cannot clear a repeat band).
+            if (post.PrintTitleClears.Count > 0)
+            {
+                ExcelPrintTitles.Apply(file, post.PrintTitleClears);
             }
 
             if (!charts.IsEmpty)
@@ -463,6 +489,28 @@ public sealed partial class ExcelHandler
         /// <summary>(1.5) Scenarios queued for raw removal post-save (sheet name + scenario name).</summary>
         public List<(string Sheet, string Name)> RemovedScenarios { get; } = [];
 
+        /// <summary>
+        /// (1.7) Print header/footer field-code changes queued for the post-save raw
+        /// pass: ClosedXML 0.105 does not persist <c>oddHeader</c>/<c>oddFooter</c>
+        /// text, so aioffice authors the <c>headerFooter</c> element directly.
+        /// </summary>
+        public List<ExcelPrintHeaderFooter.Spec> HeaderFooters { get; } = [];
+
+        /// <summary>
+        /// (1.7) Workbook calculation settings queued for the post-save raw pass: the
+        /// <c>calcPr</c> mode/iteration/precision attributes are authored directly so
+        /// they layer onto the recalc flags the normal save writes. Null when unset.
+        /// </summary>
+        public ExcelCalculation.Spec? CalcSettings { get; set; }
+
+        /// <summary>
+        /// (1.7) Print-title band clears queued for the post-save raw pass: ClosedXML
+        /// 0.105 throws on every repeat-band clear form, so an empty <c>printTitleRows</c>
+        /// / <c>printTitleCols</c> drops the matching segment of the raw
+        /// <c>_xlnm.Print_Titles</c> defined name.
+        /// </summary>
+        public List<ExcelPrintTitles.ClearSpec> PrintTitleClears { get; } = [];
+
         /// <summary>True when any write-time formula evaluation must be authored after the save.</summary>
         public bool HasEvaluatedFormulas => Spills.Count > 0 || DataTables.Count > 0;
 
@@ -561,11 +609,12 @@ public sealed partial class ExcelHandler
     {
         // "/" (document root) is a replace scope (expanded upstream into
         // per-sheet ops) AND, since v1.2, the workbook-structure protection
-        // target ({op:set, path:/, props:{protectStructure:true}}). Any other
-        // root-targeted op has no xlsx surface.
+        // target ({op:set, path:/, props:{protectStructure:true}}) plus, since
+        // v1.7, the workbook calculation settings ({calculationMode, …}). Any
+        // other root-targeted op has no xlsx surface.
         if (op.Op == "set" && op.Path == "/")
         {
-            ApplyWorkbookProtection(op, index, details, post);
+            ApplyWorkbookRootSet(op, index, details, post);
             return;
         }
 
@@ -633,7 +682,7 @@ public sealed partial class ExcelHandler
                 ApplySet(ctx, workbook, op, index, details, post, warnings);
                 break;
             case "add":
-                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
+                ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post, warnings);
                 break;
             case "remove":
                 ApplyRemove(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
@@ -912,6 +961,62 @@ public sealed partial class ExcelHandler
         if (props.TryGetPropertyValue("printArea", out var printAreaNode) && printAreaNode is not null)
         {
             ApplyPrintArea(target, op, printAreaNode, index, applied);
+        }
+
+        // v1.7 print completeness (all sheet-targeted, ClosedXML-native page setup).
+        if (props.TryGetPropertyValue("printTitleRows", out var titleRowsNode) && titleRowsNode is not null)
+        {
+            ApplyPrintTitleRows(target, op, titleRowsNode, index, applied, post);
+        }
+
+        if (props.TryGetPropertyValue("printTitleCols", out var titleColsNode) && titleColsNode is not null)
+        {
+            ApplyPrintTitleCols(target, op, titleColsNode, index, applied, post);
+        }
+
+        if (props.TryGetPropertyValue("fitToPage", out var fitToPageNode) && fitToPageNode is not null)
+        {
+            ApplyFitToPage(target, op, fitToPageNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("fitToHeight", out var fitToHeightNode) && fitToHeightNode is not null)
+        {
+            ApplyFitToHeight(target, op, fitToHeightNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("pageBreaks", out var pageBreaksNode) && pageBreaksNode is not null)
+        {
+            ApplyPageBreaks(target, op, pageBreaksNode, index, applied);
+        }
+
+        if (props.TryGetPropertyValue("centerHorizontally", out var centerHNode) && centerHNode is not null)
+        {
+            ApplyPrintBool(target, op, centerHNode, "centerHorizontally", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("centerVertically", out var centerVNode) && centerVNode is not null)
+        {
+            ApplyPrintBool(target, op, centerVNode, "centerVertically", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("printGridlines", out var gridlinesNode) && gridlinesNode is not null)
+        {
+            ApplyPrintBool(target, op, gridlinesNode, "printGridlines", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("printHeadings", out var headingsNode) && headingsNode is not null)
+        {
+            ApplyPrintBool(target, op, headingsNode, "printHeadings", index, applied);
+        }
+
+        if (props.TryGetPropertyValue("printHeader", out var headerNode) && headerNode is not null)
+        {
+            ApplyPrintHeaderFooter(target, op, headerNode, isHeader: true, index, applied, post);
+        }
+
+        if (props.TryGetPropertyValue("printFooter", out var footerNode) && footerNode is not null)
+        {
+            ApplyPrintHeaderFooter(target, op, footerNode, isHeader: false, index, applied, post);
         }
 
         if (props.TryGetPropertyValue("height", out var heightNode) && heightNode is not null)
@@ -1272,8 +1377,12 @@ public sealed partial class ExcelHandler
         });
     }
 
-    /// <summary>Handles {op:set, path:/, props:{protectStructure, protectWindows?, password?}}.</summary>
-    private static void ApplyWorkbookProtection(EditOp op, int index, List<object> details, PostSaveWork post)
+    /// <summary>
+    /// Handles the workbook-root set ({op:set, path:/}): structure/window protection
+    /// (v1.2) and/or calculation settings (v1.7). A single op may carry props from
+    /// both groups — they are independent calcPr/workbookProtection writes.
+    /// </summary>
+    private static void ApplyWorkbookRootSet(EditOp op, int index, List<object> details, PostSaveWork post)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -1281,45 +1390,72 @@ public sealed partial class ExcelHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"ops[{index}]: workbook-root set needs props.",
-                "Use {op:set, path:/, props:{protectStructure:true, password:\"secret\"}}.");
+                "Use {op:set, path:/, props:{protectStructure:true}} or {op:set, path:/, props:{calculationMode:\"manual\"}}.");
         }
 
+        var rootProps = ExcelProtection.WorkbookProps.Concat(ExcelCalculation.Props).ToList();
         foreach (var (key, _) in props)
         {
-            if (!ExcelProtection.WorkbookProps.Contains(key, StringComparer.Ordinal))
+            if (!rootProps.Contains(key, StringComparer.Ordinal))
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"ops[{index}]: unknown workbook-root prop '{key}'.",
-                    "The workbook root ('/') supports only structure protection: " +
-                    string.Join(", ", ExcelProtection.WorkbookProps) + ".",
-                    candidates: ExcelProtection.WorkbookProps);
+                    "The workbook root ('/') supports structure protection and calculation settings: " +
+                    string.Join(", ", rootProps) + ".",
+                    candidates: rootProps);
             }
         }
 
-        bool? structure = props.TryGetPropertyValue("protectStructure", out var sNode) && sNode is not null
-            ? BoolPropValue(sNode, "protectStructure", index)
-            : null;
-        bool? windows = props.TryGetPropertyValue("protectWindows", out var wNode) && wNode is not null
-            ? BoolPropValue(wNode, "protectWindows", index)
-            : null;
-        var password = props.TryGetPropertyValue("password", out var pwNode) &&
-                       pwNode is JsonValue pwValue && pwValue.GetValueKind() == JsonValueKind.String
-            ? pwValue.GetValue<string>()
-            : null;
+        var applied = new List<string>();
 
-        if (structure is null && windows is null)
+        // Calculation settings (v1.7): calcPr mode/iteration/precision.
+        if (ExcelCalculation.HasCalcProps(props))
         {
-            throw new AiofficeException(
-                ErrorCodes.InvalidArgs,
-                $"ops[{index}]: workbook protection needs protectStructure (and/or protectWindows).",
-                "Use {op:set, path:/, props:{protectStructure:true}} to lock the sheet structure.");
+            var (spec, calcApplied) = ExcelCalculation.Parse(props, index);
+            post.CalcSettings = spec;
+            applied.AddRange(calcApplied);
         }
 
-        post.WorkbookProtection = ExcelProtection.BuildWorkbookSpec(structure, windows, password, index);
-        var applied = post.WorkbookProtection.Clear
-            ? new List<string> { "structureUnprotected" }
-            : [structure == true ? "structureProtected" : "windowsProtected"];
+        // Structure/window protection (v1.2). Only engages when a protection prop
+        // is present, so a calc-only root set never demands protectStructure.
+        if (props.Any(p => ExcelProtection.WorkbookProps.Contains(p.Key, StringComparer.Ordinal)))
+        {
+            bool? structure = props.TryGetPropertyValue("protectStructure", out var sNode) && sNode is not null
+                ? BoolPropValue(sNode, "protectStructure", index)
+                : null;
+            bool? windows = props.TryGetPropertyValue("protectWindows", out var wNode) && wNode is not null
+                ? BoolPropValue(wNode, "protectWindows", index)
+                : null;
+            var password = props.TryGetPropertyValue("password", out var pwNode) &&
+                           pwNode is JsonValue pwValue && pwValue.GetValueKind() == JsonValueKind.String
+                ? pwValue.GetValue<string>()
+                : null;
+
+            // A bare password (with no structure/windows flag) is only meaningful
+            // for protection; if no protection flag accompanies it and calc props
+            // were set, treat the password as a no-op rather than erroring.
+            if (structure is null && windows is null && password is not null && applied.Count > 0)
+            {
+                // password alongside calc-only props: nothing to protect — ignore it.
+            }
+            else
+            {
+                if (structure is null && windows is null)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{index}]: workbook protection needs protectStructure (and/or protectWindows).",
+                        "Use {op:set, path:/, props:{protectStructure:true}} to lock the sheet structure.");
+                }
+
+                post.WorkbookProtection = ExcelProtection.BuildWorkbookSpec(structure, windows, password, index);
+                applied.Add(post.WorkbookProtection.Clear
+                    ? "structureUnprotected"
+                    : structure == true ? "structureProtected" : "windowsProtected");
+            }
+        }
+
         details.Add(new { op = "set", path = "/", applied });
     }
 
@@ -1712,7 +1848,7 @@ public sealed partial class ExcelHandler
     private static void ApplyAdd(
         CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details,
         ChartOpBatch charts, ExcelSlicers.Batch slicers, ExcelEmbeds.Batch embeds,
-        ExcelFormControls.Batch formControls, PostSaveWork post)
+        ExcelFormControls.Batch formControls, PostSaveWork post, List<Warning> warnings)
     {
         switch (op.Type)
         {
@@ -1771,6 +1907,14 @@ public sealed partial class ExcelHandler
                     ? post.RemovedImageNames(target.Sheet.Name)
                     : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 details.Add(ExcelImages.Add(ctx.Workspace, target, op, index, pending));
+                break;
+            }
+            case "linkedPicture":
+            {
+                var (linkedDetails, linkedWarning) =
+                    ExcelLinkedPicture.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index);
+                details.Add(linkedDetails);
+                warnings.Add(linkedWarning);
                 break;
             }
             case "embed":
@@ -2072,6 +2216,16 @@ public sealed partial class ExcelHandler
                     removed = "image",
                     name = picture.Name,
                 });
+                return;
+            }
+
+            case ExcelTargetKind.LinkedPicture:
+            {
+                // Drop the registry entry now; the underlying picture rides the same
+                // raw post-save deletion path as a plain image.
+                var (linkedDetails, sheetName, name) = ExcelLinkedPicture.Remove(workbook, target);
+                post.RemovedImages.Add((sheetName, name));
+                details.Add(linkedDetails);
                 return;
             }
 

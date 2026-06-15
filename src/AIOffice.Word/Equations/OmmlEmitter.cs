@@ -87,6 +87,10 @@ internal static class OmmlEmitter
         MathAccent accent => Accent(accent),
         MathBar bar => Bar(bar),
         MathMatrix matrix => Matrix(matrix),
+        MathEqArray eqArray => EqArray(eqArray),
+        MathBinomial binom => Binomial(binom),
+        MathBrace brace => GroupCharBrace(brace),
+        MathLowerLimit lim => LowerLimit(lim),
         _ => Run(string.Empty),
     };
 
@@ -216,8 +220,120 @@ internal static class OmmlEmitter
         Argument<M.Base>(accent.Base));
 
     private static M.Bar Bar(MathBar bar) => new(
-        new M.BarProperties(new M.Position { Val = M.VerticalJustificationValues.Top }),
+        new M.BarProperties(new M.Position
+        {
+            Val = bar.Below ? M.VerticalJustificationValues.Bottom : M.VerticalJustificationValues.Top,
+        }),
         Argument<M.Base>(bar.Base));
+
+    /// <summary>
+    /// A binomial coefficient: a no-bar fraction (<c>m:type val="noBar"</c>) inside
+    /// a grow-operator parenthesis delimiter, exactly as Word stores <c>\binom</c>.
+    /// </summary>
+    private static M.Delimiter Binomial(MathBinomial binom)
+    {
+        var fraction = new M.Fraction(
+            new M.FractionProperties(new M.FractionType { Val = M.FractionTypeValues.NoBar }),
+            Argument<M.Numerator>(binom.Top),
+            Argument<M.Denominator>(binom.Bottom));
+
+        var props = new M.DelimiterProperties(
+            new M.BeginChar { Val = "(" },
+            new M.EndChar { Val = ")" },
+            new M.GrowOperators { Val = Bool(true) });
+        var baseArg = new M.Base();
+        baseArg.AppendChild(fraction);
+        return new M.Delimiter(props, baseArg);
+    }
+
+    /// <summary>
+    /// <c>\overbrace</c>/<c>\underbrace</c>: an OMML group-character object whose
+    /// brace glyph sits above (top) or below (bottom) the base. A label, when
+    /// present, is stacked on the far side as a limit-upper/limit-lower so the
+    /// whole construct reads as TeX renders it.
+    /// </summary>
+    private static OpenXmlElement GroupCharBrace(MathBrace brace)
+    {
+        var glyph = brace.Below ? "⏟" : "⏞"; // bottom / top curly bracket
+        var position = brace.Below ? M.VerticalJustificationValues.Bottom : M.VerticalJustificationValues.Top;
+
+        // The group-character's own position is the side opposite the label: the
+        // brace hugs the base, and (with a label) Word renders the label beyond it.
+        var groupChar = new M.GroupChar(
+            new M.GroupCharProperties(
+                new M.AccentChar { Val = glyph },
+                new M.Position { Val = position },
+                new M.VerticalJustification { Val = position }),
+            Argument<M.Base>(brace.Base));
+
+        if (brace.Label is null)
+        {
+            return groupChar;
+        }
+
+        // Stack the label on the brace via a lower/upper limit wrapper.
+        var groupBase = new M.Base();
+        groupBase.AppendChild(groupChar);
+        if (brace.Below)
+        {
+            return new M.LimitLower(new M.LimitLowerProperties(), groupBase, Argument<M.Limit>(brace.Label));
+        }
+
+        return new M.LimitUpper(new M.LimitUpperProperties(), groupBase, Argument<M.Limit>(brace.Label));
+    }
+
+    /// <summary>
+    /// <c>\lim_{…}</c> and friends: a lower-limit object so the bound sits centered
+    /// under the upright operator name (Word's <c>m:limLow</c>).
+    /// </summary>
+    private static M.LimitLower LowerLimit(MathLowerLimit lim) => new(
+        new M.LimitLowerProperties(),
+        Argument<M.Base>(lim.Base),
+        Argument<M.Limit>(lim.Limit));
+
+    /// <summary>
+    /// An equation array (<c>aligned</c>/<c>cases</c>/…): each <c>\\</c>-row becomes
+    /// one <c>m:e</c> whose alignment cells are concatenated in order. A brace pair
+    /// (cases) wraps the array in a grow-operator delimiter with one open/close side.
+    /// </summary>
+    private static OpenXmlElement EqArray(MathEqArray eqArray)
+    {
+        var array = new M.EquationArray(new M.EquationArrayProperties(
+            new M.BaseJustification { Val = M.VerticalAlignmentValues.Center }));
+
+        foreach (var row in eqArray.Rows)
+        {
+            var rowBase = new M.Base();
+            foreach (var cell in row)
+            {
+                foreach (var element in EmitNodes(cell))
+                {
+                    rowBase.AppendChild(element);
+                }
+            }
+
+            // A row with no content still needs a run so m:e is schema-valid.
+            if (!rowBase.HasChildren)
+            {
+                rowBase.AppendChild(Run(string.Empty));
+            }
+
+            array.AppendChild(rowBase);
+        }
+
+        if (eqArray.Open.Length == 0 && eqArray.Close.Length == 0)
+        {
+            return array;
+        }
+
+        var props = new M.DelimiterProperties(
+            new M.BeginChar { Val = eqArray.Open.Length > 0 ? eqArray.Open : "." },
+            new M.EndChar { Val = eqArray.Close.Length > 0 ? eqArray.Close : "." },
+            new M.GrowOperators { Val = Bool(true) });
+        var delimiterBase = new M.Base();
+        delimiterBase.AppendChild(array);
+        return new M.Delimiter(props, delimiterBase);
+    }
 
     /// <summary>
     /// A matrix. A plain <c>matrix</c> emits a bare <c>m:m</c>; a bracketed

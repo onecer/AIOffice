@@ -248,13 +248,26 @@ internal static class PptxAnimations
                 case "duration":
                     durationMs = ParseSecondsMs("duration", value, max: 600);
                     break;
+                case "repeat":
+                    SetRepeat(node, value);
+                    break;
+                case "rewind":
+                    SetRewind(node, value);
+                    break;
+                case "autoReverse":
+                    node.AutoReverse = AsBool("autoReverse", value);
+                    break;
+                case "accel":
+                    SetAcceleration(node, value);
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.InvalidArgs,
                         $"Unknown animation prop '{key}' for set.",
-                        "Retimable animation props: trigger, delay, duration. " +
-                        "Re-add the animation to change its effect/direction/color.",
-                        candidates: ["trigger", "delay", "duration"]);
+                        "Retimable animation props: trigger, delay, duration, " +
+                        "repeat (none|N|untilClick|untilNext), rewind (bool), autoReverse (bool), " +
+                        "accel (none|smooth|decelerate). Re-add the animation to change its effect/direction/color.",
+                        candidates: ["trigger", "delay", "duration", "repeat", "rewind", "autoReverse", "accel"]);
             }
         }
 
@@ -479,6 +492,112 @@ internal static class PptxAnimations
         }
 
         condition.Delay = delayMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// repeat "none"|N|"untilClick"|"untilNext": sets the effect cTn's repeatCount.
+    /// "none" clears it (play once); N (>=1) loops N times (thousandths of an
+    /// iteration, the OOXML unit); untilClick/untilNext loop indefinitely (the user's
+    /// next click / slide advance stops the loop). The stored value is always a valid
+    /// ST_TLTime ("indefinite" or an unsigned integer).
+    /// </summary>
+    private static void SetRepeat(P.CommonTimeNode node, JsonNode? value)
+    {
+        var token = J.ScalarText(value ?? string.Empty).Trim();
+        if (token.Length == 0)
+        {
+            throw RepeatInvalid(value);
+        }
+
+        if (string.Equals(token, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            node.RepeatCount = null;
+            return;
+        }
+
+        if (string.Equals(token, "untilClick", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "untilNext", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "indefinite", StringComparison.OrdinalIgnoreCase))
+        {
+            node.RepeatCount = "indefinite";
+            return;
+        }
+
+        if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var times) && times >= 1 && times <= 10_000)
+        {
+            // OOXML expresses repeatCount in thousandths of an iteration (1000 == once).
+            node.RepeatCount = (times * 1000).ToString(CultureInfo.InvariantCulture);
+            return;
+        }
+
+        throw RepeatInvalid(value);
+    }
+
+    private static AiofficeException RepeatInvalid(JsonNode? value) => new(
+        ErrorCodes.InvalidArgs,
+        $"repeat must be \"none\", a count (1..10000), \"untilClick\" or \"untilNext\"; got {value?.ToJsonString() ?? "null"}.",
+        "Examples: {\"repeat\":\"none\"} plays once, {\"repeat\":3} loops 3 times, " +
+        "{\"repeat\":\"untilClick\"} loops until the next click.");
+
+    /// <summary>
+    /// rewind true/false (PowerPoint's "Rewind when done playing"): a rewinding
+    /// effect leaves the shape in its pre-animation state (cTn fill="remove"); a
+    /// non-rewinding one holds the final state (fill="hold").
+    /// </summary>
+    private static void SetRewind(P.CommonTimeNode node, JsonNode? value) =>
+        node.Fill = AsBool("rewind", value) ? P.TimeNodeFillValues.Remove : P.TimeNodeFillValues.Hold;
+
+    /// <summary>
+    /// accel "none"|"smooth"|"decelerate": the effect's easing. The cTn accel/decel
+    /// attributes are a percentage of the duration in 1000ths (100% == 100000).
+    /// "smooth" eases both ends (25%/25%); "decelerate" eases only the end (50%);
+    /// "none" is linear.
+    /// </summary>
+    private static void SetAcceleration(P.CommonTimeNode node, JsonNode? value)
+    {
+        var token = J.ScalarText(value ?? string.Empty).Trim().ToLowerInvariant();
+        switch (token)
+        {
+            case "none" or "linear":
+                node.Acceleration = null;
+                node.Deceleration = null;
+                break;
+            case "smooth":
+                node.Acceleration = 25_000; // 25% of the duration (1000ths; 100% == 100000)
+                node.Deceleration = 25_000;
+                break;
+            case "decelerate":
+                node.Acceleration = null;
+                node.Deceleration = 50_000; // ease only the tail (50%)
+                break;
+            default:
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"accel must be \"none\", \"smooth\" or \"decelerate\"; got {value?.ToJsonString() ?? "null"}.",
+                    "\"smooth\" eases both ends, \"decelerate\" eases only the end, \"none\" is linear.",
+                    candidates: ["none", "smooth", "decelerate"]);
+        }
+    }
+
+    private static bool AsBool(string key, JsonNode? node)
+    {
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<bool>(out var flag))
+            {
+                return flag;
+            }
+
+            if (value.TryGetValue<string>(out var text) && bool.TryParse(text, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"Animation prop '{key}' must be true or false; got {node?.ToJsonString() ?? "null"}.",
+            "Pass a boolean, e.g. {\"" + key + "\":true}.");
     }
 
     /// <summary>Rewrites the first user-facing timed behavior's duration (skipping the 1ms visibility set).</summary>
@@ -1525,9 +1644,55 @@ internal static class PptxAnimations
             Duration = view.Duration,
             Delay = view.Delay,
             Direction = view.Direction,
+            Repeat = ReadRepeat(view.TimeNode),
+            Rewind = ReadRewind(view.TimeNode),
+            AutoReverse = view.TimeNode.AutoReverse?.Value == true ? true : (bool?)null,
+            Accel = ReadAccel(view.TimeNode),
             TriggerOn = triggerPath,
             TriggerShapeId = view.TriggerShapeId,
         };
+    }
+
+    /// <summary>Reads the effect cTn's repeatCount back to the surface form ("indefinite" or an integer count).</summary>
+    private static string? ReadRepeat(P.CommonTimeNode node)
+    {
+        var raw = node.RepeatCount?.Value;
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+
+        if (string.Equals(raw, "indefinite", StringComparison.OrdinalIgnoreCase))
+        {
+            return "indefinite";
+        }
+
+        // Stored in thousandths of an iteration; surface the whole-iteration count.
+        return long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms)
+            ? (ms / 1000).ToString(CultureInfo.InvariantCulture)
+            : raw;
+    }
+
+    /// <summary>True when the effect rewinds at end (cTn fill="remove"); null when it holds (the default).</summary>
+    private static bool? ReadRewind(P.CommonTimeNode node) =>
+        node.Fill?.Value == P.TimeNodeFillValues.Remove ? true : (bool?)null;
+
+    /// <summary>Reads the effect cTn's accel/decel back to "smooth"/"decelerate"/null.</summary>
+    private static string? ReadAccel(P.CommonTimeNode node)
+    {
+        var accel = node.Acceleration?.Value;
+        var decel = node.Deceleration?.Value;
+        if (accel is > 0 && decel is > 0)
+        {
+            return "smooth";
+        }
+
+        if (decel is > 0)
+        {
+            return "decelerate";
+        }
+
+        return null;
     }
 
     // ----- remove ---------------------------------------------------------------------

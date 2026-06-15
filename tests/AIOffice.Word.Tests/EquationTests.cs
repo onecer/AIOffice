@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Xunit;
 using M = DocumentFormat.OpenXml.Math;
 
@@ -226,5 +227,171 @@ public sealed class EquationTests : WordTestBase
 
         Assert.Equal(AIOffice.Core.ErrorCodes.UnsupportedFeature, ex.Code);
         Assert.NotEmpty(ex.Suggestion);
+    }
+
+    // ------------------------------------------------ v1.7 numbered equations
+
+    private JsonNode AddNumberedEquation(string file, string latex, JsonNode number, string path = "/body")
+    {
+        var props = new JsonObject { ["latex"] = latex, ["display"] = true, ["number"] = number };
+        var ops = new JsonArray
+        {
+            new JsonObject { ["op"] = "add", ["path"] = path, ["type"] = "equation", ["props"] = props },
+        };
+        return Data(Edit(file, ops.ToJsonString()))["ops"]![0]!;
+    }
+
+    [Fact]
+    public void Numbered_equation_auto_increments_and_reopens_with_its_label()
+    {
+        var file = CreateDoc(title: "Eq");
+        var first = AddNumberedEquation(file, "a^2 + b^2 = c^2", true);
+        var second = AddNumberedEquation(file, "E = mc^2", true);
+
+        Assert.Equal("(1)", first["number"]!.GetValue<string>());
+        Assert.Equal("(2)", second["number"]!.GetValue<string>());
+
+        // Reopen and confirm the number reads back via the equation's omath path.
+        var firstPath = first["path"]!.GetValue<string>();
+        var props = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = firstPath })))["properties"]!;
+        Assert.Equal("(1)", props["number"]!.GetValue<string>());
+        Assert.True(props["display"]!.GetValue<bool>());
+        Assert.Equal("a^2 + b^2 = c^2", props["latex"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Explicit_number_label_is_stored_verbatim()
+    {
+        var file = CreateDoc(title: "Eq");
+        var result = AddNumberedEquation(file, "x = 1", "(1.1)");
+        Assert.Equal("(1.1)", result["number"]!.GetValue<string>());
+
+        var props = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = result["path"]!.GetValue<string>() })))["properties"]!;
+        Assert.Equal("(1.1)", props["number"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Auto_number_continues_past_an_explicit_label()
+    {
+        var file = CreateDoc(title: "Eq");
+        AddNumberedEquation(file, "x = 1", "(3)");      // explicit
+        var next = AddNumberedEquation(file, "y = 2", true); // auto continues from 3
+        Assert.Equal("(4)", next["number"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Numbered_equation_paragraph_holds_the_equation_and_a_visible_number()
+    {
+        var file = CreateDoc(title: "Eq");
+        AddNumberedEquation(file, "F = ma", "(2.7)");
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        // The equation and its number share one tab-aligned paragraph (no oMathPara).
+        var paragraph = body.Descendants<Paragraph>().Single(p => p.Descendants<M.OfficeMath>().Any());
+        Assert.Empty(paragraph.Descendants<M.Paragraph>()); // not wrapped in an m:oMathPara
+        Assert.Contains("(2.7)", paragraph.InnerText, StringComparison.Ordinal);
+        Assert.NotNull(paragraph.ParagraphProperties?.GetFirstChild<Tabs>()); // tab-stop layout
+    }
+
+    [Fact]
+    public void Numbered_equation_is_addressable_by_its_number()
+    {
+        var file = CreateDoc(title: "Eq");
+        AddNumberedEquation(file, "a = b", "(1.1)");
+        AddNumberedEquation(file, "c = d", "(1.2)");
+
+        // Address by the full label and by the bare number; both resolve.
+        var byLabel = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/equation[@num=1.2]" })))["properties"]!;
+        Assert.Equal("(1.2)", byLabel["number"]!.GetValue<string>());
+        Assert.Equal("c = d", byLabel["latex"]!.GetValue<string>());
+        Assert.EndsWith("/omath[1]", byLabel["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Missing_equation_number_lists_existing_numbers_as_candidates()
+    {
+        var file = CreateDoc(title: "Eq");
+        AddNumberedEquation(file, "a = b", "(1.1)");
+
+        var ex = Assert.Throws<AIOffice.Core.AiofficeException>(() =>
+            Handler.Get(Ctx(file, new JsonObject { ["path"] = "/equation[@num=9.9]" })));
+        Assert.Equal(AIOffice.Core.ErrorCodes.InvalidPath, ex.Code);
+        Assert.Contains("/equation[@num=(1.1)]", ex.Candidates!);
+    }
+
+    [Fact]
+    public void Numbered_equation_raises_the_cached_warning()
+    {
+        var file = CreateDoc(title: "Eq");
+        var envelope = Edit(
+            file,
+            """[{"op":"add","path":"/body","type":"equation","props":{"latex":"x","display":true,"number":true}}]""");
+
+        var warnings = JsonNode.Parse(envelope.ToJson())!["meta"]!["warnings"]!.AsArray();
+        Assert.Contains(warnings, w => w!["code"]!.GetValue<string>() == "equation_numbers_cached");
+    }
+
+    [Fact]
+    public void Number_on_an_inline_equation_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Eq");
+        var ex = Assert.Throws<AIOffice.Core.AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[2]","type":"equation","props":{"latex":"x","number":true}}]"""));
+
+        Assert.Equal(AIOffice.Core.ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("display:true", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Removing_a_numbered_equation_drops_its_whole_paragraph()
+    {
+        var file = CreateDoc(title: "Eq");
+        var result = AddNumberedEquation(file, "x = 1", "(1)");
+        Assert.Equal(1, CountEquations(file));
+
+        Edit(file, $$"""[{"op":"remove","path":"{{result["path"]!.GetValue<string>()}}"}]""");
+        Assert.Equal(0, CountEquations(file));
+        // The number text leaves with the paragraph — no orphan "(1)" run remains.
+        Assert.DoesNotContain(BodyTexts(file), t => t.Contains("(1)", StringComparison.Ordinal));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Numbered_equation_renders_as_block_math_with_its_label_in_markdown()
+    {
+        var file = CreateDoc(title: "Eq");
+        AddNumberedEquation(file, "\\frac{1}{2}", "(1.1)");
+
+        var markdown = Data(Handler.Read(Ctx(file, new JsonObject { ["view"] = "markdown" })))["markdown"]!.GetValue<string>();
+        Assert.Contains("$$\\frac{1}{2}$$ (1.1)", markdown, StringComparison.Ordinal);
+        // The number must appear exactly once (no duplicate orphan run rendering).
+        Assert.Equal(1, CountOccurrences(markdown, "(1.1)"));
+    }
+
+    [Fact]
+    public void A_deepened_construct_round_trips_in_a_numbered_equation()
+    {
+        var file = CreateDoc(title: "Eq");
+        const string latex = "\\begin{cases} 1 & x>0 \\\\ 0 & x \\leq 0 \\end{cases}";
+        var result = AddNumberedEquation(file, latex, true);
+
+        var props = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = result["path"]!.GetValue<string>() })))["properties"]!;
+        Assert.Equal(latex, props["latex"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+
+        return count;
     }
 }

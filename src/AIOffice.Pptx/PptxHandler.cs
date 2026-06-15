@@ -185,6 +185,16 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
             return PptxEquations.Detail(presentation, address);
         }
 
+        if (address.IsNotesMaster)
+        {
+            return PptxNotesHandoutMasters.NotesMasterDetail(presentation);
+        }
+
+        if (address.IsHandoutMaster)
+        {
+            return PptxNotesHandoutMasters.HandoutMasterDetail(presentation);
+        }
+
         if (address.IsMaster)
         {
             // A layout addressed by name (/master[m]/layout[@name=...]) resolves to its
@@ -744,6 +754,8 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
                         .ToList(),
                 };
             }).ToList<object>(),
+            NotesMaster = PptxNotesHandoutMasters.NotesMasterDetail(presentation),
+            HandoutMaster = PptxNotesHandoutMasters.HandoutMasterDetail(presentation),
             Slides = slides.Select(s =>
             {
                 var animations = PptxAnimations.List(s.Part);

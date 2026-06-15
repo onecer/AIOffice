@@ -163,4 +163,121 @@ public sealed class FieldTests : WordTestBase
 
         Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
     }
+
+    // -------------------------------------------- v1.7 STYLEREF/SYMBOL/QUOTE
+
+    [Fact]
+    public void Styleref_field_references_a_style_and_reopens()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"add","path":"/header[1]","type":"header","props":{"text":""}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/header[1]/p[1]","type":"field","props":{"kind":"styleRef","styleRef":"Heading 1"}}]
+            """);
+        Assert.Equal("styleRef", Data(envelope)["ops"]!.AsArray()[0]!["kind"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.HeaderParts.Single().Header!.Descendants<SimpleField>().Single();
+            Assert.Contains("STYLEREF \"Heading 1\"", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        // get reports the kind via the field-kind reverse lookup.
+        var props = Get(file, "/header[1]/p[1]")["properties"]!;
+        Assert.Contains("styleRef", props["fields"]!.AsArray().Select(f => f!.GetValue<string>()));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Symbol_field_inserts_a_glyph_by_char_code_and_font()
+    {
+        var file = CreateDoc(title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"symbol","charCode":169,"symbolFont":"Symbol"}}]
+            """);
+        var cached = Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>();
+        Assert.Equal("©", cached); // U+00A9
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("SYMBOL 169", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Contains("\\f \"Symbol\"", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Symbol_field_accepts_hex_char_codes()
+    {
+        var file = CreateDoc(title: "Doc");
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"symbol","charCode":"0xA9"}}]
+            """);
+        Assert.Equal("©", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("SYMBOL 169", field.Instruction!.Value!, StringComparison.Ordinal); // hex decoded to decimal
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Quote_field_carries_literal_text_as_its_result()
+    {
+        var file = CreateDoc(title: "Doc");
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"quote","quoteText":"Confidential"}}]
+            """);
+        Assert.Equal("Confidential", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("QUOTE \"Confidential\"", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("Confidential", field.InnerText);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Styleref_without_a_style_name_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"styleRef"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("styleRef", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Symbol_with_a_bad_char_code_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"symbol","charCode":"banana"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+    }
+
+    [Fact]
+    public void New_field_kinds_are_listed_in_the_unknown_kind_candidates()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"bogus"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("styleRef", ex.Candidates!);
+        Assert.Contains("symbol", ex.Candidates!);
+        Assert.Contains("quote", ex.Candidates!);
+        // The pre-1.7 kinds are still offered (additive, nothing removed).
+        Assert.Contains("pageNumber", ex.Candidates!);
+        Assert.Contains("date", ex.Candidates!);
+    }
 }

@@ -16,6 +16,8 @@ paths that `get` and `edit` accept unchanged.
     /style[@id=Callout]         one style definition by id (set/get/remove)
     /section[1]                 page setup + columns (set/get)
     /body/p[3]/omath[1]         M6: an inline equation in a paragraph (get/remove)
+    /equation[@num=1.1]         1.7: a numbered display equation by its number (matches a
+                                "(1.1)" label by its numeric core); get reports the number
     /caption[@label=Figure][1]  M8: a Figure/Table/Equation caption (1-based per label; get)
     /embed[1]                   M10: an embedded OLE/package object (read --view embeds lists
                                 them; get/remove; extract op writes the bytes out)
@@ -35,6 +37,8 @@ paths that `get` and `edit` accept unchanged.
     /Pivot/pivot[@name=SalesPivot]  same pivot by name (canonical form in results)
     /Sheet1/conditionalFormat[1]    1st conditional-format rule on the sheet
     /Sheet1/image[1]            1st anchored picture on the sheet
+    /Sheet1/linkedPicture[1]    1.7: 1st linked picture (camera tool) on the sheet
+                                (a static snapshot of a cell range; get/remove)
     /Sheet1/slicer[1]           M8: 1st slicer on the sheet (table-column / pivot-field)
     /Sheet1/slicer[@name=X]     M8: the same slicer by name (canonical form in results)
     /Sheet1/embed[1]            M10: an embedded OLE/package object on the sheet
@@ -60,6 +64,8 @@ paths that `get` and `edit` accept unchanged.
     /master[1]                  1st slide master (M6: editable — background, accents)
     /master[1]/layout[2]        2nd layout under that master (M6: editable; add clones)
     /master[1]/shape[1]         shape on the master (M6: editable — set/add/remove)
+    /notesMaster                1.7: the notes master (set background/bodyFont; get)
+    /handoutMaster              1.7: the handout master (set headerFooter/slidesPerPage; get)
     /properties                 core + custom presentation properties (get; set /properties)
 
 Masters, layouts and their shapes are editable since M6 (background, theme

@@ -337,7 +337,9 @@ public sealed partial class WordHandler
                     break;
 
                 case DocumentFormat.OpenXml.Math.OfficeMath inlineMath:
-                    AppendEquation(sb, inlineMath, display: false);
+                    // A numbered equation is a display equation laid out inline with a
+                    // number; render its math in display style (the number run follows).
+                    AppendEquation(sb, inlineMath, display: NumberedEquationInParagraph(p) is not null);
                     break;
 
                 case DocumentFormat.OpenXml.Math.Paragraph displayMath: // m:oMathPara

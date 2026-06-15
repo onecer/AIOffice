@@ -15,14 +15,21 @@ public sealed partial class ExcelHandler
             "get needs a path.",
             "Pass an address like /Sheet1/A1 or /Sheet1/A1:C10; run 'aioffice query' to discover paths.");
 
-        // "/" (document root) has no workbook-level get surface; address a sheet.
+        // "/" (document root): the workbook-level calculation settings (v1.7) plus
+        // workbook-structure protection state. (Pre-1.7 this was unsupported_feature;
+        // returning the calc/protection block is additive.)
         if (pathArg == "/")
         {
-            throw new AiofficeException(
-                ErrorCodes.UnsupportedFeature,
-                "xlsx has no document-root properties to get.",
-                "Address a sheet (/Sheet1), a cell (/Sheet1/A1) or a range, or /properties / /style[@name=…]; " +
-                "run 'aioffice read --view outline' to list sheets.");
+            using var rootWorkbook = OpenWorkbook(file);
+            return Envelope.Ok(
+                new
+                {
+                    path = "/",
+                    kind = "workbook",
+                    calculation = ExcelCalculation.Read(file),
+                    workbookProtection = ExcelProtection.WorkbookInfo(rootWorkbook),
+                },
+                MetaFor(file, sw));
         }
 
         // Workbook-level get targets the shared grammar cannot parse (no sheet
@@ -87,6 +94,8 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Image => Envelope.Ok(
                 ExcelImages.Describe(target.Sheet, ExcelImages.Find(target), target.ImageIndex!.Value),
                 MetaFor(file, sw)),
+            ExcelTargetKind.LinkedPicture => Envelope.Ok(
+                ExcelLinkedPicture.Describe(workbook, target), MetaFor(file, sw)),
             ExcelTargetKind.DataValidation => Envelope.Ok(
                 ExcelDataValidations.Describe(
                     target.Sheet, ExcelDataValidations.Find(target), target.DataValidationIndex!.Value),
@@ -352,6 +361,13 @@ public sealed partial class ExcelHandler
         };
     }
 
+    /// <summary>The number of linked pictures registered on a sheet (0 when none/absent).</summary>
+    private static int? LinkedPictureCount(IXLWorksheet sheet)
+    {
+        var count = ExcelLinkedPicture.CountOnSheet(sheet.Workbook, sheet);
+        return count > 0 ? count : (int?)null;
+    }
+
     private static object SheetInfo(IXLWorksheet sheet, string file)
     {
         var used = sheet.RangeUsed();
@@ -373,7 +389,10 @@ public sealed partial class ExcelHandler
             // Embedded objects live in raw package parts ClosedXML cannot see;
             // surface a count so 'get' on a sheet hints at them (polish, M10).
             embeds = ExcelEmbeds.ListOnSheet(file, sheet.Name).Count,
-            pageSetup = PageSetupInfo(sheet),
+            // (1.7) Linked pictures (camera tool) count, so 'get' on a sheet hints
+            // at them (they also appear under image[i] as plain pictures).
+            linkedPictures = LinkedPictureCount(sheet),
+            pageSetup = PageSetupInfo(sheet, file),
             // v1.2: protection state (null/omitted when the sheet is unprotected),
             // plus the workbook-structure protection (omitted when not set).
             protection = ExcelProtection.SheetInfo(sheet),
