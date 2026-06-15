@@ -5,8 +5,11 @@ artifacts/
 
 # ...but the npm package's bin shim is a real source file, not build output —
 # the blanket bin/ rule above would otherwise drop it and ship a broken package.
+# Track ONLY the JS shim; the downloaded ~38MB platform binary that postinstall
+# places next to it (npm/bin/aioffice[.exe]) must never be committed.
 !npm/bin/
-!npm/bin/**
+npm/bin/*
+!npm/bin/aioffice.js
 
 # User-specific / IDE
 *.user
@@ -15,9 +18,23 @@ artifacts/
 .idea/
 *.swp
 
+# Node (the npm/ package)
+node_modules/
+*.tgz
+
 # NuGet
 *.nupkg
 packages/
+
+# Secrets / local env (defensive — none are used, but never let one slip in)
+.env
+.env.*
+*.pem
+*.key
+
+# Snapshot ring scratch (the real ring lives in ~/.aioffice/snapshots/, but never
+# track a stray .snap if a test or run writes one into the tree)
+*.snap
 
 # Test results
 TestResults/
