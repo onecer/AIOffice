@@ -170,6 +170,7 @@ public sealed partial class ExcelHandler
         List<ExcelEmbeds.Info> allEmbeds;
         List<FormControlInfo> allFormControls;
         Dictionary<(string, string), (string?, string?)> pivotSources;
+        Dictionary<(string, string), List<(string, string)>> pivotCalculatedFields;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
@@ -177,6 +178,7 @@ public sealed partial class ExcelHandler
             allEmbeds = ExcelEmbeds.ReadAll(document);
             allFormControls = ExcelFormControls.Read(document);
             pivotSources = ExcelPivots.ReadSources(document);
+            pivotCalculatedFields = ExcelPivots.ReadCalculatedFields(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
@@ -221,7 +223,7 @@ public sealed partial class ExcelHandler
                         })
                         .ToList(),
                     pivots = ws.PivotTables
-                        .Select(pt => ExcelPivots.Describe(ws, pt, pivotSources))
+                        .Select(pt => ExcelPivots.Describe(ws, pt, pivotSources, pivotCalculatedFields))
                         .ToList(),
                     slicers = slicersBySheet[ws.Name]
                         .Select(s => new

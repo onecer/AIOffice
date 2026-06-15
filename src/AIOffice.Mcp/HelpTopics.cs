@@ -73,6 +73,12 @@ public static class HelpTopics
                 - connectors      connectors + group/ungroup shapes on a slide (1.2)
                 - number-formats  named numberFormat presets for xlsx cells (1.2)
                 - structural-fields  docx table of figures, index, mail-merge fields (1.2)
+                - chart-polish    dataLabels/legend/axisTitles/trendline/errorBars/gridlines/secondaryAxis on xlsx+pptx charts (1.3)
+                - conditional-format  xlsx CF kinds incl. formula/topBottom/aboveBelowAverage (1.3)
+                - themes          edit /theme color + font scheme (docx) (1.3)
+                - 3d-models       embed a .glb/.gltf 3D model on a slide (1.3)
+                - form-fields     docx legacy text/checkbox/dropdown form fields (1.3)
+                - animations      pptx animations incl. the motionPath effect (1.3)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
@@ -782,6 +788,73 @@ public static class HelpTopics
                 read {view:"structure"} lists TOF/indexes/mergeFields; read {view:"fields"} lists merge fields with content controls.
                 """,
                 ["docx/caption", "docx/field", "edit-ops"]),
+
+            ["chart-polish"] = (
+                """
+                ## chart polish (1.3) — xlsx + pptx, on add AND on set /…/chart[k]
+                dataLabels   true | {"show":"value|percent|category|seriesName","position"?:"outEnd|inEnd|center|bestFit"}
+                legend       none | right | left | top | bottom
+                axisTitles   {"category"?:"X","value"?:"Y"}      gridlines  {"major"?:bool,"minor"?:bool}
+                trendline    none | linear | exponential | movingAverage (period default 2; per-series or chart-wide)
+                errorBars    none | stdErr | stdDev | percent   secondaryAxis  ["SeriesName",…] (move named series to a 2nd value axis)
+                Accepted both when adding a chart (alongside kind/dataRange) and via set on /Sheet1/chart[i] (xlsx) or /slide[i]/chart[k] (pptx).
+                get reports the settings. Axis-only props on a pie/doughnut -> unsupported_feature. Every combo stays OpenXmlValidator-clean.
+                """,
+                ["xlsx/chart", "pptx/chart", "edit-ops"]),
+
+            ["conditional-format"] = (
+                """
+                ## xlsx conditional formatting (kinds expanded 1.3) — add type "conditionalFormat" on a range
+                {"op":"add","path":"/Sheet1/A1:C10","type":"conditionalFormat","props":{"kind":…,…}}  (op path = the covered range)
+                cellIs(operator>|>=|<|<=|==|!=|between,value,value2?) · colorScale(min/mid?/maxColor) · dataBar(color)
+                containsText(text) · iconSet(set,reverse?,showValue?)
+                1.3: formula            {"kind":"formula","formula":"=$B1>100",fill?,color?,bold?}  (=expression relative to the top-left cell)
+                     topBottom          {"kind":"topBottom","mode":"top|bottom","rank":N,"percent"?:bool,fill?,color?,bold?}
+                     aboveBelowAverage  {"kind":"aboveBelowAverage","mode":"above|below|aboveOrEqual|belowOrEqual","stdDev"?:N,fill?,color?,bold?}
+                get/remove by /Sheet1/conditionalFormat[i] (indices shift down after a remove). Unsupported kind/sub-value -> unsupported_feature.
+                """,
+                ["xlsx/cell", "edit-ops"]),
+
+            ["themes"] = (
+                """
+                ## themes (1.3) — set/get /theme (docx; pptx theme lives on the master)
+                {"op":"set","path":"/theme","props":{"accent1":"38BDF8","dk1"?,"majorFont"?:"Calibri Light","minorFont"?:"Calibri"}}
+                color slots (6-hex): dk1, lt1, dk2, lt2, accent1..accent6, hlink, folHlink.   font slots: majorFont (headings), minorFont (body).
+                Any other key -> unsupported_feature naming the slots. get /theme -> the color scheme as a hex map + majorFont/minorFont.
+                Changing accent1 recolors every style/shape that binds that theme slot. pptx: edit theme colors on the slide master (see pptx/master).
+                """,
+                ["docx/style", "pptx/master", "edit-ops"]),
+
+            ["3d-models"] = (
+                """
+                ## pptx 3D models (1.3) — add type "model3d" on /slide[i]
+                {"op":"add","path":"/slide[1]","type":"model3d","props":{"src":"chair.glb","poster"?,"x"?,"y"?,"w"?,"h"?,"name"?}}
+                Embeds a .glb/.gltf as a real 3DModel media part BEHIND a poster picture fallback (PowerPoint 2019+ renders the model).
+                src (required) and the optional poster are sandbox-resolved — a path outside the workspace is sandbox_denied before any byte is read.
+                Every add carries the model3d_as_media warning. Addressed by /slide[i]/model3d[@id=N]; get reports it, remove drops the part. Validates clean.
+                """,
+                ["pptx/slide", "embeds", "edit-ops"]),
+
+            ["form-fields"] = (
+                """
+                ## docx legacy form fields (1.3) — add type "formField" (text/checkbox/dropdown)
+                {"op":"add","path":"/body/p[2]","type":"formField","props":{"kind":"text|checkbox|dropdown","name":"status",…}}
+                kind text (default): default?, maxLength?   checkbox: checked?   dropdown: items[] (required, non-empty)
+                name is required (the identifier you address by). read {view:"fields"} lists them (kind:"formField") alongside content controls.
+                set value: {"op":"set","path":"/formField[@name=status]","props":{"value":"Open"}} (text/dropdown) or {"checked":true} (checkbox). remove by the same path.
+                Structural, so add/remove inside a --track session -> unsupported_feature (set the value instead).
+                """,
+                ["docx/paragraph", "edit-ops"]),
+
+            ["animations"] = (
+                """
+                ## pptx animations (motion paths 1.3) — add type "animation" on /slide[i]/shape[@id=N]
+                {"op":"add","path":"/slide[1]/shape[@id=5]","type":"animation","props":{"effect":…,"trigger"?,"duration"?,"delay"?,"direction"?,"color"?}}
+                entrance appear|fade|flyIn|wipe · emphasis pulse|grow|spin|colorPulse · exit fadeOut|flyOut|wipeOut
+                1.3 motion: effect "motionPath", path line|arc|circle|custom; custom takes a points[] of normalized [x,y] pairs; direction orients line/arc.
+                trigger click(default)|afterPrevious|withPrevious. read {view:"structure"} lists each animation (incl. motionPath). set /slide[i]/animation[k] retimes; move reorders.
+                """,
+                ["pptx/animation", "pptx/shape", "edit-ops"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

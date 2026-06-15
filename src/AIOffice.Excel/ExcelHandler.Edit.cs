@@ -67,6 +67,16 @@ public sealed partial class ExcelHandler
         var embeds = new ExcelEmbeds.Batch(file);
         var formControls = new ExcelFormControls.Batch(file);
         var post = new PostSaveWork();
+
+        // aboveBelowAverage conditional rules (v1.3) are authored raw: ClosedXML
+        // 0.105 reads them but throws when re-serializing. If the file already
+        // carries any, capture their specs and strip them from the ClosedXML
+        // model so the save succeeds, then re-author them in the post-save pass.
+        if (ExcelConditionalFormats.FileHasAverageRules(file))
+        {
+            post.AverageRules.AddRange(ExcelConditionalFormats.CaptureAverageRules(file));
+            ExcelConditionalFormats.StripAverageRulesFromModel(workbook);
+        }
         var opWarnings = new List<Warning>();
         var details = new List<object>(ops.Count);
         for (var i = 0; i < ops.Count; i++)
@@ -168,6 +178,16 @@ public sealed partial class ExcelHandler
                 ExcelPivots.SyncPartsAfterSave(file, ExcelPivots.AliveNames(workbook));
             }
 
+            if (post.CalculatedFields.Count > 0)
+            {
+                // Author pivot calculated fields raw (v1.3): the cacheField formula,
+                // its pivotField/dataField and per-record placeholders ClosedXML
+                // cannot model. Runs after the pivot-part sync so the target parts
+                // are settled. ClosedXML reopens such a file thanks to the
+                // placeholder values (documented round-trip exception).
+                ExcelPivots.ApplyCalculatedFields(file, post.CalculatedFields);
+            }
+
             if (post.RemovedImages.Count > 0)
             {
                 ExcelImages.RemoveAfterSave(file, post.RemovedImages);
@@ -186,6 +206,23 @@ public sealed partial class ExcelHandler
                 // cellStyle entries); the registry property carries the truth.
                 using var reopened = OpenWorkbook(file);
                 ExcelCellStyles.MaterializeAfterSave(file, ExcelCellStyles.Load(reopened).Values.ToList());
+            }
+
+            // Author the aboveBelowAverage conditional-format rules (v1.3): the
+            // rule type ClosedXML cannot save is written raw with its differential
+            // style. Runs before the data-bar fix-up so the saved bytes are
+            // already complete when that scan reads them.
+            if (post.AverageRules.Count > 0)
+            {
+                ExcelConditionalFormats.ApplyAverageRules(file, post.AverageRules);
+            }
+
+            // Apply the chart-polish edits (v1.3): a set on a chart path adjusts
+            // existing chart XML ClosedXML cannot see. Runs after chart adds so a
+            // batch can add a chart and immediately polish it.
+            if (post.ChartPolishEdits.Count > 0)
+            {
+                ExcelChartPolish.ApplyEdits(file, post.ChartPolishEdits);
             }
 
             // Correct ClosedXML's data-bar GUID/orphan defects on the saved
@@ -329,6 +366,31 @@ public sealed partial class ExcelHandler
 
         /// <summary>True when any protection change must be written after the save.</summary>
         public bool HasProtection => SheetProtections.Count > 0 || WorkbookProtection is not null;
+
+        /// <summary>
+        /// aboveBelowAverage conditional-format rules queued for the post-save raw
+        /// pass (v1.3). ClosedXML 0.105 throws on the <c>aboveAverage</c> rule
+        /// type, so these rules (plus their differential fill) are authored
+        /// directly on the saved bytes.
+        /// </summary>
+        public List<ExcelConditionalFormats.AverageRuleSpec> AverageRules { get; } = [];
+
+        /// <summary>
+        /// Chart-polish edits queued for the post-save raw pass (v1.3). A <c>set</c>
+        /// on a <c>/Sheet/chart[i]</c> path adjusts existing chart XML
+        /// (data labels, legend, axis titles, trendlines, error bars, gridlines,
+        /// secondary axis); ClosedXML cannot see charts, so the writes ride the
+        /// same discipline as chart adds.
+        /// </summary>
+        public List<ExcelChartPolish.EditSpec> ChartPolishEdits { get; } = [];
+
+        /// <summary>
+        /// Pivot calculated fields queued for the post-save raw pass (v1.3).
+        /// ClosedXML 0.105 has no calculated-field model, so the cacheField
+        /// (formula + databaseField=0), the matching pivotField/dataField and the
+        /// per-record placeholder values are authored directly on the saved bytes.
+        /// </summary>
+        public List<ExcelPivots.CalculatedFieldSpec> CalculatedFields { get; } = [];
     }
 
     /// <summary>The batch's comment model, loaded lazily from the on-disk file.</summary>
@@ -474,7 +536,7 @@ public sealed partial class ExcelHandler
         switch (op.Op)
         {
             case "set":
-                ApplySet(workbook, op, index, details, post);
+                ApplySet(ctx, workbook, op, index, details, post);
                 break;
             case "add":
                 ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
@@ -541,7 +603,8 @@ public sealed partial class ExcelHandler
 
     // ----- set --------------------------------------------------------------
 
-    private static void ApplySet(XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
+    private static void ApplySet(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -550,6 +613,14 @@ public sealed partial class ExcelHandler
                 ErrorCodes.InvalidArgs,
                 $"ops[{index}]: set needs props.",
                 "Pass props like {\"value\":42}, {\"value\":\"=SUM(A1:A2)\"} or {\"bold\":true}.");
+        }
+
+        // A set on a chart path with chart-polish props is the v1.3 chart-polish
+        // edit; it owns its own prop vocabulary, so route it before the cell-set
+        // prop guard (which would reject dataLabels/legend/etc.).
+        if (ExcelChartPolish.HasPolishProps(props) && TrySetChartPolish(ctx, workbook, op, index, details, post))
+        {
+            return;
         }
 
         foreach (var (key, _) in props)
@@ -751,6 +822,108 @@ public sealed partial class ExcelHandler
         }
 
         details.Add(new { op = "set", path = DocPath.Parse(op.Path).ToCanonicalString(), applied });
+    }
+
+    /// <summary>
+    /// Handles a v1.3 chart-polish set on a <c>/Sheet/chart[i]</c> path: validates
+    /// the chart exists, every prop is a polish prop, and any secondaryAxis names
+    /// match the chart's series; then queues the polish for the post-save raw
+    /// pass. Returns false when the path is not a chart (the caller falls back to
+    /// the normal cell-set flow, which reports the polish keys as unknown props).
+    /// </summary>
+    private static bool TrySetChartPolish(
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
+    {
+        // Defined-name and cell-style paths resolve through their own grammar;
+        // they are never chart paths, so leave them to the normal flow.
+        if (ExcelNames.TryParsePath(op.Path, out _, out _) || ExcelCellStyles.TryParsePath(op.Path, out _))
+        {
+            return false;
+        }
+
+        var target = ExcelPaths.Resolve(workbook, op.Path);
+        if (target.Kind != ExcelTargetKind.Chart)
+        {
+            return false;
+        }
+
+        var props = op.Props!;
+        foreach (var (key, _) in props)
+        {
+            if (!ExcelChartPolish.Props.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: '{key}' is not a chart-polish prop.",
+                    "A set on a chart adjusts only its polish: " + string.Join(", ", ExcelChartPolish.Props) +
+                    ". Remove and re-add the chart to change its data or kind.",
+                    candidates: ExcelChartPolish.Props);
+            }
+        }
+
+        var settings = ExcelChartPolish.Parse(props, index);
+
+        // Resolve the chart's series names from the raw package so secondaryAxis
+        // names can be validated (ClosedXML cannot see charts). This also confirms
+        // the chart[index] exists on the sheet.
+        var chartIndex = target.ChartIndex!.Value;
+        IReadOnlyList<string> seriesNames;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(ctx.File!, isEditable: false))
+        {
+            var chartPart = ExcelChartPolish.ChartPartFor(document, target.Sheet.Name, chartIndex);
+            if (chartPart?.ChartSpace?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Charts.Chart>() is not { } chart)
+            {
+                var charts = ExcelCharts.Read(document)
+                    .Where(c => string.Equals(c.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"No chart[{chartIndex}] on sheet '{target.Sheet.Name}' ({charts.Count} chart(s) exist).",
+                    charts.Count > 0
+                        ? "Chart indices are 1-based per sheet; pick one of the candidates."
+                        : "This sheet has no charts; add one with {op:add, type:chart, path:" +
+                          ExcelPaths.SheetPath(target.Sheet) + ", props:{kind:\"bar\", dataRange:\"A1:B5\", anchor:\"D2\"}}.",
+                    candidates: charts.Count > 0
+                        ? [.. charts.Select(c => c.Path)]
+                        : [ExcelPaths.SheetPath(target.Sheet)]);
+            }
+
+            seriesNames = ExcelChartPolish.SeriesNames(chart);
+        }
+
+        if (settings.SecondaryAxisSeries is { Count: > 0 } secondaryNames)
+        {
+            foreach (var name in secondaryNames)
+            {
+                if (!seriesNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{index}]: secondaryAxis names series '{name}', which chart[{chartIndex}] does not have.",
+                        "secondaryAxis lists series names from the chart; pick one of the candidates.",
+                        candidates: [.. seriesNames]);
+                }
+            }
+
+            if (secondaryNames.Count >= seriesNames.Count)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: secondaryAxis would move every series off the primary axis.",
+                    "Leave at least one series on the primary value axis.");
+            }
+        }
+
+        post.ChartPolishEdits.Add(new ExcelChartPolish.EditSpec(target.Sheet.Name, chartIndex, settings));
+        details.Add(new
+        {
+            op = "set",
+            path = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{ExcelPaths.SheetPath(target.Sheet)}/chart[{chartIndex}]"),
+            applied = props.Select(p => p.Key).ToList(),
+        });
+        return true;
     }
 
     // ----- protection (v1.2) -----------------------------------------------------
@@ -1254,10 +1427,10 @@ public sealed partial class ExcelHandler
                 AddChart(workbook, op, index, details, charts);
                 break;
             case "pivot":
-                AddPivot(workbook, op, index, details);
+                AddPivot(workbook, op, index, details, post);
                 break;
             case "conditionalFormat":
-                details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index));
+                details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index, post.AverageRules));
                 break;
             case "dataValidation":
                 details.Add(ExcelDataValidations.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));
@@ -1314,7 +1487,7 @@ public sealed partial class ExcelHandler
     /// SOURCE sheet (where sourceRange lives); props.targetSheet says where the
     /// pivot lands (created when absent).
     /// </summary>
-    private static void AddPivot(XLWorkbook workbook, EditOp op, int index, List<object> details)
+    private static void AddPivot(XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
     {
         var target = ExcelPaths.Resolve(workbook, op.Path);
         if (target.Kind != ExcelTargetKind.Sheet)
@@ -1327,7 +1500,7 @@ public sealed partial class ExcelHandler
                 "rows:[\"Region\"], values:[{field:\"Sales\", agg:\"sum\"}]}}.");
         }
 
-        details.Add(ExcelPivots.Add(workbook, target.Sheet, op, index));
+        details.Add(ExcelPivots.Add(workbook, target.Sheet, op, index, post.CalculatedFields));
     }
 
     private static void AddSheet(XLWorkbook workbook, EditOp op, int index, List<object> details)

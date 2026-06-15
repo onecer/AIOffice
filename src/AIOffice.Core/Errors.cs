@@ -88,6 +88,9 @@ public static class WarningCodes
     /// <summary>A markdown block had no neutral equivalent and was skipped on import.</summary>
     public const string MdBlockSkipped = "md_block_skipped";
 
+    /// <summary>(1.3) A pptx 3D model was embedded as a 3D part behind a poster picture fallback; PowerPoint 2019+ renders the model.</summary>
+    public const string Model3DAsMedia = "model3d_as_media";
+
     /// <summary>Raw HTML in a markdown source was skipped (not rendered into the document).</summary>
     public const string MdHtmlSkipped = "md_html_skipped";
 
@@ -120,7 +123,7 @@ public static class WarningCodes
     [
         AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
         EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, IndexCached, MdBlockSkipped, MdHtmlSkipped,
-        MdImageSkipped, MdLinkSkipped, ResultTruncated, ScopeDefaulted, StreamFallback,
+        MdImageSkipped, MdLinkSkipped, Model3DAsMedia, ResultTruncated, ScopeDefaulted, StreamFallback,
         TemplateUnresolved, TocPagesUnknown, TocRefreshed,
     ];
 }

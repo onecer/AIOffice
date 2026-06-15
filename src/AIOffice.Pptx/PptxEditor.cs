@@ -27,7 +27,7 @@ internal sealed record PptxOpOutcome(
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "equation",
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "model3d", "equation",
          "smartart", "connector", "group", "ungroup"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
@@ -76,6 +76,8 @@ internal static class PptxEditor
         {
             case "add" when string.Equals(op.Type?.Trim(), "equation", StringComparison.OrdinalIgnoreCase):
                 return ApplyAddEquation(presentation, op);
+            case "add" when string.Equals(op.Type?.Trim(), "model3d", StringComparison.OrdinalIgnoreCase):
+                return ApplyAddModel3D(document, presentation, op, workspace);
             case "add":
                 return new PptxOpOutcome(ApplyAdd(document, presentation, op, workspace));
             case "set":
@@ -294,6 +296,7 @@ internal static class PptxEditor
                     "table (with rows/cols), row (on a table path), " +
                     "animation (on a shape path), comment and reply (on a comment path), embed (a file as an OLE object), " +
                     "media (an mp4/mov video or m4a/mp3/wav audio clip), " +
+                    "model3d (a glb/gltf 3D model behind a poster fallback), " +
                     "equation (LaTeX -> OMML math in a text box), " +
                     "smartart (a list/process/hierarchy/orgChart/cycle diagram), connector (a line/elbow/curved link between two shapes), " +
                     "group (wrap shapes in a group), ungroup (dissolve a group, on a group path).",
@@ -372,10 +375,22 @@ internal static class PptxEditor
         return new PptxOpOutcome(path, Warnings: warnings);
     }
 
+    /// <summary>
+    /// add model3d: embeds a glb/gltf 3D model behind a poster picture fallback and
+    /// echoes its canonical /model3d[@id=N] path with an honest media-backed note.
+    /// </summary>
+    private static PptxOpOutcome ApplyAddModel3D(PresentationDocument document, PresentationPart presentation, EditOp op, Workspace workspace)
+    {
+        var address = PptxAddress.Parse(op.Path);
+        var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "model3d");
+        var (path, note) = PptxModels.Add(document, slidePart, address.SlideIndex, op.Props, workspace);
+        return new PptxOpOutcome(path, Warnings: [note]);
+    }
+
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
         if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment ||
-            address.IsEmbed || address.IsMedia || address.IsGroup || address.IsSmartArt)
+            address.IsEmbed || address.IsMedia || address.IsModel3D || address.IsGroup || address.IsSmartArt)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -561,12 +576,31 @@ internal static class PptxEditor
                 return SetChartEmbedData(presentation, address, op.Props);
             }
 
+            // Chart-polish props (dataLabels/legend/axisTitles/trendline/errorBars/
+            // gridlines/secondaryAxis) edit the chart in place.
+            if (PptxChartPolish.Handles(op.Props))
+            {
+                var polish = PptxChartPolish.Split(op.Props, out var nonPolish);
+                if (nonPolish.Count > 0)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.UnsupportedFeature,
+                        Units.Inv($"Chart prop(s) {string.Join(", ", nonPolish.Select(kv => kv.Key))} cannot be set in place."),
+                        "Polish props (dataLabels, legend, axisTitles, trendline, errorBars, gridlines, secondaryAxis) " +
+                        "are editable in place; to change data/title remove and re-add the chart, and set " +
+                        "position/size/name on its shape path.");
+                }
+
+                return PptxCharts.SetPolish(presentation, address, polish);
+            }
+
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 "Chart data and titles cannot be edited in place yet.",
                 "Remove the chart ({\"op\":\"remove\",\"path\":\"" + address.CanonicalChartPath + "\"}) " +
                 "and add it again with the new data; {\"embedData\":true} retrofits an editable workbook; " +
-                "position/size/name sets target its shape path.");
+                "the chart-polish props (dataLabels, legend, axisTitles, trendline, errorBars, gridlines, " +
+                "secondaryAxis) are editable in place; position/size/name sets target its shape path.");
         }
 
         if (address.IsTable)
@@ -603,6 +637,15 @@ internal static class PptxEditor
                 ErrorCodes.UnsupportedFeature,
                 "Embedded media cannot be edited in place.",
                 "Remove the media ({\"op\":\"remove\",\"path\":\"" + op.Path + "\"}) and add it again with the new clip; " +
+                "position/size sets target its shape path (/slide[i]/shape[@id=N]).");
+        }
+
+        if (address.IsModel3D)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Embedded 3D models cannot be edited in place.",
+                "Remove the model ({\"op\":\"remove\",\"path\":\"" + op.Path + "\"}) and add it again with the new file; " +
                 "position/size sets target its shape path (/slide[i]/shape[@id=N]).");
         }
 
@@ -884,6 +927,11 @@ internal static class PptxEditor
             return PptxMedia.Remove(presentation, address);
         }
 
+        if (address.IsModel3D)
+        {
+            return PptxModels.Remove(presentation, address);
+        }
+
         if (address.IsOMath)
         {
             return PptxEquations.Remove(presentation, address);
@@ -934,9 +982,10 @@ internal static class PptxEditor
 
         var canonical = view.CanonicalPath(address.SlideIndex);
         PptxCharts.DeletePartFor(slidePart, view.Element); // a chart frame must not orphan its part
-        if (view.Element is P.Picture mediaPicture) // a media picture must not orphan its data part / rels
+        if (view.Element is P.Picture mediaPicture) // a media/model picture must not orphan its data part / rels
         {
             PptxMedia.DeleteMediaPartsFor(slidePart, mediaPicture);
+            PptxModels.DeleteModelPartsFor(slidePart, mediaPicture);
         }
 
         view.Element.Remove();
@@ -1001,6 +1050,14 @@ internal static class PptxEditor
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved by media path.",
+                "Reorder the host picture by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
+        }
+
+        if (address.IsModel3D)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved by model3d path.",
                 "Reorder the host picture by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
         }
 

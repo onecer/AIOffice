@@ -335,6 +335,41 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law extended over the v1.3.0 surface: a body drawing shape,
+    /// a text box, a legacy form field and an edited theme must all survive a
+    /// no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_v130_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "v1.3.0 round trip");
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"shape","props":{"shape":"roundRect","x":"2cm","y":"2cm","w":"6cm","h":"3cm","fill":"38BDF8"}},
+              {"op":"add","path":"/body","type":"textBox","props":{"x":"2cm","y":"7cm","w":"6cm","h":"3cm","text":"Sidebar"}},
+              {"op":"add","path":"/body/p[1]","type":"formField","props":{"kind":"text","name":"clientName","default":"Acme","maxLength":40}},
+              {"op":"set","path":"/theme","props":{"accent1":"38BDF8","majorFont":"Georgia"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads the wps shapes + ffData field DOM
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            _ = doc.MainDocumentPart.ThemePart?.Theme;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

@@ -180,3 +180,30 @@ internal static class TestImages
         return crc ^ 0xFFFFFFFF;
     }
 }
+
+/// <summary>Generates small but well-formed 3D-model files for model3d tests.</summary>
+internal static class TestModels
+{
+    /// <summary>A minimal binary glTF (.glb): the 12-byte header ("glTF" magic + version + length) plus a small JSON chunk.</summary>
+    public static byte[] Glb()
+    {
+        var json = Encoding.ASCII.GetBytes("{\"asset\":{\"version\":\"2.0\"}}");
+        while (json.Length % 4 != 0)
+        {
+            json = [.. json, (byte)' ']; // chunks are 4-byte aligned
+        }
+
+        using var glb = new MemoryStream();
+        glb.Write(Encoding.ASCII.GetBytes("glTF"));
+        glb.Write(BitConverter.GetBytes(2u)); // version
+        glb.Write(BitConverter.GetBytes((uint)(12 + 8 + json.Length))); // total length
+        glb.Write(BitConverter.GetBytes((uint)json.Length)); // JSON chunk length
+        glb.Write(Encoding.ASCII.GetBytes("JSON"));
+        glb.Write(json);
+        return glb.ToArray();
+    }
+
+    /// <summary>A minimal glTF (.gltf) JSON document.</summary>
+    public static byte[] Gltf() =>
+        Encoding.ASCII.GetBytes("{\"asset\":{\"version\":\"2.0\"},\"scenes\":[],\"nodes\":[]}");
+}

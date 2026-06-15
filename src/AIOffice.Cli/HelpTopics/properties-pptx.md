@@ -86,6 +86,19 @@ exactly one series; `bubble` series carry `{name, values, x?, size?}` triples
 rest as a line, so it needs at least two series. An unsupported `kind` returns
 `unsupported_feature` listing the full supported set.
 
+1.3 adds **chart-polish** props accepted both on `add` and on `set
+/slide[i]/chart[k]`: `dataLabels`, `legend`, `axisTitles`, `trendline`,
+`errorBars`, `gridlines`, `secondaryAxis`. `get` reports them. Full grammar:
+`aioffice help chart-polish`.
+
+## 3D model (1.3, `/slide[1]` add type "model3d")
+
+`{op:"add", path:"/slide[1]", type:"model3d", props:{src:"chair.glb", poster?,
+x?, y?, w?, h?, name?}}` embeds a `.glb`/`.gltf` 3D model as a real 3DModel media
+part behind a poster picture fallback (PowerPoint 2019+ renders the model). `src`
+and `poster` are sandbox-resolved; the add carries a `model3d_as_media` warning.
+Addressed by `/slide[i]/model3d[@id=N]`. Full topic: `aioffice help 3d-models`.
+
 ## media (1.1, `/slide[1]` add type "media")
 
 `{op:"add", path:"/slide[1]", type:"media", props:{src:"clip.mp4", poster?,
@@ -138,6 +151,11 @@ props:{effect, trigger?, duration?, delay?, direction?, color?}}`
 | entrance | appear · fade · flyIn · wipe     | direction: flyIn/wipe             |
 | emphasis | pulse · grow · spin · colorPulse | color: colorPulse only            |
 | exit     | fadeOut · flyOut · wipeOut       | direction: flyOut/wipeOut         |
+| motion (1.3) | motionPath                   | path: line/arc/circle/custom; custom takes points |
+
+The 1.3 `motionPath` effect moves the shape along a `path` (`line`/`arc`/
+`circle`/`custom`); `custom` traces a `points` array of normalised `[x,y]`
+pairs. Full grammar: `aioffice help animations`.
 
 Triggers: `click` (default) · `withPrevious` · `afterPrevious`; durations like
 `"0.5s"`. `read --view structure` lists per-slide animation order. M6 timeline

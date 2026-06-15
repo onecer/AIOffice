@@ -58,6 +58,11 @@ series). `combo` draws the first series as columns and the rest as a line, so
 it needs at least two series. An unsupported `kind` returns
 `unsupported_feature` listing the full supported set.
 
+1.3 adds **chart-polish** props accepted both on `add` and on `set
+/Sheet1/chart[i]`: `dataLabels`, `legend`, `axisTitles`, `trendline`,
+`errorBars`, `gridlines`, `secondaryAxis`. `get` reports them. Full grammar +
+examples: `aioffice help chart-polish`.
+
 ## name (M3, `/name[@name=SalesData]`)
 
 `{op:"add", path:"/Sheet1/B2:C5", type:"name", props:{name:"SalesData",
@@ -138,11 +143,17 @@ outline symbols on reopen.
 | targetAnchor| string | top-left cell on the target sheet (default A1/A3)  |
 | rows / columns / filters | string[] | source column header names           |
 | values      | array  | `[{field:"Sales", agg:"sum|average|count|min|max"}]` |
+| calculatedFields | array | (1.3) `[{name:"Margin", formula:"=Revenue-Cost"}]` — formula fields computed from source headers |
 
 `{op:"add", path:"/Sheet1", type:"pivot", props:{...}}` — the op path is the
 SOURCE sheet. `get`/`remove` address the pivot on its TARGET sheet:
 `/Pivot/pivot[1]` or `/Pivot/pivot[@name=SalesPivot]`. Excel recomputes the
 pivot on open (refreshOnLoad).
+
+`calculatedFields` (1.3) add formula columns to the pivot: each `formula`
+references other source-column header names (e.g. `=Revenue-Cost`,
+`=Profit/Revenue`). They are validated against the headers at add time and
+surface under `get`'s `calculatedFields`; Excel recomputes them on open.
 
 ## conditionalFormat (M2, `/Sheet1/conditionalFormat[1]`)
 
@@ -156,10 +167,19 @@ the op path is the range the rule covers.
 | dataBar      | color                                                        |
 | containsText | text, fill?, color?, bold?                                   |
 | iconSet      | set (e.g. `3TrafficLights1`, `3Arrows`, `4Rating`, `5Quarters`), reverse?, showValue? (1.1) |
+| formula      | formula (`=$B1>100`), fill?, color?, bold? (1.3) |
+| topBottom    | mode (`top`/`bottom`), rank (N), percent?, fill?, color?, bold? (1.3) |
+| aboveBelowAverage | mode (`above`/`below`/`aboveOrEqual`/`belowOrEqual`), stdDev?, fill?, color?, bold? (1.3) |
 
 `iconSet` (1.1) ranks each cell against the others in the range and paints a
 3/4/5-icon glyph; pick the icon family with `set` (3-icon families start with
 `3`, etc.), `reverse:true` flips the order, `showValue:false` hides the number.
+
+The 1.3 kinds: `formula` evaluates an `=expression` (relative to the range's
+top-left cell) per cell; `topBottom` paints the highest/lowest N (or N% with
+`percent:true`); `aboveBelowAverage` paints cells above/below the range mean
+(`stdDev` shifts the threshold). Full grammar + examples: `aioffice help
+conditional-format`.
 
 `get`/`remove` by `/Sheet1/conditionalFormat[i]` (later indices shift down
 after a remove).

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using AIOffice.Core;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using S = DocumentFormat.OpenXml.Spreadsheet;
 using X14 = DocumentFormat.OpenXml.Office2010.Excel;
@@ -11,10 +12,20 @@ using X14 = DocumentFormat.OpenXml.Office2010.Excel;
 namespace AIOffice.Excel;
 
 /// <summary>
-/// The xlsx conditional-formatting layer (ClosedXML native). Five kinds are
+/// The xlsx conditional-formatting layer (ClosedXML native). Eight kinds are
 /// supported: <c>cellIs</c>, <c>colorScale</c>, <c>dataBar</c>,
-/// <c>containsText</c>, <c>iconSet</c>; everything else is a typed
+/// <c>containsText</c>, <c>iconSet</c>, and (v1.3, additive) the rule-family
+/// completers <c>formula</c> (an <c>=expression</c> rule), <c>topBottom</c>
+/// (top/bottom N or N%) and <c>aboveBelowAverage</c> (above/below the range
+/// average, optionally ±N standard deviations); everything else is a typed
 /// <c>unsupported_feature</c>.
+///
+/// Two of the v1.3 kinds save natively through ClosedXML (<c>formula</c> →
+/// <c>cfRule@type=expression</c>, <c>topBottom</c> → <c>cfRule@type=top10</c>),
+/// but ClosedXML 0.105 throws on the <c>aboveAverage</c> rule type, so
+/// <c>aboveBelowAverage</c> rules are authored entirely raw in the post-save
+/// pass (<see cref="AverageRuleSpec"/> / <see cref="ApplyAverageRules"/>),
+/// mirroring the data-bar fix-up discipline.
 ///
 /// Measured ClosedXML 0.105 quirks this slice corrects in a post-save pass
 /// (<see cref="FixUpAfterSave"/>):
@@ -34,9 +45,15 @@ internal static partial class ExcelConditionalFormats
 {
     /// <summary>The conditional-format kinds aioffice can create.</summary>
     public static readonly IReadOnlyList<string> Kinds =
-        ["cellIs", "colorScale", "dataBar", "containsText", "iconSet"];
+        ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage"];
 
     private static readonly IReadOnlyList<string> Operators = [">", "<", ">=", "<=", "==", "!=", "between"];
+
+    /// <summary>topBottom modes: highest-ranked N (top) or lowest-ranked N (bottom).</summary>
+    private static readonly IReadOnlyList<string> TopBottomModes = ["top", "bottom"];
+
+    /// <summary>aboveBelowAverage modes (strict and inclusive of the mean).</summary>
+    private static readonly IReadOnlyList<string> AverageModes = ["above", "below", "aboveOrEqual", "belowOrEqual"];
 
     private static readonly IReadOnlyList<string> CellIsProps =
         ["kind", "operator", "value", "value2", "fill", "color", "bold"];
@@ -48,6 +65,14 @@ internal static partial class ExcelConditionalFormats
     private static readonly IReadOnlyList<string> ContainsTextProps = ["kind", "text", "fill", "color", "bold"];
 
     private static readonly IReadOnlyList<string> IconSetProps = ["kind", "set", "reverse", "showValue"];
+
+    private static readonly IReadOnlyList<string> FormulaProps = ["kind", "formula", "fill", "color", "bold"];
+
+    private static readonly IReadOnlyList<string> TopBottomProps =
+        ["kind", "mode", "rank", "percent", "fill", "color", "bold"];
+
+    private static readonly IReadOnlyList<string> AboveBelowAverageProps =
+        ["kind", "mode", "stdDev", "fill", "color", "bold"];
 
     /// <summary>
     /// The icon-set names aioffice accepts, in OOXML spelling, mapped to the
@@ -84,9 +109,12 @@ internal static partial class ExcelConditionalFormats
 
     /// <summary>
     /// Validates and applies an <c>add conditionalFormat</c> op on the in-memory
-    /// workbook. Returns the details entry for the envelope.
+    /// workbook. Returns the details entry for the envelope. The
+    /// <c>aboveBelowAverage</c> kind cannot be saved by ClosedXML, so it is
+    /// validated here and queued on <paramref name="averageRules"/> for the raw
+    /// post-save authoring pass (<see cref="ApplyAverageRules"/>).
     /// </summary>
-    public static object Add(ExcelTarget target, EditOp op, int opIndex)
+    public static object Add(ExcelTarget target, EditOp op, int opIndex, List<AverageRuleSpec> averageRules)
     {
         var range = target.Kind switch
         {
@@ -131,16 +159,38 @@ internal static partial class ExcelConditionalFormats
             case "iconSet":
                 AddIconSet(range, props, opIndex);
                 break;
+            case "formula":
+                AddFormula(range, props, opIndex);
+                break;
+            case "topBottom":
+                AddTopBottom(range, props, opIndex);
+                break;
+            case "aboveBelowAverage":
+                // Queued for the raw post-save pass (ClosedXML 0.105 cannot save
+                // this rule type). The index it will occupy = the rules ClosedXML
+                // already holds on the sheet, plus any average rules queued before
+                // it on the same sheet, plus one.
+                averageRules.Add(ParseAverageRule(target.Sheet.Name, range, props, opIndex));
+                break;
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
                     $"ops[{opIndex}]: conditionalFormat kind '{kind}' is not supported yet.",
-                    "Supported kinds: cellIs, colorScale, dataBar, containsText, iconSet. For " +
-                    "formula-based rules, a colorScale or cellIs rule is the usual stand-in.",
+                    "Supported kinds: " + string.Join(", ", Kinds) + ".",
                     candidates: Kinds);
         }
 
-        var index = target.Sheet.ConditionalFormats.Count();
+        // Index discipline: native rules keep their creation-order positions and
+        // the raw average rules are appended after every native rule on the
+        // sheet. A native kind's 1-based index is therefore its position among
+        // the native rules (which now include it). An average rule's index is
+        // every native rule plus its position among the queued average rules
+        // (which now include it).
+        var nativeCount = target.Sheet.ConditionalFormats.Count();
+        var index = kind == "aboveBelowAverage"
+            ? nativeCount + averageRules.Count(r =>
+                string.Equals(r.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+            : nativeCount;
         return new
         {
             op = "add",
@@ -291,6 +341,152 @@ internal static partial class ExcelConditionalFormats
         }
     }
 
+    /// <summary>
+    /// Adds an expression rule (<c>cfRule@type=expression</c>): the cells whose
+    /// formula evaluates truthy get the fill/color/bold. The formula is a real
+    /// Excel expression relative to the range's top-left cell (e.g.
+    /// <c>=$A1&gt;$B1</c>); a leading <c>=</c> is optional.
+    /// </summary>
+    private static void AddFormula(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, FormulaProps, opIndex);
+        var formula = OptionalString(props, "formula");
+        if (string.IsNullOrWhiteSpace(formula))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: formula needs a non-empty 'formula'.",
+                "Pass an Excel expression relative to the range's top-left cell, e.g. " +
+                "{\"kind\":\"formula\",\"formula\":\"=$A1>$B1\",\"fill\":\"FFC7CE\"}.");
+        }
+
+        // Excel's cfRule/formula holds the expression WITHOUT the leading '=';
+        // accept either form from the agent and normalize.
+        var expression = formula.StartsWith('=') ? formula[1..] : formula;
+        if (expression.Length == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: the formula is just '='; it has no expression.",
+                "Pass an expression after the '=', e.g. {\"formula\":\"=$A1>$B1\"}.");
+        }
+
+        ApplyStyle(range.AddConditionalFormat().WhenIsTrue(expression), props, opIndex);
+    }
+
+    /// <summary>
+    /// Adds a top/bottom rule (<c>cfRule@type=top10</c>): the highest- (mode
+    /// "top") or lowest- (mode "bottom") ranked N values in the range get the
+    /// fill/color/bold. With <c>percent:true</c>, N is a percentage of the cell
+    /// count rather than a count.
+    /// </summary>
+    private static void AddTopBottom(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, TopBottomProps, opIndex);
+        var mode = OptionalString(props, "mode") ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{opIndex}]: topBottom needs a 'mode'.",
+            "Supported modes: " + string.Join(", ", TopBottomModes) + ".",
+            candidates: TopBottomModes);
+        if (!TopBottomModes.Contains(mode, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown topBottom mode '{mode}'.",
+                "Supported modes: " + string.Join(", ", TopBottomModes) + ".",
+                candidates: TopBottomModes);
+        }
+
+        var percent = OptionalBool(props, "percent") ?? false;
+        var rank = RequiredRank(props, opIndex, percent);
+
+        var style = mode == "top"
+            ? range.AddConditionalFormat().WhenIsTop(rank, percent ? XLTopBottomType.Percent : XLTopBottomType.Items)
+            : range.AddConditionalFormat().WhenIsBottom(rank, percent ? XLTopBottomType.Percent : XLTopBottomType.Items);
+        ApplyStyle(style, props, opIndex);
+    }
+
+    /// <summary>
+    /// Parses (but does not apply) an aboveBelowAverage rule for the post-save
+    /// raw pass. <c>mode</c> is above/below (strict) or aboveOrEqual/belowOrEqual
+    /// (inclusive of the mean); the optional <c>stdDev</c> (a positive integer)
+    /// shifts the threshold that many standard deviations away from the average.
+    /// </summary>
+    private static AverageRuleSpec ParseAverageRule(string sheetName, IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, AboveBelowAverageProps, opIndex);
+        var mode = OptionalString(props, "mode") ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{opIndex}]: aboveBelowAverage needs a 'mode'.",
+            "Supported modes: " + string.Join(", ", AverageModes) + ".",
+            candidates: AverageModes);
+        if (!AverageModes.Contains(mode, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown aboveBelowAverage mode '{mode}'.",
+                "Supported modes: " + string.Join(", ", AverageModes) + ".",
+                candidates: AverageModes);
+        }
+
+        var stdDev = OptionalNumber(props, "stdDev", opIndex);
+        var stdDevInt = 0;
+        if (stdDev is { } sd)
+        {
+            if (sd < 0 || sd != Math.Floor(sd))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: 'stdDev' must be a non-negative whole number of standard deviations.",
+                    "Pass e.g. {\"stdDev\":1} for one standard deviation above/below; omit it for the plain average.");
+            }
+
+            stdDevInt = (int)sd;
+        }
+
+        var (fill, color, bold) = ParseDifferentialStyle(props, opIndex);
+        var above = mode is "above" or "aboveOrEqual";
+        var equalAverage = mode is "aboveOrEqual" or "belowOrEqual";
+        return new AverageRuleSpec(
+            sheetName,
+            range.RangeAddress.ToString()!,
+            Above: above,
+            EqualAverage: equalAverage,
+            StdDev: stdDevInt,
+            Fill: fill,
+            FontColor: color,
+            Bold: bold);
+    }
+
+    private static int RequiredRank(JsonObject props, int opIndex, bool percent)
+    {
+        var rank = OptionalNumber(props, "rank", opIndex) ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{opIndex}]: topBottom needs a 'rank' (the N in top/bottom N).",
+            "Pass e.g. {\"mode\":\"top\",\"rank\":10,\"fill\":\"FFC7CE\"}.");
+        if (rank < 1 || rank != Math.Floor(rank))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'rank' must be a whole number of at least 1.",
+                "Pass e.g. {\"rank\":10} for the top/bottom 10.");
+        }
+
+        // Excel caps the rank at 1000 (items) or 100 (percent).
+        var max = percent ? 100 : 1000;
+        if (rank > max)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'rank' must be {max} or less for a {(percent ? "percent" : "count")} rule.",
+                percent
+                    ? "Excel allows a top/bottom percentage of 1..100."
+                    : "Excel allows a top/bottom count of 1..1000.");
+        }
+
+        return (int)rank;
+    }
+
     /// <summary>Applies fill/color/bold to a rule style; at least one is required.</summary>
     private static void ApplyStyle(IXLStyle style, JsonObject props, int opIndex)
     {
@@ -323,6 +519,49 @@ internal static partial class ExcelConditionalFormats
         }
     }
 
+    /// <summary>
+    /// Validates fill/color/bold for a raw-authored rule (aboveBelowAverage),
+    /// returning the six-digit RGB hex (ARGB-padded) for the dxf. At least one
+    /// must be present, mirroring <see cref="ApplyStyle"/>.
+    /// </summary>
+    private static (string? Fill, string? FontColor, bool? Bold) ParseDifferentialStyle(JsonObject props, int opIndex)
+    {
+        string? fill = null, color = null;
+        bool? bold = null;
+        if (OptionalString(props, "fill") is { } fillText)
+        {
+            fill = NormalizeArgb(ParseColor(fillText, opIndex));
+        }
+
+        if (OptionalString(props, "color") is { } colorText)
+        {
+            color = NormalizeArgb(ParseColor(colorText, opIndex));
+        }
+
+        if (props.TryGetPropertyValue("bold", out var boldNode) && boldNode is JsonValue boldValue &&
+            boldValue.GetValueKind() is JsonValueKind.True or JsonValueKind.False)
+        {
+            bold = boldValue.GetValue<bool>();
+        }
+
+        if (fill is null && color is null && bold is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: the rule has no visible effect; pass at least one of fill, color, bold.",
+                "Example: {\"fill\":\"FFC7CE\"} colors matching cells red.");
+        }
+
+        return (fill, color, bold);
+    }
+
+    /// <summary>Eight-digit ARGB hex (FF alpha) for a parsed color, for raw dxf authoring.</summary>
+    private static string NormalizeArgb(XLColor color)
+    {
+        var argb = (uint)color.Color.ToArgb();
+        return argb.ToString("X8", CultureInfo.InvariantCulture);
+    }
+
     // ----- find / describe ----------------------------------------------------
 
     /// <summary>
@@ -352,9 +591,11 @@ internal static partial class ExcelConditionalFormats
     }
 
     /// <summary>One rule as agents see it (get and read --view structure).</summary>
-    public static object Describe(IXLWorksheet sheet, IXLConditionalFormat format, int index)
+    public static object Describe(
+        IXLWorksheet sheet, IXLConditionalFormat format, int index, AverageRuleDetail? averageDetail = null)
     {
         var kind = KindName(format.ConditionalFormatType);
+        var isTop10 = format.ConditionalFormatType == XLConditionalFormatType.Top10;
         return new
         {
             path = ExcelPaths.ConditionalFormatPath(sheet, index),
@@ -368,6 +609,16 @@ internal static partial class ExcelConditionalFormats
             value = ValueAt(format, 1),
             value2 = format.ConditionalFormatType == XLConditionalFormatType.CellIs ? ValueAt(format, 2) : null,
             text = format.ConditionalFormatType == XLConditionalFormatType.ContainsText ? ValueAt(format, 1) : null,
+            // formula (Expression) rules carry their expression in Values[1].
+            formula = format.ConditionalFormatType == XLConditionalFormatType.Expression ? ValueAt(format, 1) : null,
+            // topBottom (Top10) rules: highest-ranked = top, Bottom flag = bottom;
+            // rank is Values[1]; percent reads the Percent flag.
+            mode = isTop10
+                ? (format.Bottom ? "bottom" : "top")
+                : averageDetail?.Mode,
+            rank = isTop10 && int.TryParse(ValueAt(format, 1), out var r) ? r : (int?)null,
+            percent = isTop10 ? format.Percent : (bool?)null,
+            stdDev = averageDetail is { StdDev: > 0 } ? averageDetail.StdDev : (int?)null,
             fill = HexOf(format.Style.Fill.BackgroundColor),
             color = format.ConditionalFormatType == XLConditionalFormatType.DataBar
                 ? ColorAt(format, 1)
@@ -392,7 +643,61 @@ internal static partial class ExcelConditionalFormats
         };
     }
 
-    /// <summary>Wire name of a rule type (the five supported kinds keep their op-prop spelling).</summary>
+    /// <summary>
+    /// The above/below-average sub-details ClosedXML does not expose, read raw
+    /// from a worksheet's <c>cfRule[@type=aboveAverage]</c> elements (in priority
+    /// order). <c>Mode</c> recombines the rule's aboveAverage + equalAverage
+    /// flags into the wire mode; <c>StdDev</c> is the standard-deviation count.
+    /// </summary>
+    public sealed record AverageRuleDetail(string Mode, int StdDev);
+
+    /// <summary>
+    /// Reads the aboveAverage rules on a sheet (priority order) so the get handler
+    /// can enrich the ClosedXML-blind <c>aboveBelowAverage</c> describe with mode
+    /// and stdDev. Keyed by 1-based sheet rule index (priority order).
+    /// </summary>
+    public static IReadOnlyDictionary<int, AverageRuleDetail> ReadAverageDetails(
+        SpreadsheetDocument document, string sheetName)
+    {
+        var result = new Dictionary<int, AverageRuleDetail>();
+        var workbookPart = document.WorkbookPart;
+        var sheet = workbookPart?.Workbook?.Descendants<S.Sheet>()
+            .FirstOrDefault(s => string.Equals(s.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        if (sheet?.Id?.Value is not { } relationshipId ||
+            workbookPart!.GetPartById(relationshipId) is not WorksheetPart { Worksheet: { } worksheet })
+        {
+            return result;
+        }
+
+        // All cfRules on the sheet, ordered by their priority attribute — the
+        // same ordering ClosedXML surfaces as the 1-based rule index.
+        var rules = worksheet.Descendants<S.ConditionalFormattingRule>()
+            .OrderBy(r => r.Priority?.Value ?? int.MaxValue)
+            .ToList();
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            if (rule.Type?.Value != S.ConditionalFormatValues.AboveAverage)
+            {
+                continue;
+            }
+
+            var above = rule.AboveAverage?.Value ?? true;
+            var equal = rule.EqualAverage?.Value ?? false;
+            var mode = (above, equal) switch
+            {
+                (true, false) => "above",
+                (true, true) => "aboveOrEqual",
+                (false, false) => "below",
+                (false, true) => "belowOrEqual",
+            };
+            result[i + 1] = new AverageRuleDetail(mode, rule.StdDev?.Value ?? 0);
+        }
+
+        return result;
+    }
+
+    /// <summary>Wire name of a rule type (the supported kinds keep their op-prop spelling).</summary>
     public static string KindName(XLConditionalFormatType type) => type switch
     {
         XLConditionalFormatType.CellIs => "cellIs",
@@ -400,6 +705,9 @@ internal static partial class ExcelConditionalFormats
         XLConditionalFormatType.DataBar => "dataBar",
         XLConditionalFormatType.ContainsText => "containsText",
         XLConditionalFormatType.IconSet => "iconSet",
+        XLConditionalFormatType.Expression => "formula",
+        XLConditionalFormatType.Top10 => "topBottom",
+        XLConditionalFormatType.AboveAverage => "aboveBelowAverage",
         _ => char.ToLowerInvariant(type.ToString()[0]) + type.ToString()[1..],
     };
 
@@ -554,6 +862,295 @@ internal static partial class ExcelConditionalFormats
                 worksheet.Save();
             }
         }
+    }
+
+    // ----- aboveBelowAverage raw authoring (v1.3) ---------------------------------
+
+    /// <summary>
+    /// One aboveBelowAverage rule captured at op time for the raw post-save pass.
+    /// <c>Above</c> selects above-average cells (false = below); <c>EqualAverage</c>
+    /// makes the comparison inclusive of the mean; <c>StdDev</c> &gt; 0 shifts the
+    /// threshold that many standard deviations out. Style hex values are 8-digit
+    /// ARGB; nulls leave that facet unset.
+    /// </summary>
+    internal sealed record AverageRuleSpec(
+        string SheetName,
+        string Sqref,
+        bool Above,
+        bool EqualAverage,
+        int StdDev,
+        string? Fill,
+        string? FontColor,
+        bool? Bold);
+
+    /// <summary>
+    /// Authors the queued aboveBelowAverage rules on the saved file. ClosedXML
+    /// 0.105 cannot serialize the <c>aboveAverage</c> rule type, so each rule's
+    /// differential format (dxf) is appended to the styles part and a
+    /// <c>conditionalFormatting/cfRule[@type=aboveAverage]</c> element is written
+    /// on the worksheet with a priority above every existing rule, so the new
+    /// rules sit last in priority order (matching the index the add op reported).
+    /// </summary>
+    public static void ApplyAverageRules(string file, IReadOnlyList<AverageRuleSpec> rules)
+    {
+        if (rules.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.WorkbookStylesPart?.Stylesheet is not { } stylesheet)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InternalError,
+                "The workbook has no styles part to attach the conditional-format style to.",
+                "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+        }
+
+        var differentialFormats = stylesheet.GetFirstChild<S.DifferentialFormats>();
+        if (differentialFormats is null)
+        {
+            differentialFormats = new S.DifferentialFormats();
+            // dxfs sits after cellStyles and before tableStyles in the schema;
+            // appending and letting the SDK reorder is unsafe, so insert before
+            // the first known successor or at the end.
+            var successor = stylesheet.Elements<OpenXmlElement>()
+                .FirstOrDefault(e => e is S.TableStyles or S.Colors or S.StylesheetExtensionList);
+            if (successor is null)
+            {
+                stylesheet.Append(differentialFormats);
+            }
+            else
+            {
+                stylesheet.InsertBefore(differentialFormats, successor);
+            }
+        }
+
+        foreach (var rule in rules)
+        {
+            var worksheet = WorksheetFor(workbookPart, rule.SheetName);
+            var dxfId = (uint)differentialFormats.Count();
+            differentialFormats.Append(BuildDifferentialFormat(rule));
+
+            var nextPriority = worksheet.Descendants<S.ConditionalFormattingRule>()
+                .Select(r => r.Priority?.Value ?? 0)
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+
+            var cfRule = new S.ConditionalFormattingRule
+            {
+                Type = S.ConditionalFormatValues.AboveAverage,
+                FormatId = dxfId,
+                Priority = nextPriority,
+                AboveAverage = rule.Above,
+                EqualAverage = rule.EqualAverage ? true : (bool?)null,
+            };
+            if (rule.StdDev > 0)
+            {
+                cfRule.StdDev = rule.StdDev;
+            }
+
+            var formatting = new S.ConditionalFormatting(cfRule)
+            {
+                SequenceOfReferences = new ListValue<StringValue> { InnerText = rule.Sqref },
+            };
+            InsertConditionalFormatting(worksheet, formatting);
+        }
+
+        differentialFormats.Count = (uint)differentialFormats.Count();
+        stylesheet.Save();
+    }
+
+    /// <summary>The dxf for a rule's fill/font, matching ClosedXML's solid-fill-via-bgColor shape.</summary>
+    private static S.DifferentialFormat BuildDifferentialFormat(AverageRuleSpec rule)
+    {
+        var dxf = new S.DifferentialFormat();
+        if (rule.Bold is { } bold || rule.FontColor is { } fontColor)
+        {
+            var font = new S.Font();
+            if (rule.Bold == true)
+            {
+                font.Append(new S.Bold());
+            }
+            else if (rule.Bold == false)
+            {
+                // An explicit non-bold override; Excel reads <b val="0"/>.
+                font.Append(new S.Bold { Val = false });
+            }
+
+            if (rule.FontColor is { } hex)
+            {
+                font.Append(new S.Color { Rgb = hex });
+            }
+
+            dxf.Append(font);
+        }
+
+        if (rule.Fill is { } fillHex)
+        {
+            dxf.Append(new S.Fill(new S.PatternFill(new S.BackgroundColor { Rgb = fillHex })
+            {
+                PatternType = S.PatternValues.Solid,
+            }));
+        }
+
+        return dxf;
+    }
+
+    /// <summary>
+    /// Inserts a conditionalFormatting element in its schema slot. The worksheet
+    /// schema puts conditionalFormatting after sheetData / mergeCells and before
+    /// dataValidations / hyperlinks; place it before the first known successor.
+    /// </summary>
+    private static void InsertConditionalFormatting(S.Worksheet worksheet, S.ConditionalFormatting formatting)
+    {
+        var lastExisting = worksheet.Elements<S.ConditionalFormatting>().LastOrDefault();
+        if (lastExisting is not null)
+        {
+            worksheet.InsertAfter(formatting, lastExisting);
+            return;
+        }
+
+        var successor = worksheet.Elements<OpenXmlElement>().FirstOrDefault(e =>
+            e is S.DataValidations or S.Hyperlinks or S.PrintOptions or S.PageMargins or S.PageSetup
+                or S.HeaderFooter or S.RowBreaks or S.ColumnBreaks or S.Drawing or S.LegacyDrawing
+                or S.TableParts or S.WorksheetExtensionList);
+        if (successor is null)
+        {
+            worksheet.Append(formatting);
+        }
+        else
+        {
+            worksheet.InsertBefore(formatting, successor);
+        }
+    }
+
+    private static S.Worksheet WorksheetFor(WorkbookPart workbookPart, string sheetName)
+    {
+        var sheet = workbookPart.Workbook?.Descendants<S.Sheet>()
+            .FirstOrDefault(s => string.Equals(s.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        if (sheet?.Id?.Value is { } relationshipId &&
+            workbookPart.GetPartById(relationshipId) is WorksheetPart { Worksheet: { } worksheet })
+        {
+            return worksheet;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InternalError,
+            $"Sheet '{sheetName}' disappeared between validation and the conditional-format write pass.",
+            "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+    }
+
+    // ----- aboveAverage round-trip preservation (v1.3) ----------------------------
+
+    /// <summary>
+    /// True when the file already carries raw <c>aboveAverage</c> conditional
+    /// rules. ClosedXML 0.105 reads them but throws when re-serializing, so an
+    /// edit batch must strip them from the ClosedXML model before saving and
+    /// re-author them raw afterward (see <see cref="CaptureAverageRules"/> /
+    /// <see cref="StripAverageRulesFromModel"/>). Cheap part scan.
+    /// </summary>
+    public static bool FileHasAverageRules(string file)
+    {
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart is null)
+        {
+            return false;
+        }
+
+        foreach (var worksheetPart in workbookPart.WorksheetParts)
+        {
+            if (worksheetPart.Worksheet?.Descendants<S.ConditionalFormattingRule>()
+                    .Any(r => r.Type?.Value == S.ConditionalFormatValues.AboveAverage) == true)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Captures every raw <c>aboveAverage</c> rule (sqref, flags, stdDev and its
+    /// differential fill/font) so a later edit can re-author them after ClosedXML
+    /// has rebuilt the file without them. Read straight from the package.
+    /// </summary>
+    public static List<AverageRuleSpec> CaptureAverageRules(string file)
+    {
+        var result = new List<AverageRuleSpec>();
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.Workbook is null)
+        {
+            return result;
+        }
+
+        var dxfs = workbookPart.WorkbookStylesPart?.Stylesheet?.GetFirstChild<S.DifferentialFormats>()
+            ?.Elements<S.DifferentialFormat>().ToList() ?? [];
+
+        foreach (var sheet in workbookPart.Workbook.Descendants<S.Sheet>())
+        {
+            if (sheet.Id?.Value is not { } relationshipId ||
+                workbookPart.GetPartById(relationshipId) is not WorksheetPart { Worksheet: { } worksheet })
+            {
+                continue;
+            }
+
+            var sheetName = sheet.Name?.Value ?? string.Empty;
+            foreach (var formatting in worksheet.Descendants<S.ConditionalFormatting>())
+            {
+                var sqref = formatting.SequenceOfReferences?.InnerText ?? string.Empty;
+                foreach (var rule in formatting.Elements<S.ConditionalFormattingRule>())
+                {
+                    if (rule.Type?.Value != S.ConditionalFormatValues.AboveAverage)
+                    {
+                        continue;
+                    }
+
+                    var dxf = rule.FormatId?.Value is { } formatId && formatId < dxfs.Count ? dxfs[(int)formatId] : null;
+                    var (fill, fontColor, bold) = ReadDifferentialStyle(dxf);
+                    result.Add(new AverageRuleSpec(
+                        sheetName,
+                        sqref,
+                        Above: rule.AboveAverage?.Value ?? true,
+                        EqualAverage: rule.EqualAverage?.Value ?? false,
+                        StdDev: rule.StdDev?.Value ?? 0,
+                        Fill: fill,
+                        FontColor: fontColor,
+                        Bold: bold));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Removes the AboveAverage rules ClosedXML cannot re-serialize from its in-memory model.</summary>
+    public static void StripAverageRulesFromModel(XLWorkbook workbook)
+    {
+        foreach (var sheet in workbook.Worksheets)
+        {
+            sheet.ConditionalFormats.Remove(cf => cf.ConditionalFormatType == XLConditionalFormatType.AboveAverage);
+        }
+    }
+
+    /// <summary>The fill/font hex (ARGB) of a differential format, for re-authoring a captured rule.</summary>
+    private static (string? Fill, string? FontColor, bool? Bold) ReadDifferentialStyle(S.DifferentialFormat? dxf)
+    {
+        if (dxf is null)
+        {
+            return (null, null, null);
+        }
+
+        var fill = dxf.GetFirstChild<S.Fill>()?.PatternFill?.BackgroundColor?.Rgb?.Value;
+        var font = dxf.GetFirstChild<S.Font>();
+        var fontColor = font?.GetFirstChild<S.Color>()?.Rgb?.Value;
+        bool? bold = font?.GetFirstChild<S.Bold>() is { } boldElement
+            ? boldElement.Val?.Value ?? true
+            : null;
+        return (fill, fontColor, bold);
     }
 
     // ----- small helpers ----------------------------------------------------------

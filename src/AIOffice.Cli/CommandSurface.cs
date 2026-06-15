@@ -202,7 +202,7 @@ public static class CommandSurface
         new("help",
             "Progressive documentation: addressing grammar, selectors, per-format properties, errors.",
             "aioffice help [topic]",
-            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert, smartart, connectors, number-formats, structural-fields (or any verb name). Omit for the index.")],
+            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert, smartart, connectors, number-formats, structural-fields, chart-polish, conditional-format, themes, 3d-models, form-fields, animations (or any verb name). Omit for the index.")],
             [],
             "office_help"),
 

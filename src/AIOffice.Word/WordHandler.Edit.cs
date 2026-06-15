@@ -130,6 +130,11 @@ public sealed partial class WordHandler
             "set" when rootName == "section" => ApplySetSection(doc, op),
             "set" when rootName == "properties" => ApplySetProperties(doc, op),
             "set" when rootName == "sdt" => ApplySetContentControl(doc, op),
+            "set" when rootName == "theme" => ApplySetTheme(doc, op),
+            "set" when rootName == "formField" => ApplySetFormField(doc, op),
+            // /body/shape[i] and /body/textBox[i] are two-segment body paths.
+            "set" when IsBodyShapePath(parsedPath, "textBox") => ApplySetBodyShape(doc, op, isTextBox: true),
+            "set" when IsBodyShapePath(parsedPath, "shape") => ApplySetBodyShape(doc, op, isTextBox: false),
             "set" => ApplySet(doc, op, session),
             // Part-backed adds cannot resolve their anchor through WordAddress
             // (the target part/list, not body content, receives the element).
@@ -172,6 +177,12 @@ public sealed partial class WordHandler
             "add" when op.Type == "crossRef" => ApplyAddCrossRef(doc, op, session),
             "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
             "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
+            "add" when op.Type == "shape" && session.Track => throw TrackedStructureUnsupported("shape"),
+            "add" when op.Type == "shape" => ApplyAddBodyShape(doc, op, session, isTextBox: false),
+            "add" when op.Type == "textBox" && session.Track => throw TrackedStructureUnsupported("textBox"),
+            "add" when op.Type == "textBox" => ApplyAddBodyShape(doc, op, session, isTextBox: true),
+            "add" when op.Type == "formField" && session.Track => throw TrackedStructureUnsupported("formField"),
+            "add" when op.Type == "formField" => ApplyAddFormField(doc, op),
             "add" when op.Type == "source" => ApplyAddSource(doc, op),
             "add" when op.Type == "citation" && session.Track => throw TrackedStructureUnsupported("citation"),
             "add" when op.Type == "citation" => ApplyAddCitation(doc, op),
@@ -192,6 +203,9 @@ public sealed partial class WordHandler
             "remove" when rootName == "watermark" => ApplyRemoveWatermark(doc, op),
             "remove" when rootName == "section" => ApplyRemoveSection(doc, op),
             "remove" when rootName == "sdt" => ApplyRemoveContentControl(doc, op),
+            "remove" when rootName == "formField" => ApplyRemoveFormField(doc, op),
+            "remove" when IsBodyShapePath(parsedPath, "textBox") => ApplyRemoveBodyShape(doc, op, isTextBox: true),
+            "remove" when IsBodyShapePath(parsedPath, "shape") => ApplyRemoveBodyShape(doc, op, isTextBox: false),
             "remove" when DocPath.Parse(op.Path).Segments[^1].Name == "omath" => ApplyRemoveEquation(doc, op),
             "remove" when rootName == "revision" => throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -319,12 +333,15 @@ public sealed partial class WordHandler
                 "embed (props.src — embeds any file as an OLE package object), " +
                 "source (props.tag/kind/title — adds a bibliography source at /sources), " +
                 "citation (props.source — cites a source by tag), bibliography (props.style), " +
+                "shape (props.shape=rect|roundRect|ellipse|line|arrow — a floating body drawing), " +
+                "textBox (props.text — a floating text box), " +
+                "formField (props.kind=text|checkbox|dropdown, props.name — a legacy form field), " +
                 "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
                     "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
                     "caption", "crossRef", "tableOfFigures", "indexEntry", "index", "mergeField",
-                    "embed", "source", "citation", "bibliography"]),
+                    "embed", "source", "citation", "bibliography", "shape", "textBox", "formField"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.

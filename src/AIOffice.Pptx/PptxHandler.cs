@@ -163,6 +163,11 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
             return PptxMedia.Detail(presentation, address);
         }
 
+        if (address.IsModel3D)
+        {
+            return PptxModels.Detail(presentation, address);
+        }
+
         if (address.IsOMath)
         {
             return PptxEquations.Detail(presentation, address);
@@ -724,6 +729,7 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
                 var smartArts = PptxSmartArt.List(s.Part);
                 var embeds = PptxEmbeds.SlideEmbeds(s.Part, s.Index);
                 var media = PptxMedia.SlideMedia(s.Part, s.Index);
+                var models = PptxModels.SlideModels(s.Part, s.Index);
                 return new
                 {
                     Path = Units.Inv($"/slide[{s.Index}]"),
@@ -764,6 +770,7 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
                             Size = e.Size,
                         }).ToList(),
                     Media = media.Count == 0 ? null : media,
+                    Models = models.Count == 0 ? null : models,
                 };
             }).ToList<object>(),
         };

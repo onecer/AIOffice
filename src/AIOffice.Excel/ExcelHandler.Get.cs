@@ -83,9 +83,7 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Chart => Envelope.Ok(ChartTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.Pivot => Envelope.Ok(PivotTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.ConditionalFormat => Envelope.Ok(
-                ExcelConditionalFormats.Describe(
-                    target.Sheet, ExcelConditionalFormats.Find(target), target.ConditionalFormatIndex!.Value),
-                MetaFor(file, sw)),
+                ConditionalFormatTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.Image => Envelope.Ok(
                 ExcelImages.Describe(target.Sheet, ExcelImages.Find(target), target.ImageIndex!.Value),
                 MetaFor(file, sw)),
@@ -145,17 +143,19 @@ public sealed partial class ExcelHandler
         return thread is null ? null : ExcelComments.Describe(target.Sheet, thread, model);
     }
 
-    /// <summary>One pivot table; the source range comes from the raw cache part.</summary>
+    /// <summary>One pivot table; the source range and calculated fields come from the raw cache part.</summary>
     private static object PivotTargetInfo(string file, ExcelTarget target)
     {
         var (pivot, _) = ExcelPivots.Find(target);
         Dictionary<(string, string), (string?, string?)> sources;
+        Dictionary<(string, string), List<(string, string)>> calculatedFields;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             sources = ExcelPivots.ReadSources(document);
+            calculatedFields = ExcelPivots.ReadCalculatedFields(document);
         }
 
-        return ExcelPivots.Describe(target.Sheet, pivot, sources);
+        return ExcelPivots.Describe(target.Sheet, pivot, sources, calculatedFields);
     }
 
     /// <summary>One slicer, read back from the raw package (ClosedXML cannot see slicers).</summary>
@@ -231,31 +231,63 @@ public sealed partial class ExcelHandler
         };
     }
 
+    /// <summary>
+    /// One conditional-format rule. The aboveBelowAverage kind's mode/stdDev are
+    /// read raw (ClosedXML cannot see those rule attributes); every other kind is
+    /// fully described from the ClosedXML model.
+    /// </summary>
+    private static object ConditionalFormatTargetInfo(string file, ExcelTarget target)
+    {
+        var format = ExcelConditionalFormats.Find(target);
+        var index = target.ConditionalFormatIndex!.Value;
+        if (format.ConditionalFormatType != ClosedXML.Excel.XLConditionalFormatType.AboveAverage)
+        {
+            return ExcelConditionalFormats.Describe(target.Sheet, format, index);
+        }
+
+        IReadOnlyDictionary<int, ExcelConditionalFormats.AverageRuleDetail> details;
+        using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            details = ExcelConditionalFormats.ReadAverageDetails(document, target.Sheet.Name);
+        }
+
+        details.TryGetValue(index, out var detail);
+        return ExcelConditionalFormats.Describe(target.Sheet, format, index, detail);
+    }
+
     /// <summary>One chart, read back from the raw package (ClosedXML cannot see charts).</summary>
     private static object ChartTargetInfo(string file, ExcelTarget target)
     {
-        List<ChartInfo> charts;
+        var wanted = target.ChartIndex!.Value;
+        ChartInfo? info;
+        object? polish = null;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
-            charts = ExcelCharts.Read(document)
+            var charts = ExcelCharts.Read(document)
                 .Where(c => string.Equals(c.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
                 .ToList();
-        }
+            info = charts.FirstOrDefault(c => c.Index == wanted);
+            if (info is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"No chart[{wanted}] on sheet '{target.Sheet.Name}' ({charts.Count} chart(s) exist).",
+                    charts.Count > 0
+                        ? "Chart indices are 1-based per sheet; pick one of the candidates."
+                        : "This sheet has no charts; add one with edit op {op:add, type:chart, path:" +
+                          ExcelPaths.SheetPath(target.Sheet) + ", props:{kind:\"bar\", dataRange:\"A1:B5\", anchor:\"D2\"}}.",
+                    candidates: charts.Count > 0
+                        ? [.. charts.Select(c => c.Path)]
+                        : [ExcelPaths.SheetPath(target.Sheet)]);
+            }
 
-        var wanted = target.ChartIndex!.Value;
-        var info = charts.FirstOrDefault(c => c.Index == wanted);
-        if (info is null)
-        {
-            throw new AiofficeException(
-                ErrorCodes.InvalidPath,
-                $"No chart[{wanted}] on sheet '{target.Sheet.Name}' ({charts.Count} chart(s) exist).",
-                charts.Count > 0
-                    ? "Chart indices are 1-based per sheet; pick one of the candidates."
-                    : "This sheet has no charts; add one with edit op {op:add, type:chart, path:" +
-                      ExcelPaths.SheetPath(target.Sheet) + ", props:{kind:\"bar\", dataRange:\"A1:B5\", anchor:\"D2\"}}.",
-                candidates: charts.Count > 0
-                    ? [.. charts.Select(c => c.Path)]
-                    : [ExcelPaths.SheetPath(target.Sheet)]);
+            // Read the chart's v1.3 polish settings (data labels, legend, …) from
+            // the same raw part.
+            if (ExcelChartPolish.ChartPartFor(document, target.Sheet.Name, wanted)
+                    ?.ChartSpace?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Charts.Chart>() is { } chart)
+            {
+                polish = ExcelChartPolish.DescribePolish(chart);
+            }
         }
 
         return new
@@ -268,6 +300,7 @@ public sealed partial class ExcelHandler
             dataRange = info.DataRange,
             anchor = info.Anchor,
             series = info.Series,
+            polish,
         };
     }
 

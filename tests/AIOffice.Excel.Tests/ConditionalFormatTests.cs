@@ -201,14 +201,17 @@ public sealed class ConditionalFormatTests : ExcelTestBase
     {
         var file = CreateDataWorkbook();
 
-        // iconSet joined the supported set in v1.1; an unknown kind still names
-        // every supported kind (including iconSet) as candidates.
+        // iconSet joined the supported set in v1.1; formula/topBottom/
+        // aboveBelowAverage joined in v1.3. A genuinely-unknown kind still names
+        // every supported kind (the now-expanded set) as candidates.
         var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
-            ("kind", "topBottom")));
+            ("kind", "timePeriod")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
-        Assert.Equal(["cellIs", "colorScale", "dataBar", "containsText", "iconSet"], envelope.Error.Candidates!);
+        Assert.Equal(
+            ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage"],
+            envelope.Error.Candidates!);
         Assert.Contains("cellIs", envelope.Error.Suggestion, StringComparison.Ordinal);
     }
 

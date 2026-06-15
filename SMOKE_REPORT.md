@@ -2073,3 +2073,95 @@ SchemaConsistencyTests / TokenBudgetTests: PASS
 - Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
 - Binary size 38,408,217 bytes (~36.6 MB).
 - No git commit/push, no tags (left for the human release engineer).
+
+---
+
+# AIOffice 1.3.0 — Integration Smoke Report
+
+Date: 2026-06-15 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+Third post-1.0 feature release — purely additive, `surfaceVersion` stays `1.0`.
+
+## Build & tests — PASS (1924/1924 across 7 projects)
+
+```
+$ dotnet build AIOffice.sln -warnaserror           → 0 warnings, 0 errors
+$ dotnet test AIOffice.sln --no-build              → all green
+  Core 124 · Word 556 · Excel 522 · Pptx 580 · MCP 87 · Preview 24 · Render 31
+SchemaConsistencyTests / TokenBudgetTests: PASS (17 MCP tools; surface ≤ 3500 tokens)
+```
+
+New dedicated feature tests landed WITH the features: ChartPolishTests (Excel 17 /
+Pptx 16), AdvancedConditionalFormatTests 16, PivotCalculatedFieldTests 9,
+BodyShapeTests 10, FormFieldTests 10, ThemeTests 6, Model3DTests 13,
+MotionPathTests 14.
+
+## Surface wiring (additive within frozen 1.0)
+
+- `office_edit` add types: docx `shape`/`textBox`/`formField`, pptx `model3d`.
+- Chart-polish props (xlsx + pptx) on `add` and `set /…/chart[k]`: `dataLabels`,
+  `legend`, `axisTitles`, `trendline`, `errorBars`, `gridlines`, `secondaryAxis`;
+  `get` reports them under `polish`.
+- xlsx `conditionalFormat` kinds `formula`/`topBottom`/`aboveBelowAverage`; pivot
+  `calculatedFields`; pptx animation `motionPath` effect; docx `set /theme`.
+- New `office_help` topics: `chart-polish`, `conditional-format`, `themes`,
+  `3d-models`, `form-fields`, `animations` (CLI help array + MCP HelpTopics index).
+  Details live in `office_help`, NOT in the tool schemas — token budget unchanged.
+- New warning `model3d_as_media`. surfaceVersion stays `1.0`; CONTRACT §7c records
+  the additions; 18 verbs / 17 MCP tools unchanged.
+
+## Real end-to-end smoke (`dotnet run`, fresh temp workspace) — PASS
+
+**xlsx** — sales sheet → bar chart with `dataLabels` + `trendline:linear` +
+`axisTitles` + `legend:bottom` → validate 0 → `get` shows the polish; `set` adds a
+secondary axis for one series → validate 0, `get.polish.secondaryAxis=["Target"]`;
+`formula` CF (`=$B2>100`) + `topBottom` (top 3) CF → validate 0; pivot with a
+`calculatedField` `Margin=Revenue-Target` → validate 0 → `get.calculatedFields`
+reports it.
+
+**docx** — roundRect body shape (fill/line/text "Reviewed") + a text box →
+validate 0 → `get` shows geometry (xCm/yCm/wCm/hCm/fill/line/text); `set /theme
+accent1=38BDF8 + minorFont=Calibri` → `get /theme` reflects both; dropdown form
+field `status` (items) → `read --view fields` lists it (`fieldKind:dropdown`) →
+validate 0.
+
+**pptx** — line chart with `dataLabels` + `legend:right` → validate 0 → `get` shows
+polish; tiny generated `.glb` 3D model embedded → media part `media/mediadataglb`
+present + `model3d_as_media` warning + sandbox denial on `../outside.glb`
+(`sandbox_denied`) → validate 0; `motionPath` (arc) animation on the model shape →
+`read --view structure` lists it (`effect:motionPath`, `class:path`,
+`direction:arc`) → validate 0.
+
+## Published-binary smoke loop (dist/osx-arm64/aioffice) — PASS
+
+```
+doctor: version 1.3.0 | surfaceVersion 1.0 | verbs 18 | mcpTools 17
+help index lists chart-polish / conditional-format / themes / 3d-models /
+  form-fields / animations
+```
+
+- xlsx polished bar chart (dataLabels + legend:bottom + linear trendline) →
+  validate 0 → `get.polish` reports the settings.
+- pptx 3D model embed → `model3d_as_media` warning → validate 0.
+- docx theme edit loop → `set /theme {accent1, minorFont}` → `get /theme` reflects
+  accent1=38BDF8, minorFont=Calibri → validate 0.
+
+## Manual-check fixtures (1.3) — added
+
+- `fixtures/manual-check/workbook-1.3-polished.xlsx` — a bar chart with data labels,
+  a legend, axis titles and a linear trendline, plus a pivot with a `Margin`
+  calculated field (validator-clean).
+- `fixtures/manual-check/deck-1.3-model3d.pptx` — a placeholder `.glb` 3D model
+  (poster fallback, `model3d_as_media`) and an arc `motionPath` animation
+  (validator-clean).
+- `fixtures/manual-check/doc-1.3-theme.docx` — an edited theme (accent1 + minorFont),
+  a rounded-rect body shape, a text box and a dropdown form field (validator-clean).
+
+## Invariants — held (1.3.0)
+- Published binary == `dotnet run` envelopes; **17 MCP tools**, **surfaceVersion
+  `1.0`** (unchanged), package version **1.3.0**.
+- All 1.3 changes are additive: nothing in CONTRACT §§1–7 removed or renamed; §7c
+  records the additions; op kinds unchanged; `model3d_as_media` added to the frozen
+  warning list.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- Binary size 38,479,545 bytes (~36.7 MB).
+- No git commit/push, no tags (left for the human release engineer).

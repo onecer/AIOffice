@@ -83,7 +83,29 @@ internal static class PptxRenderer
         {
             svg.Append(Units.Inv($"    <rect x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
             svg.Append("fill=\"#ffffff\" stroke=\"#999999\"/>\n");
-            AppendChart(svg, PptxCharts.ReadData(chartPart), x, y, w, h);
+            var hints = chartPart.ChartSpace is { } cs ? PptxChartPolish.RenderHints(cs) : ("none", false);
+            var data = PptxCharts.ReadData(chartPart);
+
+            // A legend strip eats a slice of the frame on its named edge; the plot
+            // shrinks into the remainder so the mini-chart and legend never overlap.
+            var ph = h;
+            var py = y;
+            if (hints.Item1 is "bottom")
+            {
+                ph -= 16;
+            }
+            else if (hints.Item1 is "top")
+            {
+                ph -= 16;
+                py += 16;
+            }
+
+            AppendChart(svg, data, x, py, w, ph, hints.Item2);
+            if (hints.Item1 != "none")
+            {
+                AppendChartLegend(svg, data, hints.Item1, x, y, w, h);
+            }
+
             svg.Append("  </g>\n");
             return;
         }
@@ -104,6 +126,15 @@ internal static class PptxRenderer
             svg.Append("fill=\"none\" stroke=\"#999999\" stroke-dasharray=\"4 3\"/>\n");
             svg.Append(Units.Inv($"    <text x=\"{x + (w / 2):0.#}\" y=\"{y + (h / 2):0.#}\" font-size=\"12\" "));
             svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#666666\">[smartart]{(layout is null ? string.Empty : " " + Escape(layout))}</text>\n"));
+            svg.Append("  </g>\n");
+            return;
+        }
+
+        // An embedded 3D model renders as a labeled placeholder box (a real redraw
+        // would need a 3D renderer); the poster, when present, is never rasterized.
+        if (shape.Element is P.Picture modelPicture && PptxModels.IsModelPicture(slidePart, modelPicture))
+        {
+            AppendModel3DPlaceholder(svg, shape.Name, x, y, w, h);
             svg.Append("  </g>\n");
             return;
         }
@@ -201,6 +232,32 @@ internal static class PptxRenderer
 
         svg.Append(Units.Inv($"    <text x=\"{cx:0.#}\" y=\"{y + h - 6:0.#}\" font-size=\"11\" "));
         svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#e5e7eb\">[{Escape(mediaKind)}] {Escape(name)}</text>\n"));
+    }
+
+    /// <summary>
+    /// Draws an embedded-3D-model placeholder: a dashed rect with a small cube glyph
+    /// and a label. The model bytes are never rendered — this is an honest stand-in.
+    /// </summary>
+    private static void AppendModel3DPlaceholder(StringBuilder svg, string name, double x, double y, double w, double h)
+    {
+        svg.Append(Units.Inv($"    <rect class=\"aio-model3d\" x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
+        svg.Append("fill=\"#eef2f7\" stroke=\"#64748b\" stroke-dasharray=\"4 3\"/>\n");
+
+        var cx = x + (w / 2);
+        var cy = y + (h / 2);
+        var s = Math.Max(Math.Min(w, h) * 0.16, 8);
+
+        // A small isometric cube: a front face plus two foreshortened side/top faces.
+        var d = s * 0.5;
+        svg.Append(Units.Inv($"    <polygon class=\"aio-model3d-cube\" points=\"{cx - s:0.#},{cy - (s / 2):0.#} {cx:0.#},{cy - s:0.#} {cx + s:0.#},{cy - (s / 2):0.#} {cx:0.#},{cy:0.#}\" "));
+        svg.Append("fill=\"#cbd5e1\" stroke=\"#64748b\"/>\n");
+        svg.Append(Units.Inv($"    <polygon points=\"{cx - s:0.#},{cy - (s / 2):0.#} {cx:0.#},{cy:0.#} {cx:0.#},{cy + d:0.#} {cx - s:0.#},{cy - (s / 2) + d:0.#}\" "));
+        svg.Append("fill=\"#94a3b8\" stroke=\"#64748b\"/>\n");
+        svg.Append(Units.Inv($"    <polygon points=\"{cx + s:0.#},{cy - (s / 2):0.#} {cx:0.#},{cy:0.#} {cx:0.#},{cy + d:0.#} {cx + s:0.#},{cy - (s / 2) + d:0.#}\" "));
+        svg.Append("fill=\"#b6c2d1\" stroke=\"#64748b\"/>\n");
+
+        svg.Append(Units.Inv($"    <text x=\"{cx:0.#}\" y=\"{y + h - 6:0.#}\" font-size=\"11\" "));
+        svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#475569\">[3d model] {Escape(name)}</text>\n"));
     }
 
     /// <summary>
@@ -440,8 +497,9 @@ internal static class PptxRenderer
     /// <summary>
     /// Draws a real (approximate but truthful) mini-chart from the cached data:
     /// axes + bars/lines/wedges + category labels, scaled into the frame box.
+    /// When <paramref name="dataLabels"/> is on, bar charts get per-bar value labels.
     /// </summary>
-    private static void AppendChart(StringBuilder svg, PptxChartData data, double x, double y, double w, double h)
+    private static void AppendChart(StringBuilder svg, PptxChartData data, double x, double y, double w, double h, bool dataLabels = false)
     {
         var top = y + 8.0;
         if (data.Title is { } title)
@@ -461,6 +519,11 @@ internal static class PptxRenderer
             case "bar":
                 AppendAxes(svg, data, plotX, plotY, plotW, plotH);
                 AppendBars(svg, data, plotX, plotY, plotW, plotH);
+                if (dataLabels)
+                {
+                    AppendBarValueLabels(svg, data, plotX, plotY, plotW, plotH);
+                }
+
                 AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
                 break;
             case "stackedBar":
@@ -710,6 +773,78 @@ internal static class PptxRenderer
             }
         }
     }
+
+    /// <summary>Per-bar value labels above each clustered bar (mirrors AppendBars' geometry).</summary>
+    private static void AppendBarValueLabels(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
+    {
+        var max = MaxValue(data);
+        var groups = data.Categories.Count;
+        var seriesCount = Math.Max(data.Series.Count, 1);
+        var groupW = plotW / Math.Max(groups, 1);
+        var barW = groupW / (seriesCount + 1);
+
+        for (var s = 0; s < data.Series.Count; s++)
+        {
+            for (var c = 0; c < groups; c++)
+            {
+                if (data.Series[s].Values.Count <= c || data.Series[s].Values[c] is not { } value || value <= 0)
+                {
+                    continue;
+                }
+
+                var barH = plotH * Math.Min(value, max) / max;
+                var barX = plotX + (c * groupW) + (barW / 2) + (s * barW);
+                var labelX = barX + (barW * 0.45);
+                var labelY = plotY + plotH - barH - 2;
+                svg.Append(Units.Inv($"    <text class=\"aio-chart-label\" x=\"{labelX:0.#}\" y=\"{labelY:0.#}\" font-size=\"8\" "));
+                svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#333333\">{Escape(FormatNumber(value))}</text>\n"));
+            }
+        }
+    }
+
+    /// <summary>A legend swatch+name strip on the chart's named edge (honest mini-legend for the SVG render).</summary>
+    private static void AppendChartLegend(StringBuilder svg, PptxChartData data, string position, double x, double y, double w, double h)
+    {
+        var names = data.Series.Select(s => s.Name).Where(n => n.Length > 0).ToList();
+        if (names.Count == 0)
+        {
+            return;
+        }
+
+        if (position is "right" or "left")
+        {
+            // A vertical stack of swatch + name down the named side.
+            var legendX = position == "right" ? x + w - 56 : x + 6;
+            var ly = y + (h / 2) - (names.Count * 7);
+            for (var i = 0; i < names.Count; i++)
+            {
+                var color = ChartPalette[i % ChartPalette.Length].ToLowerInvariant();
+                svg.Append(Units.Inv($"    <rect class=\"aio-chart-legend\" x=\"{legendX:0.#}\" y=\"{ly + (i * 14):0.#}\" width=\"8\" height=\"8\" fill=\"#{color}\"/>\n"));
+                svg.Append(Units.Inv($"    <text x=\"{legendX + 11:0.#}\" y=\"{ly + (i * 14) + 8:0.#}\" font-size=\"9\" fill=\"#333333\">{Escape(Truncate(names[i], 10))}</text>\n"));
+            }
+
+            return;
+        }
+
+        // A horizontal swatch row along the top or bottom edge.
+        var rowY = position == "top" ? y + 10 : y + h - 6;
+        var slot = w / Math.Max(names.Count, 1);
+        for (var i = 0; i < names.Count; i++)
+        {
+            var color = ChartPalette[i % ChartPalette.Length].ToLowerInvariant();
+            var sx = x + (i * slot) + 6;
+            svg.Append(Units.Inv($"    <rect class=\"aio-chart-legend\" x=\"{sx:0.#}\" y=\"{rowY - 7:0.#}\" width=\"8\" height=\"8\" fill=\"#{color}\"/>\n"));
+            svg.Append(Units.Inv($"    <text x=\"{sx + 11:0.#}\" y=\"{rowY:0.#}\" font-size=\"9\" fill=\"#333333\">{Escape(Truncate(names[i], 10))}</text>\n"));
+        }
+    }
+
+    private static string FormatNumber(double value) =>
+        value == Math.Floor(value) && Math.Abs(value) < 1e15
+            ? ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..(max - 1)] + "…";
 
     private static void AppendLines(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
     {

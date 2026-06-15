@@ -52,7 +52,7 @@ internal static class PptxCharts
         ["bar", "line", "stackedBar", "percentStackedBar", "stackedArea", "combo"];
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["kind", "categories", "series", "title", "x", "y", "w", "h"];
+        ["kind", "categories", "series", "title", "x", "y", "w", "h", .. PptxChartPolish.PropKeys];
 
     private const string ChartNs = "http://schemas.openxmlformats.org/drawingml/2006/chart";
     private const string MainNs = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -78,6 +78,14 @@ internal static class PptxCharts
 
         var chartPart = slidePart.AddNewPart<ChartPart>();
         chartPart.ChartSpace = BuildChartSpace(data, EmbedWorkbook(chartPart, data));
+
+        // Chart-polish props (dataLabels/legend/axisTitles/trendline/errorBars/
+        // gridlines/secondaryAxis) are accepted at create alongside the data.
+        var polish = PptxChartPolish.Split(props, out _);
+        if (polish.Count > 0)
+        {
+            PptxChartPolish.Apply(chartPart.ChartSpace, polish);
+        }
 
         tree.Append(new P.GraphicFrame(
             new P.NonVisualGraphicFrameProperties(
@@ -441,6 +449,24 @@ internal static class PptxCharts
             ReplaceSerChild(ser, "val", BuildValues(data.Series[i].Values, i), insertAfter: ["cat", "order", "idx"]);
         }
 
+        return Units.Inv($"/slide[{address.SlideIndex}]/chart[{index}]");
+    }
+
+    /// <summary>
+    /// set /slide[i]/chart[k] with chart-polish props: applies dataLabels/legend/
+    /// axisTitles/trendline/errorBars/gridlines/secondaryAxis to the existing chart
+    /// in place. Returns the canonical chart path.
+    /// </summary>
+    public static string SetPolish(PresentationPart presentation, PptxAddress address, JsonObject polish)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var (index, _, part) = Resolve(slidePart, address);
+        var chartSpace = part.ChartSpace ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The chart part has no chartSpace XML.",
+            "Remove the chart and add it again, or restore a snapshot.");
+
+        PptxChartPolish.Apply(chartSpace, polish);
         return Units.Inv($"/slide[{address.SlideIndex}]/chart[{index}]");
     }
 
@@ -1018,6 +1044,7 @@ internal static class PptxCharts
             Categories = data.Categories,
             Series = data.Series.Select(s => (object)new { Name = s.Name, Values = s.Values }).ToList(),
             DataEditable = DataEditable(part),
+            Polish = part.ChartSpace is { } chartSpace ? PptxChartPolish.ReadSettings(chartSpace) : null,
             X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
             W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,

@@ -41,9 +41,15 @@ internal static class PptxAnimations
     /// <summary>The exit effects aioffice can add.</summary>
     public static readonly IReadOnlyList<string> ExitEffects = ["fadeOut", "flyOut", "wipeOut"];
 
+    /// <summary>The motion-path effects aioffice can add (v1.3.0, additive "path" preset class).</summary>
+    public static readonly IReadOnlyList<string> MotionEffects = ["motionPath"];
+
     /// <summary>Every effect aioffice can add. Everything else is unsupported_feature.</summary>
     public static readonly IReadOnlyList<string> Effects =
-        [.. EntranceEffects, .. EmphasisEffects, .. ExitEffects];
+        [.. EntranceEffects, .. EmphasisEffects, .. ExitEffects, .. MotionEffects];
+
+    /// <summary>The motion-path shapes a motionPath effect can trace.</summary>
+    public static readonly IReadOnlyList<string> MotionPaths = ["line", "arc", "circle", "custom"];
 
     /// <summary>The triggers aioffice understands.</summary>
     public static readonly IReadOnlyList<string> Triggers = ["click", "afterPrevious", "withPrevious"];
@@ -52,6 +58,13 @@ internal static class PptxAnimations
 
     private static readonly IReadOnlyList<string> AddProps =
         ["effect", "trigger", "duration", "delay", "direction", "color"];
+
+    /// <summary>add motionPath additionally accepts a path kind and (for custom) a points list.</summary>
+    private static readonly IReadOnlyList<string> MotionAddProps =
+        ["effect", "trigger", "duration", "delay", "path", "direction", "points"];
+
+    /// <summary>The motion preset class id PowerPoint uses for custom user paths.</summary>
+    private const int CustomPathPresetId = 0;
 
     private const int AppearPresetId = 1;
     private const int FlyInPresetId = 2;
@@ -94,13 +107,27 @@ internal static class PptxAnimations
 
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var view = PptxDoc.ResolveShape(slidePart, address);
-        var spec = ParseProps(props);
 
         var slide = slidePart.Slide ?? throw new AiofficeException(
             ErrorCodes.FormatCorrupt,
             "The slide part has no slide XML.",
             "The slide part is malformed; re-export the file or restore a snapshot.");
 
+        // A motion-path effect (the additive "path" preset class) takes its own props
+        // (path/points) and builds a p:animMotion rather than the entrance/exit behaviors.
+        if (IsMotionPath(props))
+        {
+            var motion = ParseMotionProps(props!);
+            var motionMainSeq = EnsureMainSequence(slide);
+            var motionNextId = NextTimeNodeId(slide.Timing!);
+            var motionGroup = motion.Trigger == "click" || LastGroupChildren(motionMainSeq) is null
+                ? NewClickGroup(motionMainSeq, ref motionNextId)
+                : LastGroupChildren(motionMainSeq)!;
+            motionGroup.Append(BuildMotionPar(motion, view.Id, ref motionNextId));
+            return Units.Inv($"/slide[{address.SlideIndex}]/animation[{List(slidePart).Count}]");
+        }
+
+        var spec = ParseProps(props);
         var mainSequenceChildren = EnsureMainSequence(slide);
         var nextId = NextTimeNodeId(slide.Timing!);
 
@@ -784,6 +811,228 @@ internal static class PptxAnimations
         return new P.ParallelTimeNode(effectNode);
     }
 
+    // ----- motion paths (v1.3.0) -------------------------------------------------
+
+    private sealed record MotionSpec(
+        string Path, string Trigger, long DurationMs, long DelayMs, string Direction, string PathString);
+
+    /// <summary>True when the props request the additive motionPath effect.</summary>
+    private static bool IsMotionPath(JsonObject? props) =>
+        props is not null &&
+        props.TryGetPropertyValue("effect", out var node) && node is not null &&
+        string.Equals(J.ScalarText(node).Trim(), "motionPath", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Parses a motionPath op's props: path (line/arc/circle/custom), an optional
+    /// direction, custom points (slide fraction or "Ncm"), trigger/duration/delay.
+    /// Builds the PowerPoint path string up front so a bad shape fails before mutating.
+    /// </summary>
+    private static MotionSpec ParseMotionProps(JsonObject props)
+    {
+        foreach (var (key, _) in props)
+        {
+            if (!MotionAddProps.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown motionPath prop '{key}'.",
+                    "motionPath props: effect, path (line/arc/circle/custom), direction, points (custom), " +
+                    "trigger, duration, delay.",
+                    candidates: MotionAddProps);
+            }
+        }
+
+        var path = Token(props, "path") ?? "line";
+        if (!MotionPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"Motion path '{path}' is not supported.",
+                "Supported motion paths: line, arc, circle, custom (custom needs a 'points' array).",
+                candidates: MotionPaths);
+        }
+
+        path = MotionPaths.First(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+
+        var direction = Token(props, "direction");
+        if (direction is not null)
+        {
+            if (path is not ("line" or "arc"))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Prop 'direction' does not apply to motion path '{path}'.",
+                    "Only line and arc take a direction (left, right, top, bottom); circle and custom do not.");
+            }
+
+            if (!Directions.Contains(direction, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown motion direction '{direction}'.",
+                    "Use left, right, top or bottom.",
+                    candidates: Directions);
+            }
+
+            direction = Directions.First(d => string.Equals(d, direction, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var trigger = Token(props, "trigger") ?? "click";
+        if (!Triggers.Contains(trigger, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown animation trigger '{trigger}'.",
+                "Use click (starts on click), afterPrevious or withPrevious.",
+                candidates: Triggers);
+        }
+
+        trigger = Triggers.First(t => string.Equals(t, trigger, StringComparison.OrdinalIgnoreCase));
+
+        var durationMs = props.TryGetPropertyValue("duration", out var durationNode) && durationNode is not null
+            ? ParseSecondsMs("duration", durationNode, max: 600)
+            : 2000;
+        var delayMs = props.TryGetPropertyValue("delay", out var delayNode) && delayNode is not null
+            ? ParseSecondsMs("delay", delayNode, max: 600, allowZero: true)
+            : 0;
+
+        var pathString = BuildPathString(path, direction ?? "right", props);
+        return new MotionSpec(path, trigger, durationMs, delayMs, direction ?? "right", pathString);
+    }
+
+    /// <summary>
+    /// The PowerPoint motion path string: M (move) to the start, then L/A/curve
+    /// commands, ending in E (end). Coordinates are slide fractions relative to the
+    /// shape's start position (the path edit mode is Relative). A custom path is
+    /// built from the caller's points; the built-in shapes use canonical geometry.
+    /// </summary>
+    private static string BuildPathString(string path, string direction, JsonObject props)
+    {
+        return path switch
+        {
+            "custom" => BuildCustomPathString(props),
+            "circle" =>
+                // A closed loop drawn as four quadratic arcs around a small circle (radius 0.15).
+                "M 0 0 C 0 -0.0828 0.0672 -0.15 0.15 -0.15 C 0.2328 -0.15 0.3 -0.0828 0.3 0 " +
+                "C 0.3 0.0828 0.2328 0.15 0.15 0.15 C 0.0672 0.15 0 0.0828 0 0 Z E",
+            "arc" => direction switch
+            {
+                // A quarter-ish arc bowing toward the named edge, ending offset from the start.
+                "left" => "M 0 0 Q -0.15 -0.15 -0.3 0 E",
+                "top" => "M 0 0 Q -0.15 -0.15 0 -0.3 E",
+                "bottom" => "M 0 0 Q 0.15 0.15 0 0.3 E",
+                _ => "M 0 0 Q 0.15 -0.15 0.3 0 E", // right
+            },
+            _ => direction switch // line
+            {
+                "left" => "M 0 0 L -0.3 0 E",
+                "top" => "M 0 0 L 0 -0.3 E",
+                "bottom" => "M 0 0 L 0 0.3 E",
+                _ => "M 0 0 L 0.3 0 E", // right
+            },
+        };
+    }
+
+    /// <summary>
+    /// Builds a custom path string from props.points: each [x, y] is a slide fraction
+    /// (a number) or a "Ncm" length (converted to a fraction of the slide width/height).
+    /// The first point is the M start; the rest are L segments; the path ends in E.
+    /// </summary>
+    private static string BuildCustomPathString(JsonObject props)
+    {
+        if (!props.TryGetPropertyValue("points", out var node) || node is not JsonArray array || array.Count < 2)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "A custom motion path needs a 'points' array with at least two [x, y] points.",
+                "Pass points as slide fractions or lengths, e.g. " +
+                "{\"effect\":\"motionPath\",\"path\":\"custom\",\"points\":[[0,0],[0.5,0.2],[0.5,-0.1]]}.");
+        }
+
+        var builder = new System.Text.StringBuilder();
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonArray point || point.Count != 2)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"points[{i}] is not an [x, y] pair."),
+                    "Each point is a two-element array, e.g. [0.5, 0.2] (fractions) or [\"4cm\", \"2cm\"] (lengths).");
+            }
+
+            var px = PointFraction(point[0], i, "x");
+            var py = PointFraction(point[1], i, "y");
+            builder.Append(i == 0 ? "M " : "L ");
+            builder.Append(px.ToString("0.####", CultureInfo.InvariantCulture));
+            builder.Append(' ');
+            builder.Append(py.ToString("0.####", CultureInfo.InvariantCulture));
+            builder.Append(' ');
+        }
+
+        builder.Append('E');
+        return builder.ToString();
+    }
+
+    /// <summary>One custom-point coordinate as a slide fraction: a bare number is a fraction; a length suffix is divided by the slide dimension.</summary>
+    private static double PointFraction(JsonNode? node, int index, string axis)
+    {
+        if (node is JsonValue value)
+        {
+            if (Units.TryNumber(value, out var fraction))
+            {
+                return fraction;
+            }
+
+            if (value.TryGetValue<string>(out var raw))
+            {
+                // A length string ("4cm") becomes a fraction of the slide's standard
+                // 16:9 dimension (33.867cm wide x 19.05cm tall) — the default slide size.
+                var emu = Units.ParseLengthEmu($"points[{index}].{axis}", node);
+                var slideEmu = axis == "x" ? PptxFactory.SlideWidthEmu : PptxFactory.SlideHeightEmu;
+                return (double)emu / slideEmu;
+            }
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            Units.Inv($"points[{index}].{axis} is not a number or length: {node?.ToJsonString() ?? "null"}"),
+            "Use a slide fraction (e.g. 0.5) or a length string (e.g. \"4cm\").");
+    }
+
+    /// <summary>The motion-path effect par: a p:animMotion in a path-class cTn targeting the shape.</summary>
+    private static P.ParallelTimeNode BuildMotionPar(MotionSpec spec, uint shapeId, ref uint nextId)
+    {
+        var animMotion = new P.AnimateMotion(
+            new P.CommonBehavior(
+                new P.CommonTimeNode { Id = nextId++, Duration = Inv(spec.DurationMs), Fill = P.TimeNodeFillValues.Hold },
+                new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(shapeId) })))
+        {
+            Origin = P.AnimateMotionBehaviorOriginValues.Layout,
+            Path = spec.PathString,
+            PathEditMode = P.AnimateMotionPathEditModeValues.Relative,
+        };
+
+        var effectNode = new P.CommonTimeNode(
+            new P.StartConditionList(new P.Condition { Delay = Inv(spec.DelayMs) }),
+            new P.ChildTimeNodeList(animMotion))
+        {
+            Id = nextId,
+            PresetId = CustomPathPresetId,
+            PresetClass = P.TimeNodePresetClassValues.Path,
+            PresetSubtype = 0,
+            Fill = P.TimeNodeFillValues.Hold,
+            GroupId = 0,
+            NodeType = spec.Trigger switch
+            {
+                "withPrevious" => P.TimeNodeValues.WithEffect,
+                "afterPrevious" => P.TimeNodeValues.AfterEffect,
+                _ => P.TimeNodeValues.ClickEffect,
+            },
+        };
+        nextId++;
+        return new P.ParallelTimeNode(effectNode);
+    }
+
     /// <summary>The off-slide position fly effects start from (entrance) or end at (exit).</summary>
     private static (string X, string Y) OffSlide(string direction) => direction switch
     {
@@ -899,29 +1148,35 @@ internal static class PptxAnimations
             {
                 { } c when c == P.TimeNodePresetClassValues.Emphasis => "emphasis",
                 { } c when c == P.TimeNodePresetClassValues.Exit => "exit",
+                { } c when c == P.TimeNodePresetClassValues.Path => "path",
                 _ => "entrance",
             };
 
             var presetId = node.PresetId?.Value;
-            var effect = (cls, presetId) switch
-            {
-                ("entrance", AppearPresetId) => "appear",
-                ("entrance", FadePresetId) => "fade",
-                ("entrance", FlyInPresetId) => "flyIn",
-                ("entrance", WipePresetId) => "wipe",
-                ("emphasis", PulsePresetId) => "pulse",
-                ("emphasis", GrowPresetId) => "grow",
-                ("emphasis", SpinPresetId) => "spin",
-                ("emphasis", ColorPulsePresetId) => "colorPulse",
-                ("exit", FadePresetId) => "fadeOut",
-                ("exit", FlyInPresetId) => "flyOut",
-                ("exit", WipePresetId) => "wipeOut",
-                (_, { } other) => Units.Inv($"preset{other}"), // foreign decks: truthful, not pretty
-                (_, null) => "unknown",
-            };
+            var effect = cls == "path"
+                ? "motionPath"
+                : (cls, presetId) switch
+                {
+                    ("entrance", AppearPresetId) => "appear",
+                    ("entrance", FadePresetId) => "fade",
+                    ("entrance", FlyInPresetId) => "flyIn",
+                    ("entrance", WipePresetId) => "wipe",
+                    ("emphasis", PulsePresetId) => "pulse",
+                    ("emphasis", GrowPresetId) => "grow",
+                    ("emphasis", SpinPresetId) => "spin",
+                    ("emphasis", ColorPulsePresetId) => "colorPulse",
+                    ("exit", FadePresetId) => "fadeOut",
+                    ("exit", FlyInPresetId) => "flyOut",
+                    ("exit", WipePresetId) => "wipeOut",
+                    (_, { } other) => Units.Inv($"preset{other}"), // foreign decks: truthful, not pretty
+                    (_, null) => "unknown",
+                };
 
+            // A motion path reports its path kind (line/arc/circle/custom) in the
+            // "direction" slot of the row so read --view structure surfaces it.
             var direction = effect switch
             {
+                "motionPath" => MotionPathKind(par),
                 "flyIn" or "flyOut" => node.PresetSubtype?.Value switch
                 {
                     8 => "left", 2 => "right", 1 => "top", 4 => "bottom", _ => null,
@@ -947,6 +1202,31 @@ internal static class PptxAnimations
         }
 
         return views;
+    }
+
+    /// <summary>Classifies a motion par's path string back to line/arc/circle/custom (best-effort for foreign decks).</summary>
+    private static string MotionPathKind(P.ParallelTimeNode par)
+    {
+        var path = par.Descendants<P.AnimateMotion>().FirstOrDefault()?.Path?.Value;
+        if (path is null)
+        {
+            return "custom";
+        }
+
+        // A closed loop (ends in Z before E) is our circle; a single L segment is a
+        // line; a Q/C curve is an arc; anything else (multiple Ls) is a custom path.
+        if (path.Contains('Z', StringComparison.Ordinal))
+        {
+            return "circle";
+        }
+
+        var commandCount = path.Count(ch => ch is 'L' or 'l');
+        if (path.Contains('Q', StringComparison.Ordinal) || path.Contains('C', StringComparison.Ordinal))
+        {
+            return commandCount > 1 ? "custom" : "arc";
+        }
+
+        return commandCount == 1 ? "line" : "custom";
     }
 
     private static uint? FirstShapeTargetId(P.ParallelTimeNode par)

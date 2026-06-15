@@ -337,3 +337,44 @@ outline?}}` emits the Word 2010 text effects (`w14:shadow`/`w14:glow`/
 | `glow`       | `true` or `{color, radius}` (radius in points, default 5)      |
 | `reflection` | `true` or `{transparency, size}` (0–100 percentages)           |
 | `outline`    | `true` or `{color, width}` (width in points, default 1)        |
+
+## body shapes & text boxes (1.3, `/body/shape[i]`, `/body/textBox[i]`)
+
+Floating DrawingML shapes and text boxes anchored in the body (what the Insert ▸
+Shapes / Text Box galleries write). Distinct from inline `image`s.
+
+```jsonc
+// a shape with a preset geometry + inline text
+{op:"add", path:"/body", type:"shape", props:{
+  shape:"roundRect", x:"2cm", y:"2cm", w:"6cm", h:"3cm",
+  fill?:"DBEAFE", line?:"2563EB", text?:"Reviewed"}}
+
+// a text box (a rectangle that holds wrapping text)
+{op:"add", path:"/body", type:"textBox", props:{
+  x:"2cm", y:"6cm", w:"7cm", h:"2cm", text:"Sidebar note", fill?:"FEF9C3"}}
+```
+
+`shape`: `rect` · `roundRect` · `ellipse` · `line` · `arrow`. `get` reports the
+geometry/fill/line/text; `set` edits them; `remove` deletes. Shapes are
+structural, so add/remove inside a `--track` session is `unsupported_feature`.
+
+## legacy form fields (1.3, `/formField[@name=…]`)
+
+Classic Word form fields: text input / checkbox / dropdown. `read --view fields`
+lists them (`kind:"formField"`). Full grammar: `aioffice help form-fields`.
+
+```jsonc
+{op:"add", path:"/body/p[4]", type:"formField",
+ props:{kind:"dropdown", name:"status", items:["Open","Closed"]}}
+{op:"set", path:"/formField[@name=status]", props:{value:"Open"}}
+```
+
+## theme (1.3, `/theme`)
+
+`set /theme` edits the document theme's colour + font scheme; `get /theme` reads
+it back. Slots: `dk1/lt1/dk2/lt2`, `accent1`…`accent6`, `hlink`, `folHlink`
+(6-hex), `majorFont`, `minorFont`. Full topic: `aioffice help themes`.
+
+```jsonc
+{op:"set", path:"/theme", props:{accent1:"38BDF8", minorFont:"Calibri"}}
+```

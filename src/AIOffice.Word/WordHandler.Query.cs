@@ -49,6 +49,27 @@ public sealed partial class WordHandler
                     MetaFor(file, Rev.OfBytes(bytes)));
             }
 
+            // Legacy form fields use a /formField[@name=X] virtual path (v1.3.0).
+            if (pathArg.StartsWith("/formField[", StringComparison.Ordinal))
+            {
+                var (formFieldPath, formFieldProps) = GetFormFieldProperties(doc, pathArg);
+                return Envelope.Ok(
+                    new { path = formFieldPath, type = "formField", properties = formFieldProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
+            // Body drawing shapes and text boxes (v1.3.0) are two-segment body
+            // paths that fall outside the core child grammar, so intercept here.
+            if (pathArg.StartsWith("/body/shape[", StringComparison.Ordinal) ||
+                pathArg.StartsWith("/body/textBox[", StringComparison.Ordinal))
+            {
+                var isTextBox = pathArg.StartsWith("/body/textBox[", StringComparison.Ordinal);
+                var (shapePath, shapeProps) = GetBodyShapeProperties(doc, DocPath.Parse(pathArg), isTextBox);
+                return Envelope.Ok(
+                    new { path = shapePath, type = isTextBox ? "textBox" : "shape", properties = shapeProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
             var docPath = DocPath.Parse(pathArg);
             var meta = MetaFor(file, Rev.OfBytes(bytes));
 
@@ -192,6 +213,13 @@ public sealed partial class WordHandler
                     var properties = GetWatermarkProperties(doc, docPath);
                     return Envelope.Ok(
                         new { path = "/watermark[1]", type = "watermark", properties },
+                        meta);
+                }
+
+                case "theme":
+                {
+                    return Envelope.Ok(
+                        new { path = "/theme", type = "theme", properties = GetThemeProperties(doc) },
                         meta);
                 }
 

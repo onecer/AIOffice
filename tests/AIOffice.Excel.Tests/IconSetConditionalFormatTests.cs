@@ -206,15 +206,16 @@ public sealed class IconSetConditionalFormatTests : ExcelTestBase
     public void IconSet_is_now_a_supported_conditionalFormat_kind()
     {
         // The pre-1.1 suite asserted iconSet was unsupported; confirm it is now
-        // accepted while a genuinely-unknown kind still names the expanded set.
+        // accepted while a genuinely-unknown kind still names the expanded set
+        // (which v1.3 grew with formula/topBottom/aboveBelowAverage).
         var file = CreateDataWorkbook();
 
-        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat", ("kind", "topBottom")));
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat", ("kind", "timePeriod")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Equal(
-            ["cellIs", "colorScale", "dataBar", "containsText", "iconSet"],
+            ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage"],
             envelope.Error.Candidates!);
         Assert.Contains("iconSet", envelope.Error.Suggestion, StringComparison.Ordinal);
     }

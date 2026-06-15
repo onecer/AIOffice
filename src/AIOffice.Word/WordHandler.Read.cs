@@ -270,6 +270,13 @@ public sealed partial class WordHandler
             .Select((_, i) => new { path = $"/bibliography[{i + 1}]" })
             .ToList();
 
+        // v1.3.0 additions: body drawing shapes, text boxes, legacy form fields
+        // and the document theme colors.
+        var shapes = BodyShapesStructure(doc, textBoxes: false);
+        var textBoxes = BodyShapesStructure(doc, textBoxes: true);
+        var formFields = FormFieldsView(doc);
+        var theme = doc.MainDocumentPart?.ThemePart is not null ? GetThemeProperties(doc) : null;
+
         return new
         {
             view = "structure",
@@ -285,6 +292,10 @@ public sealed partial class WordHandler
             embeds = embeds.Count > 0 ? embeds : null,
             sources = sources.Count > 0 ? sources : null,
             bibliographies = bibliographies.Count > 0 ? bibliographies : null,
+            shapes = shapes.Count > 0 ? shapes : null,
+            textBoxes = textBoxes.Count > 0 ? textBoxes : null,
+            formFields = formFields.Count > 0 ? formFields : null,
+            theme,
             sections = SectionsStructure(body),
         };
 

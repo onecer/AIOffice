@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using AIOffice.Core;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using S = DocumentFormat.OpenXml.Spreadsheet;
 
@@ -23,7 +24,7 @@ internal static partial class ExcelPivots
     public static readonly IReadOnlyList<string> Aggs = ["sum", "count", "average", "min", "max"];
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["sourceRange", "targetSheet", "targetAnchor", "rows", "columns", "values", "filters", "name"];
+        ["sourceRange", "targetSheet", "targetAnchor", "rows", "columns", "values", "filters", "name", "calculatedFields"];
 
     [GeneratedRegex("^([A-Z]{1,3})([0-9]{1,7}):([A-Z]{1,3})([0-9]{1,7})$")]
     private static partial Regex RangePattern();
@@ -36,9 +37,14 @@ internal static partial class ExcelPivots
     /// <summary>
     /// Validates and applies an <c>add pivot</c> op against the in-memory
     /// workbook (the whole batch aborts before any byte is written if this
-    /// throws). Returns the details entry for the envelope.
+    /// throws). Returns the details entry for the envelope. Any
+    /// <c>calculatedFields</c> are validated against the source headers and
+    /// queued on <paramref name="calculatedFields"/> for the post-save raw pass
+    /// (ClosedXML has no calculated-field model).
     /// </summary>
-    public static object Add(XLWorkbook workbook, IXLWorksheet sourceSheet, EditOp op, int opIndex)
+    public static object Add(
+        XLWorkbook workbook, IXLWorksheet sourceSheet, EditOp op, int opIndex,
+        List<CalculatedFieldSpec> calculatedFields)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -95,6 +101,10 @@ internal static partial class ExcelPivots
 
         GuardAxisOverlap(rows, columns, filters, opIndex);
         GuardDuplicateValues(values, opIndex);
+
+        // Calculated fields reference the source headers; validate names + formula
+        // refs here so the whole op aborts before any byte is written on a bad ref.
+        var calcFields = ParseCalculatedFields(props, headers, opIndex);
 
         var targetSheetName = RequiredString(props, "targetSheet", opIndex, "Pivot");
         if (!workbook.TryGetWorksheet(targetSheetName, out var targetSheet))
@@ -159,6 +169,13 @@ internal static partial class ExcelPivots
                 innerException: exception);
         }
 
+        // Queue the validated calculated fields for the post-save raw pass, keyed
+        // by the pivot's (target sheet, name) so the writer can find its parts.
+        foreach (var calc in calcFields)
+        {
+            calculatedFields.Add(calc with { TargetSheet = targetSheet.Name, PivotName = name });
+        }
+
         return new
         {
             op = "add",
@@ -175,6 +192,7 @@ internal static partial class ExcelPivots
             columns,
             values = values.Select(v => new { field = v.Field, agg = v.Agg }).ToList(),
             filters,
+            calculatedFields = calcFields.Select(c => new { name = c.Name, formula = c.Formula }).ToList(),
         };
     }
 
@@ -233,9 +251,17 @@ internal static partial class ExcelPivots
 
     /// <summary>One pivot as agents see it (get and read --view structure).</summary>
     public static object Describe(
-        IXLWorksheet sheet, IXLPivotTable pivot, IReadOnlyDictionary<(string Sheet, string Pivot), (string? SourceSheet, string? SourceRange)> sources)
+        IXLWorksheet sheet, IXLPivotTable pivot,
+        IReadOnlyDictionary<(string Sheet, string Pivot), (string? SourceSheet, string? SourceRange)> sources,
+        IReadOnlyDictionary<(string Sheet, string Pivot), List<(string Name, string Formula)>>? calculatedFields = null)
     {
         sources.TryGetValue((sheet.Name, pivot.Name), out var source);
+        var calc = calculatedFields is not null && calculatedFields.TryGetValue((sheet.Name, pivot.Name), out var c)
+            ? c
+            : [];
+        // The calculated fields surface in ClosedXML's Values too (they ARE data
+        // fields); list them only under calculatedFields, not in values.
+        var calcNames = new HashSet<string>(calc.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
         return new
         {
             path = ExcelPaths.PivotPath(sheet, pivot.Name),
@@ -247,8 +273,12 @@ internal static partial class ExcelPivots
             location = pivot.TargetCell.Address.ToString(),
             rows = pivot.RowLabels.Select(f => f.SourceName).ToList(),
             columns = pivot.ColumnLabels.Select(f => f.SourceName).ToList(),
-            values = pivot.Values.Select(v => new { field = v.SourceName, agg = AggName(v.SummaryFormula) }).ToList(),
+            values = pivot.Values
+                .Where(v => !calcNames.Contains(v.SourceName))
+                .Select(v => new { field = v.SourceName, agg = AggName(v.SummaryFormula) })
+                .ToList(),
             filters = pivot.ReportFilters.Select(f => f.SourceName).ToList(),
+            calculatedFields = calc.Select(f => new { name = f.Name, formula = f.Formula }).ToList(),
         };
     }
 
@@ -348,6 +378,188 @@ internal static partial class ExcelPivots
         }
     }
 
+    // ----- calculated-field raw authoring (v1.3) ----------------------------------
+
+    /// <summary>
+    /// Authors the queued pivot calculated fields on the saved file. For each
+    /// field: a <c>cacheField</c> (name + <c>formula</c> + <c>databaseField=0</c>)
+    /// is appended to its pivot's cache definition, a placeholder <c>&lt;m/&gt;</c>
+    /// value is appended to every cache record (so ClosedXML — which has no
+    /// calculated-field model — can still reopen the file), and a matching
+    /// <c>pivotField</c> / <c>dataField</c> are appended to the pivot table
+    /// definition so the field shows as a value column. Validator-clean; real
+    /// Excel recomputes the field from its formula on open.
+    /// </summary>
+    public static void ApplyCalculatedFields(string file, IReadOnlyList<CalculatedFieldSpec> fields)
+    {
+        if (fields.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.Workbook is null)
+        {
+            return;
+        }
+
+        // Group by the pivot the field belongs to; each pivot's cache is mutated
+        // once even when it gains several fields.
+        foreach (var byPivot in fields.GroupBy(f => (f.TargetSheet, f.PivotName)))
+        {
+            var (pivotPart, cachePart) = LocatePivotParts(workbookPart, byPivot.Key.TargetSheet, byPivot.Key.PivotName);
+            if (pivotPart?.PivotTableDefinition is not { } definition ||
+                cachePart?.PivotCacheDefinition is not { } cacheDefinition)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InternalError,
+                    $"Pivot '{byPivot.Key.PivotName}' on '{byPivot.Key.TargetSheet}' disappeared before its calculated fields were written.",
+                    "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+            }
+
+            var cacheFields = cacheDefinition.CacheFields
+                ?? cacheDefinition.AppendChild(new S.CacheFields());
+            var pivotFields = definition.PivotFields
+                ?? definition.InsertAfter(new S.PivotFields(), definition.Location);
+            var dataFields = definition.DataFields;
+
+            foreach (var field in byPivot)
+            {
+                // 1) cacheField (calculated): name + formula + databaseField=0.
+                cacheFields.AppendChild(new S.CacheField(new S.SharedItems())
+                {
+                    Name = field.Name,
+                    DatabaseField = false,
+                    Formula = field.Formula,
+                });
+                var newFieldIndex = cacheFields.Elements<S.CacheField>().Count() - 1; // 0-based
+
+                // 2) per-record placeholder value so record arity == field count
+                //    (keeps ClosedXML's records reader — and Excel — happy).
+                if (cachePart.PivotTableCacheRecordsPart?.PivotCacheRecords is { } records)
+                {
+                    foreach (var record in records.Elements<S.PivotCacheRecord>())
+                    {
+                        record.AppendChild(new S.MissingItem());
+                    }
+                }
+
+                // 3) pivotField marking it a data field (count must match cacheFields).
+                pivotFields!.AppendChild(new S.PivotField { DataField = true, ShowAll = false });
+
+                // 4) dataField exposing the calculated field as a value column.
+                dataFields ??= definition.InsertAfter(new S.DataFields(), LastBeforeDataFields(definition));
+                dataFields.AppendChild(new S.DataField
+                {
+                    Name = field.Name,
+                    Field = (uint)newFieldIndex,
+                    BaseField = 0,
+                    BaseItem = 0u,
+                });
+            }
+
+            cacheFields.Count = (uint)cacheFields.Elements<S.CacheField>().Count();
+            pivotFields!.Count = (uint)pivotFields.Elements<S.PivotField>().Count();
+            if (dataFields is not null)
+            {
+                dataFields.Count = (uint)dataFields.Elements<S.DataField>().Count();
+            }
+
+            if (cachePart.PivotTableCacheRecordsPart?.PivotCacheRecords is { } recs)
+            {
+                recs.Save();
+            }
+
+            cacheDefinition.Save();
+            definition.Save();
+        }
+    }
+
+    /// <summary>
+    /// The element a new <c>dataFields</c> goes after in a pivotTableDefinition:
+    /// rowItems / colItems / pageFields / formats sit before it, but pivotFields
+    /// is always present, so anchor on the last of the known predecessors.
+    /// </summary>
+    private static OpenXmlElement LastBeforeDataFields(S.PivotTableDefinition definition)
+    {
+        return (OpenXmlElement?)definition.GetFirstChild<S.ColumnItems>()
+            ?? (OpenXmlElement?)definition.GetFirstChild<S.RowItems>()
+            ?? (OpenXmlElement?)definition.GetFirstChild<S.ColumnFields>()
+            ?? (OpenXmlElement?)definition.GetFirstChild<S.RowFields>()
+            ?? (OpenXmlElement?)definition.GetFirstChild<S.PageFields>()
+            ?? definition.PivotFields!;
+    }
+
+    /// <summary>Locates a pivot's table + cache parts by (target sheet, name).</summary>
+    private static (PivotTablePart? Table, PivotTableCacheDefinitionPart? Cache) LocatePivotParts(
+        WorkbookPart workbookPart, string sheetName, string pivotName)
+    {
+        var sheet = workbookPart.Workbook?.Descendants<S.Sheet>()
+            .FirstOrDefault(s => string.Equals(s.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        if (sheet?.Id?.Value is not { } relationshipId ||
+            workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart)
+        {
+            return (null, null);
+        }
+
+        foreach (var pivotPart in worksheetPart.PivotTableParts)
+        {
+            if (string.Equals(pivotPart.PivotTableDefinition?.Name?.Value, pivotName, StringComparison.OrdinalIgnoreCase))
+            {
+                return (pivotPart, pivotPart.PivotTableCacheDefinitionPart);
+            }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>
+    /// The calculated fields of every pivot, keyed by (sheet, pivot name), read
+    /// raw from the cache definitions (a <c>cacheField</c> with
+    /// <c>databaseField=0</c> and a <c>formula</c>). Used by <see cref="Describe"/>.
+    /// </summary>
+    public static Dictionary<(string Sheet, string Pivot), List<(string Name, string Formula)>> ReadCalculatedFields(
+        SpreadsheetDocument document)
+    {
+        var result = new Dictionary<(string, string), List<(string, string)>>(SheetPivotComparer.Instance);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.Workbook is null)
+        {
+            return result;
+        }
+
+        foreach (var sheet in workbookPart.Workbook.Descendants<S.Sheet>())
+        {
+            if (sheet.Id?.Value is not { } relationshipId ||
+                workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart)
+            {
+                continue;
+            }
+
+            var sheetName = sheet.Name?.Value ?? string.Empty;
+            foreach (var pivotPart in worksheetPart.PivotTableParts)
+            {
+                if (pivotPart.PivotTableDefinition?.Name?.Value is not { } pivotName ||
+                    pivotPart.PivotTableCacheDefinitionPart?.PivotCacheDefinition?.CacheFields is not { } cacheFields)
+                {
+                    continue;
+                }
+
+                var calc = cacheFields.Elements<S.CacheField>()
+                    .Where(f => f.DatabaseField?.Value == false && f.Formula?.Value is not null)
+                    .Select(f => (f.Name?.Value ?? string.Empty, f.Formula!.Value!))
+                    .ToList();
+                if (calc.Count > 0)
+                {
+                    result[(sheetName, pivotName)] = calc;
+                }
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// Source ranges per (sheet, pivot name), read from the raw
     /// <c>pivotCacheDefinition</c> parts (ClosedXML keeps them internal).
@@ -432,6 +644,158 @@ internal static partial class ExcelPivots
         XLPivotSummary.Maximum => "max",
         _ => char.ToLowerInvariant(summary.ToString()[0]) + summary.ToString()[1..],
     };
+
+    // ----- calculated fields (v1.3) ----------------------------------------------
+
+    /// <summary>
+    /// A validated calculated field for the post-save raw pass. <c>Name</c> is
+    /// the new field's display name; <c>Formula</c> is its Excel expression over
+    /// source field names (no leading <c>=</c>). <c>TargetSheet</c> / <c>PivotName</c>
+    /// are filled in once the pivot is created so the writer can locate its parts.
+    /// </summary>
+    public sealed record CalculatedFieldSpec(string Name, string Formula)
+    {
+        public string TargetSheet { get; init; } = string.Empty;
+
+        public string PivotName { get; init; } = string.Empty;
+    }
+
+    [GeneratedRegex(@"'(?<q>(?:[^']|'')+)'|(?<bare>[A-Za-z_\\][A-Za-z0-9_.]*)")]
+    private static partial Regex FormulaTokenPattern();
+
+    /// <summary>
+    /// Parses and validates <c>calculatedFields</c>. Each entry is
+    /// <c>{name, formula}</c>; the name must be non-empty and not collide with a
+    /// source header or another calculated field; the formula's field references
+    /// (barewords and 'quoted names') must all be source headers. A bad reference
+    /// is <c>invalid_args</c> with the source field names as candidates.
+    /// </summary>
+    private static List<CalculatedFieldSpec> ParseCalculatedFields(
+        JsonObject props, List<string> headers, int opIndex)
+    {
+        if (!props.TryGetPropertyValue("calculatedFields", out var node) || node is null)
+        {
+            return [];
+        }
+
+        if (node is not JsonArray array)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'calculatedFields' must be an array like [{{\"name\":\"Margin\",\"formula\":\"=Revenue-Cost\"}}].",
+                "Each entry names the calculated field and gives an Excel formula over the source field names.");
+        }
+
+        // Function names that may appear in a formula but are not field refs.
+        var functionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "IF", "AND", "OR", "NOT", "SUM", "AVERAGE", "MIN", "MAX", "ABS", "ROUND",
+            "INT", "MOD", "SQRT", "POWER", "TRUE", "FALSE",
+        };
+
+        var result = new List<CalculatedFieldSpec>(array.Count);
+        var seenNames = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in array)
+        {
+            if (entry is not JsonObject obj)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: calculatedFields entries must be objects like {{\"name\":\"Margin\",\"formula\":\"=Revenue-Cost\"}}.",
+                    "Pass a name and an Excel formula over the source fields.");
+            }
+
+            var name = OptionalString(obj, "name");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: a calculatedFields entry is missing its 'name'.",
+                    "Pass {\"name\":\"Margin\",\"formula\":\"=Revenue-Cost\"}.");
+            }
+
+            if (!seenNames.Add(name))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: calculated field name '{name}' collides with a source field or another calculated field.",
+                    "Give each calculated field a unique name distinct from the source headers.");
+            }
+
+            var formula = OptionalString(obj, "formula");
+            if (string.IsNullOrWhiteSpace(formula))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: calculated field '{name}' is missing its 'formula'.",
+                    "Pass an Excel formula over the source field names, e.g. {\"formula\":\"=Revenue-Cost\"}.");
+            }
+
+            foreach (var (key, _) in obj)
+            {
+                if (key is not ("name" or "formula"))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{opIndex}]: unknown calculatedFields field '{key}'.",
+                        "calculatedFields entries accept {name, formula}.",
+                        candidates: ["name", "formula"]);
+                }
+            }
+
+            // Excel stores the formula WITHOUT the leading '='.
+            var expression = formula.StartsWith('=') ? formula[1..] : formula;
+            ValidateFormulaReferences(name, expression, headers, functionNames, opIndex);
+            result.Add(new CalculatedFieldSpec(name, expression));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Ensures every field reference in a calculated-field formula is a source
+    /// header. Identifiers immediately followed by '(' are treated as function
+    /// calls, not field refs. An unknown reference is invalid_args with the real
+    /// source field names as candidates.
+    /// </summary>
+    private static void ValidateFormulaReferences(
+        string fieldName, string expression, List<string> headers, HashSet<string> functionNames, int opIndex)
+    {
+        foreach (Match match in FormulaTokenPattern().Matches(expression))
+        {
+            string identifier;
+            if (match.Groups["q"].Success)
+            {
+                identifier = match.Groups["q"].Value.Replace("''", "'", StringComparison.Ordinal);
+            }
+            else
+            {
+                identifier = match.Groups["bare"].Value;
+
+                // A bareword directly followed by '(' is a function call; skip it.
+                var after = match.Index + match.Length;
+                if (after < expression.Length && expression[after] == '(')
+                {
+                    continue;
+                }
+
+                if (functionNames.Contains(identifier))
+                {
+                    continue;
+                }
+            }
+
+            if (!headers.Contains(identifier, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: calculated field '{fieldName}' references '{identifier}', which is not a source field.",
+                    "Calculated-field formulas reference the source header names; pick one of the candidates " +
+                    "(wrap names with spaces in single quotes, e.g. 'Unit Price').",
+                    candidates: [.. headers.OrderBy(h => ExcelPaths.Levenshtein(identifier, h))]);
+            }
+        }
+    }
 
     // ----- parsing helpers ------------------------------------------------------
 

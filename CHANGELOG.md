@@ -4,6 +4,59 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.3.0 — third post-1.0 feature release (additive)
+
+`surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0
+contract line (new prop keys, new prop-value enum members, new `add` type values, a
+new `/theme` addressing form, one new warning). Nothing was removed or renamed; the
+op **kinds** are unchanged and the 18 CLI verbs / 17 MCP tools stand. **1924 tests**
+across 7 projects (Core 124 · Word 556 · Excel 522 · Pptx 580 · MCP 87 · Preview 24 ·
+Render 31), green on macOS + Windows.
+
+### Added
+
+- **Chart polish** (xlsx **and** pptx): additive presentation props accepted both
+  when adding a `chart` and when `set`-ting on an existing chart path
+  (`/Sheet1/chart[i]`, `/slide[i]/chart[k]`) — `dataLabels` (`true` or
+  `{show, position?}`), `legend` (`none|right|left|top|bottom`), `axisTitles`
+  (`{category?, value?}`), `trendline` (`none|linear|exponential|movingAverage`),
+  `errorBars` (`none|stdErr|stdDev|percent`), `gridlines` (`{major?, minor?}`) and
+  `secondaryAxis` (named series → a secondary value axis). `get` reports them; every
+  combination is OpenXmlValidator-clean. See `aioffice help chart-polish`.
+- **Advanced conditional formatting** (xlsx): three new `conditionalFormat` kinds —
+  `formula` (an `=expression` rule), `topBottom` (top/bottom N or N%) and
+  `aboveBelowAverage` (above/below the range mean, optional `stdDev`). See
+  `aioffice help conditional-format`.
+- **Pivot calculated fields** (xlsx): a new `calculatedFields` prop on `add
+  type:"pivot"` — `[{name, formula}]` formula fields computed from source-column
+  headers (e.g. `Margin = Revenue - Cost`), validated at add time and surfaced by
+  `get`.
+- **Body shapes & text boxes** (docx): new `add` types `shape` (a floating DrawingML
+  shape — `rect|roundRect|ellipse|line|arrow`, at `/body/shape[i]`) and `textBox`
+  (at `/body/textBox[i]`), each with fill/line/inline-text, edited by `get`/`set`/
+  `remove`.
+- **Legacy form fields** (docx): a new `add` type `formField` — `text|checkbox|
+  dropdown` fields addressed by `/formField[@name=…]`, valued by `set`, and listed by
+  `read --view fields`. See `aioffice help form-fields`.
+- **Theme editing** (docx): `set /theme` edits the document theme color scheme
+  (`dk1/lt1/dk2/lt2`, `accent1`…`accent6`, `hlink`, `folHlink`) and fonts
+  (`majorFont`, `minorFont`); `get /theme` reports them. See `aioffice help themes`.
+- **3D models** (pptx): a new `add` type `model3d` embeds a `.glb`/`.gltf` as a real
+  3DModel media part behind a poster picture fallback (PowerPoint 2019+ renders it);
+  `src`/`poster` are sandbox-resolved and the add carries a `model3d_as_media`
+  warning. Addressed by `/slide[i]/model3d[@id=N]`. See `aioffice help 3d-models`.
+- **Motion-path animations** (pptx): a new `motionPath` animation effect with `path`
+  `line|arc|circle|custom` (custom takes a normalized `points` list); `read --view
+  structure` lists it. See `aioffice help animations`.
+- **New help topics**: `chart-polish`, `conditional-format`, `themes`, `3d-models`,
+  `form-fields`, `animations` (CLI + `office_help`).
+
+### Notes
+
+- New warning: `model3d_as_media`. Contract additions catalogued in
+  [CONTRACT.md](CONTRACT.md) §7c. No existing behavior, prop, type, view, op, verb or
+  tool changed.
+
 ## 1.2.0 — second post-1.0 feature release (additive)
 
 `surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0

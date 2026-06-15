@@ -18,6 +18,8 @@ public sealed class NativeVerbs
         "equations", "embeds", "rtl", "sections", "audit", "diff", "convert",
         // v1.2 additive topics.
         "smartart", "connectors", "number-formats", "structural-fields",
+        // v1.3 additive topics.
+        "chart-polish", "conditional-format", "themes", "3d-models", "form-fields", "animations",
     ];
 
     private readonly Workspace _workspace;

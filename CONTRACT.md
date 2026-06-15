@@ -77,6 +77,7 @@ Every command prints **exactly one** JSON object to stdout:
   | `figures_cached` | (1.2) a docx table of figures' entries came from cached captions; Word repaginates page numbers on open/refresh |
   | `index_cached` | (1.2) a docx index's entries were alphabetized from XE fields with cached page numbers; Word recomputes them on open/refresh |
   | `caption_numbers_cached` | caption/cross-ref numbers came from cached SEQ values |
+  | `model3d_as_media` | (1.3) a pptx 3D model was embedded as a 3D part behind a poster picture fallback; PowerPoint 2019+ renders the model |
   | `csv_empty` | a csv import/export produced no rows |
   | `md_block_skipped` · `md_html_skipped` · `md_image_skipped` · `md_link_skipped` | a markdown source had content with no neutral equivalent |
   | `scope_defaulted` | a render scope was defaulted (e.g. a deck rendered slide 1) |
@@ -129,14 +130,17 @@ Paths are **1-based**; the `@id` / `@name` forms are stable across insertions an
 what `query` / `get` always return. `office_help {topic:"addressing"}` is the full grammar.
 
 **docx** — `/body`, `/body/p[3]`, `/body/p[3]/run[2]`, `/body/p[3]/omath[1]` (equation),
-`/body/table[1]/tr[2]/tc[3]`, `/section[1]`, `/embed[1]` (embedded object), `/properties`.
+`/body/table[1]/tr[2]/tc[3]`, `/body/shape[1]` / `/body/textBox[1]` (1.3 body shapes),
+`/formField[@name=status]` (1.3 form field), `/section[1]`, `/embed[1]` (embedded object),
+`/theme` (1.3 theme color/font scheme), `/properties`.
 
 **xlsx** — `/Sheet1`, `/Sheet1/B2`, `/Sheet1/A1:C10`, `/Sheet1/table[@name=Sales]`,
 `/Sheet1/image[1]`, `/Sheet1/embed[1]` (embedded object), `/Pivot/pivot[1]`, `/properties`.
 
 **pptx** — `/` (presentation: slide size + sections), `/slide[2]`, `/slide[2]/notes`,
 `/slide[2]/shape[@id=7]`, `/slide[2]/shape[@id=7]/p[1]`, `/slide[2]/shape[@id=7]/omath[1]`
-(equation), `/slide[2]/chart[1]`, `/slide[2]/table[1]/tr[2]/tc[3]`, `/slide[2]/embed[@id=7]`
+(equation), `/slide[2]/chart[1]`, `/slide[2]/model3d[@id=7]` (1.3 3D model),
+`/slide[2]/table[1]/tr[2]/tc[3]`, `/slide[2]/embed[@id=7]`
 (embedded object), `/master[1]/layout[2]`, `/section[1]`, `/properties`.
 
 ## 5. The op-type vocabulary
@@ -158,6 +162,12 @@ not math objects). Use `office_help {topic:"<fmt>/<element>"}` for exact prop na
 `citation`, `bibliography` (**docx** — bibliography sources, CITATION fields, and a
 rendered bibliography; see `office_help {topic:"docx/citation"}`) and `media`
 (**pptx** — embedded audio/video; see `office_help {topic:"pptx/media"}`).
+
+**1.2 added** `add` types: `smartart` / `connector` / `group` / `ungroup` (**pptx**),
+`tableOfFigures` / `indexEntry` / `index` / `mergeField` (**docx**), `formControl`
+(**xlsx**). **1.3 added** `add` types: `shape` / `textBox` / `formField` (**docx**)
+and `model3d` (**pptx**). All are `type` values, **not** new `op` kinds — §5's op
+list is unchanged. Full additive lists: §§7a–7c.
 
 ## 6. The view vocabulary
 
@@ -259,6 +269,53 @@ tools are unchanged.
   `read --view structure` now lists `tablesOfFigures`, `indexes` and `mergeFields`;
   `read --view fields` lists merge fields alongside content controls.
 - **New warnings** (§1): `figures_cached`, `index_cached`.
+
+## 7c. 1.3.0 additions (additive within the frozen 1.0 line)
+
+Package **1.3.0** stays on **`surfaceVersion 1.0`** — every change below is purely
+**additive** (new prop keys, new prop-value enum members, new `add` type values, a
+new `set` addressing form, one new warning), so nothing in §§1–7 was removed or
+renamed. The op **kinds** in §5 are unchanged. The 18 CLI verbs / 17 MCP tools are
+unchanged.
+
+- **New chart-polish props** (xlsx **and** pptx, accepted both when adding a
+  `chart` and when `set`-ting on an existing chart path — `/Sheet1/chart[i]` or
+  `/slide[i]/chart[k]`): `dataLabels` (`true` or `{show, position?}`), `legend`
+  (`none|right|left|top|bottom`), `axisTitles` (`{category?, value?}`), `trendline`
+  (`none|linear|exponential|movingAverage`), `errorBars`
+  (`none|stdErr|stdDev|percent`), `gridlines` (`{major?, minor?}`), `secondaryAxis`
+  (a list of series names to move to a secondary value axis). `get` on the chart
+  reports them. An unsupported sub-value returns `unsupported_feature` listing the
+  supported set. See `office_help {topic:"chart-polish"}`.
+- **New `conditionalFormat` kinds** (xlsx, prop-value enum): `formula` (an
+  `=expression` rule relative to the range's top-left cell), `topBottom` (highest /
+  lowest N or N%), `aboveBelowAverage` (above / below the range mean, with an
+  optional `stdDev`) — added to the existing
+  `cellIs` · `colorScale` · `dataBar` · `containsText` · `iconSet`. See
+  `office_help {topic:"conditional-format"}`.
+- **New pivot prop** (xlsx, `add type:"pivot"`): `calculatedFields` — a list of
+  `{name, formula}` formula fields computed from source-column header names (e.g.
+  `{name:"Margin", formula:"=Revenue-Cost"}`); validated at add time and surfaced
+  under `get`'s `calculatedFields`.
+- **New docx `add` types** (§5): `shape` (a floating DrawingML body shape with a
+  preset geometry — `rect|roundRect|ellipse|line|arrow` — at `/body/shape[i]`),
+  `textBox` (a body text box at `/body/textBox[i]`) and `formField` (a legacy
+  `text|checkbox|dropdown` form field at `/formField[@name=…]`). See
+  `office_help {topic:"form-fields"}` and the docx properties help.
+- **New pptx `add` type** (§5): `model3d` (a `.glb`/`.gltf` 3D model embedded as a
+  real 3DModel media part behind a poster picture fallback, at
+  `/slide[i]/model3d[@id=N]`; `src`/`poster` are sandbox-resolved). See
+  `office_help {topic:"3d-models"}`.
+- **New pptx animation effect** (prop-value enum on `add type:"animation"`):
+  `motionPath` (with `path` = `line|arc|circle|custom` and, for `custom`, a
+  normalized `points` list) — added to the existing entrance/emphasis/exit
+  effects. See `office_help {topic:"animations"}`.
+- **New addressing form** (§4, additive): `/theme` on docx — `set /theme` edits the
+  theme color scheme (`dk1/lt1/dk2/lt2`, `accent1`…`accent6`, `hlink`, `folHlink`)
+  and font scheme (`majorFont`, `minorFont`); `get /theme` reports them. See
+  `office_help {topic:"themes"}`.
+- **New warning** (§1): `model3d_as_media` (a pptx 3D model was embedded as a 3D
+  part behind a poster picture fallback; PowerPoint 2019+ renders the model).
 
 ## 8. What is experimental (NOT frozen)
 

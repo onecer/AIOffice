@@ -54,6 +54,7 @@ internal sealed partial record PptxAddress
         "/slide[2]/smartart[1], /slide[2]/group[@id=7], /slide[2]/group[@id=7]/shape[@id=9], " +
         "/slide[2]/animation[1], /slide[2]/comment[@id=3], " +
         "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/media[1], /slide[2]/media[@id=7], " +
+        "/slide[2]/model3d[1], /slide[2]/model3d[@id=7], " +
         "/slide[2]/shape[@id=7]/omath[1], " +
         "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
         "/section[1] (a slide section), /properties (document core + custom metadata) " +
@@ -110,6 +111,12 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^media\[@id=([0-9]+)\]$")]
     private static partial Regex MediaIdSegment();
+
+    [GeneratedRegex(@"^model3d\[([0-9]+)\]$")]
+    private static partial Regex Model3DOrdinalSegment();
+
+    [GeneratedRegex(@"^model3d\[@id=([0-9]+)\]$")]
+    private static partial Regex Model3DIdSegment();
 
     [GeneratedRegex(@"^shape\[@id=([0-9]+)\]$")]
     private static partial Regex ShapeIdSegment();
@@ -181,6 +188,12 @@ internal sealed partial record PptxAddress
     /// <summary>Stable media id on the slide (/slide[i]/media[@id=N], the host picture's shape id); null otherwise.</summary>
     public uint? MediaId { get; init; }
 
+    /// <summary>1-based 3D-model index on the slide (/slide[i]/model3d[k]); null otherwise.</summary>
+    public int? Model3DOrdinal { get; init; }
+
+    /// <summary>Stable 3D-model id on the slide (/slide[i]/model3d[@id=N], the host picture's shape id); null otherwise.</summary>
+    public uint? Model3DId { get; init; }
+
     public int? ParagraphIndex { get; init; }
 
     public int? RunIndex { get; init; }
@@ -219,6 +232,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses a media object (/slide[i]/media[k] or /slide[i]/media[@id=N]).</summary>
     public bool IsMedia => MediaOrdinal.HasValue || MediaId.HasValue;
+
+    /// <summary>True when the path addresses a 3D model (/slide[i]/model3d[k] or /slide[i]/model3d[@id=N]).</summary>
+    public bool IsModel3D => Model3DOrdinal.HasValue || Model3DId.HasValue;
 
     /// <summary>True when the path addresses an equation inside a shape (/slide[i]/shape[@id=N]/omath[k]).</summary>
     public bool IsOMath => OMathIndex.HasValue;
@@ -426,9 +442,29 @@ internal sealed partial record PptxAddress
             return address with { MediaId = uint.Parse(mediaIdMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
         }
 
+        if (Model3DOrdinalSegment().Match(segments[1]) is { Success: true } model3DOrdinalMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow model3d[k].");
+            }
+
+            return address with { Model3DOrdinal = ParseIndex(model3DOrdinalMatch.Groups[1].Value, raw) };
+        }
+
+        if (Model3DIdSegment().Match(segments[1]) is { Success: true } model3DIdMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow model3d[@id=N].");
+            }
+
+            return address with { Model3DId = uint.Parse(model3DIdMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
+        }
+
         var shaped = WithShapeSegment(address, segments[1], raw,
             $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
-            $"embed[k], embed[@id=N], media[k], media[@id=N], group[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"embed[k], embed[@id=N], media[k], media[@id=N], model3d[k], model3d[@id=N], group[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -580,6 +616,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical media path (/slide[i]/media[@id=N]) of the addressed media, by its host picture id.</summary>
     public string CanonicalMediaPath(uint id) => Units.Inv($"/slide[{SlideIndex}]/media[@id={id}]");
+
+    /// <summary>The canonical 3D-model path (/slide[i]/model3d[@id=N]) of the addressed model, by its host picture id.</summary>
+    public string CanonicalModel3DPath(uint id) => Units.Inv($"/slide[{SlideIndex}]/model3d[@id={id}]");
 
     /// <summary>The canonical equation path (/slide[i]/shape[@id=N]/omath[k]) for the host shape id and 1-based index.</summary>
     public string CanonicalOMathPath(uint shapeId, int index) =>

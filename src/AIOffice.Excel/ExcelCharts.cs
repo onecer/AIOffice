@@ -43,7 +43,9 @@ internal sealed record ChartAddSpec(
     int WidthCells,
     int HeightCells,
     // Numeric X values (scatter and bubble): the first dataRange column parsed as numbers.
-    IReadOnlyList<double?>? XValues = null);
+    IReadOnlyList<double?>? XValues = null,
+    // v1.3 chart-polish settings supplied at create time (null when none).
+    ExcelChartPolish.PolishSettings? Polish = null);
 
 /// <summary>A validated chart removal (1-based per-sheet index at apply time).</summary>
 internal sealed record ChartRemoveSpec(string SheetName, int Index);
@@ -154,7 +156,11 @@ internal static partial class ExcelCharts
     private static readonly IReadOnlyList<string> ValueAxisKinds = ["scatter", "bubble"];
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["kind", "dataRange", "anchor", "title", "widthCells", "heightCells"];
+    [
+        "kind", "dataRange", "anchor", "title", "widthCells", "heightCells",
+        // v1.3 chart-polish props, accepted at create time too.
+        .. ExcelChartPolish.Props,
+    ];
 
     private const string ChartNs = "http://schemas.openxmlformats.org/drawingml/2006/chart";
     private const string MainNs = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -339,6 +345,35 @@ internal static partial class ExcelCharts
             ? CaptureBubbleSeries(sheet, firstColumn, lastColumn, firstRow, dataFirstRow, lastRow, hasHeader, opIndex)
             : CaptureCategorySeries(sheet, firstColumn, lastColumn, firstRow, dataFirstRow, lastRow, hasHeader, opIndex);
 
+        var polish = ExcelChartPolish.HasPolishProps(props) ? ExcelChartPolish.Parse(props, opIndex) : null;
+        if (polish?.SecondaryAxisSeries is { Count: > 0 } secondaryNames)
+        {
+            // Validate the requested secondary-axis series names against the
+            // series we just captured; an unknown name is invalid_args with the
+            // real names as candidates.
+            var known = series.Select(s => s.Name).ToList();
+            foreach (var name in secondaryNames)
+            {
+                if (!known.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{opIndex}]: secondaryAxis names series '{name}', which this chart does not have.",
+                        "secondaryAxis lists series names from the chart; pick one of the candidates.",
+                        candidates: [.. known]);
+                }
+            }
+
+            // A secondary axis needs at least one series left on the primary axis.
+            if (secondaryNames.Count >= series.Count)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: secondaryAxis would move every series off the primary axis.",
+                    "Leave at least one series on the primary value axis; move only the series that need a second scale.");
+            }
+        }
+
         return new ChartAddSpec(
             SheetName: sheet.Name,
             Kind: kind,
@@ -354,7 +389,8 @@ internal static partial class ExcelCharts
             AnchorRow: anchorRow,
             WidthCells: widthCells,
             HeightCells: heightCells,
-            XValues: xValues);
+            XValues: xValues,
+            Polish: polish);
     }
 
     /// <summary>One series per value column — the shared layout for every category kind and scatter.</summary>
@@ -860,6 +896,14 @@ internal static partial class ExcelCharts
         chart.Append(new C.AutoTitleDeleted { Val = spec.Title is null });
         chart.Append(plotArea);
         chart.Append(new C.PlotVisibleOnly { Val = true });
+
+        // v1.3 chart polish: data labels, legend, axis titles, trendlines, error
+        // bars, gridlines, secondary axis — applied to the freshly built chart DOM
+        // by the same code that polishes an existing chart on a later set.
+        if (spec.Polish is { } polish)
+        {
+            ExcelChartPolish.Apply(chart, polish);
+        }
 
         var chartSpace = new C.ChartSpace();
         chartSpace.AddNamespaceDeclaration("c", ChartNs);
