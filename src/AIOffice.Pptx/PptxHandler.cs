@@ -148,6 +148,11 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
             return PptxAnimations.Detail(presentation, address);
         }
 
+        if (address.IsZoom)
+        {
+            return PptxZoom.Detail(presentation, address);
+        }
+
         if (address.IsComment)
         {
             return PptxComments.Detail(presentation, address);
@@ -542,7 +547,7 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
         }
 
         if (address.HasShape || address.IsNotes || address.IsChart || address.IsTable || address.IsSmartArt ||
-            address.IsAnimation || address.IsComment)
+            address.IsAnimation || address.IsZoom || address.IsComment)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -726,6 +731,7 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
             Slides = slides.Select(s =>
             {
                 var animations = PptxAnimations.List(s.Part);
+                var zooms = PptxZoom.List(s.Part);
                 var smartArts = PptxSmartArt.List(s.Part);
                 var embeds = PptxEmbeds.SlideEmbeds(s.Part, s.Index);
                 var media = PptxMedia.SlideMedia(s.Part, s.Index);
@@ -757,6 +763,9 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
                     Animations = animations.Count == 0
                         ? null
                         : animations.Select(a => PptxAnimations.Project(a, s.Index, s.Part)).ToList(),
+                    Zooms = zooms.Count == 0
+                        ? null
+                        : zooms.Select(z => PptxZoom.Project(z, s.Index)).ToList(),
                     SmartArt = smartArts.Count == 0
                         ? null
                         : smartArts.Select(d => PptxSmartArt.StructureRow(s.Part, s.Index, d.Index, d.View, d.Part)).ToList(),

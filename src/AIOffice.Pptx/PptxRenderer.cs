@@ -118,6 +118,14 @@ internal static class PptxRenderer
             return;
         }
 
+        // A zoom navigation object (slide/section/summary): a thumbnail placeholder, never a slide render.
+        if (PptxZoom.ZoomViewOf(slidePart, shape.Element) is { } zoom)
+        {
+            PptxZoom.AppendPlaceholder(svg, zoom, x, y, w, h);
+            svg.Append("  </g>\n");
+            return;
+        }
+
         if (PptxSmartArt.DataPartOf(slidePart, shape.Element) is not null)
         {
             // SmartArt is read-only: a labeled placeholder box, never a fake redraw.

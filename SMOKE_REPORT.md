@@ -2165,3 +2165,97 @@ help index lists chart-polish / conditional-format / themes / 3d-models /
 - Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
 - Binary size 38,479,545 bytes (~36.7 MB).
 - No git commit/push, no tags (left for the human release engineer).
+
+# AIOffice 1.4.0 — Integration Smoke Report
+
+Date: 2026-06-15 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+Fourth post-1.0 feature release — purely additive, `surfaceVersion` stays `1.0`.
+Closes the long-standing dynamic-array gap (FILTER/UNIQUE/SORT now evaluate + spill).
+
+## Build & tests — PASS (2016/2016 across 7 projects)
+
+```
+$ dotnet build AIOffice.sln -warnaserror           → 0 warnings, 0 errors
+$ dotnet test AIOffice.sln --no-build              → all green
+  Core 124 · Word 580 · Excel 545 · Pptx 625 · MCP 87 · Preview 24 · Render 31
+SchemaConsistencyTests / TokenBudgetTests: PASS (18 verbs / 17 MCP tools; surface ~3150 ≤ 3500 tokens)
+```
+
+New dedicated feature tests landed WITH the features (engine workers): DynamicArrayTests,
+FinancialFunctionTests, DataTableTests (Excel), MailMergeTests, IfFieldTests,
+PageBorderTests (Word), ZoomTests, AnimationTriggerTests, TableStyleTests (Pptx).
+
+## Surface wiring (additive within frozen 1.0)
+
+- `office_edit` `type` enum (CLI + MCP) gains `dataTable` (xlsx), `ifField` (docx),
+  `zoom` (pptx); a dynamic-array formula on `set value` spills automatically.
+- `office_template` (the verb is unchanged): `--data` accepts a record ARRAY (mail
+  merge); the `template` verb gains `--output PATTERN`; `office_template` gains an
+  optional `output` param — **still 17 tools / 18 verbs** (SchemaConsistencyTests green).
+- New addressing forms: `/Sheet1/dataTable[i]`, `/slide[i]/zoom[k]`.
+- New props surfaced: `pageBorder` (docx section), `triggerOn` (pptx animation),
+  pptx table `style`/`firstRow`/`lastRow`/`bandRow`/`firstCol`.
+- New error code `spill_blocked`. New `office_help` topics: `formulas`, `data-tables`,
+  `mail-merge`, `page-borders`, `zoom`, `table-styles`; `animations` extended with `triggerOn`.
+- `doctor` reports version 1.4.0 / surfaceVersion 1.0 / verbs 18 / tools 17.
+
+## Real end-to-end smoke (`dotnet run`, fresh temp workspace) — PASS
+
+xlsx:
+- `=UNIQUE(A1:A6)` on a column with duplicates → anchor D1 spills 4 distinct values
+  over `spillRange D1:D4`, **no `formula_not_evaluated` warning**.
+- `=SORT(A1:A6)` spills sorted; `=FILTER(B1:B6,C1:C6)` (boolean flag column) spills
+  50/80/90; `=SEQUENCE(2,3)` spills 1..6 over J1:L2.
+- `=IRR(N1:N5)` → `get` shows a cached numeric value (0.1803), no warning.
+- what-if `dataTable` (colInput) → validate 0.
+- spill into an occupied range (`=UNIQUE` over a non-empty P1:P4) → `spill_blocked`
+  with a suggestion naming the range to clear.
+
+docx:
+- template with «Name» MERGEFIELD + `{{city}}` + an `ifField` + a `pageBorder` →
+  `--data` of 3 records + `--output "letters/letter-{n}.docx"` → 3 docs, each merged
+  correctly (Ada/London, Grace/New York, Linus/Helsinki); the IF field resolves per
+  record (US → "Domestic", FI → "International"); all 3 validate clean.
+- `--output "../escape-{n}.docx"` → `sandbox_denied`.
+- single-object `--data` still returns `{replaced, written}` (no `records` key) and
+  fills one document unchanged.
+
+pptx:
+- slide zoom on slide 2 → slide 3 → validate 0; `get /slide[2]/zoom[1]` reports
+  `{kind:"slide", target:"slide 3"}`.
+- animation on shape A (id 2) `triggerOn:"@3"` → structure / `get` report
+  `triggerOn: /slide[1]/shape[@id=3]`, `triggerShapeId: 3` → validate 0.
+- table with `style:"medium2"` + `bandRow` → validate 0; `get` reports the style + flags.
+
+## Published-binary smoke loop (dist/osx-arm64/aioffice) — PASS
+
+```
+$ aioffice doctor        → version 1.4.0 · surfaceVersion 1.0 · verbs 18 · tools 17
+$ =UNIQUE(A1:A3)         → spills x,y over spillRange C1:C2 (no warning)
+$ template … --output    → 2 records → m-1.docx "Hi Ada", m-2.docx "Hi Grace"
+$ add type:zoom (slide)  → /slide[1]/zoom[1] → validate 0
+```
+
+## Manual-check fixtures (1.4) — added
+
+- `fixtures/manual-check/workbook-1.4-dynamic-arrays.xlsx` — a `=UNIQUE` spill and a
+  `=SORT` spill over a region column, plus an `=IRR` cashflow cell carrying a cached
+  value (validator-clean).
+- `fixtures/manual-check/doc-1.4-mailmerge.docx` — a mail-merge template: a «Name»
+  MERGEFIELD, a `{{city}}` marker, an «IF Country = "US"» field and a page border
+  (validator-clean). Drive it with `template --data '[…]' --output "letter-{n}.docx"`.
+- `fixtures/manual-check/deck-1.4-zoom.pptx` — a slide zoom (slide 1 → slide 2) and a
+  `medium2` banded-row table (validator-clean).
+
+## Invariants — held (1.4.0)
+- Published binary == `dotnet run` envelopes; **18 verbs / 17 MCP tools**,
+  **surfaceVersion `1.0`** (unchanged), package version **1.4.0**.
+- All 1.4 changes are additive: nothing in CONTRACT §§1–7 removed or renamed; §7d
+  records the additions; op kinds unchanged; `spill_blocked` added to the frozen error
+  list. The dynamic-array / financial evaluation is backward-compatible — cells that
+  used to carry `formula_not_evaluated` now carry a cached value; the warning code is
+  unchanged and still fires for other unevaluated formulas.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- MCP tool surface ~3150 tokens, within the 3500 ceiling (TokenBudgetTests green).
+- Binary size 38,528,457 bytes (~36.7 MB).
+- No git commit/push, no tags (left for the human release engineer).

@@ -28,6 +28,8 @@ public sealed partial class ExcelHandler
         "dataValidation", "sparkline", "comment", "reply", "group", "slicer", "embed",
         // v1.2 (additive): interactive form controls.
         "formControl",
+        // v1.4 (additive): what-if data tables.
+        "dataTable",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -134,6 +136,26 @@ public sealed partial class ExcelHandler
                         warnings.AddRange(formulaWarnings);
                     }
                 }
+            }
+
+            // (1.4) Dynamic-array spills and what-if data tables are authored raw
+            // on the saved bytes: ClosedXML cannot model spill metadata or the
+            // {=TABLE(...)} construct, and the cells were left untouched above so
+            // the cached values land cleanly. Runs before charts (a chart can
+            // reference a spilled range).
+            if (post.Spills.Count > 0)
+            {
+                ExcelDynamicArrays.ApplyAfterSave(file, post.Spills);
+            }
+
+            if (post.DataTables.Count > 0)
+            {
+                ExcelDataTables.ApplyAfterSave(file, post.DataTables);
+            }
+
+            if (post.RemovedDataTables.Count > 0)
+            {
+                ExcelDataTables.RemoveAfterSave(file, post.RemovedDataTables);
             }
 
             if (!charts.IsEmpty)
@@ -391,6 +413,49 @@ public sealed partial class ExcelHandler
         /// per-record placeholder values are authored directly on the saved bytes.
         /// </summary>
         public List<ExcelPivots.CalculatedFieldSpec> CalculatedFields { get; } = [];
+
+        /// <summary>
+        /// (1.4) Dynamic-array spills queued for the post-save raw pass: the anchor
+        /// CSE-array formula plus the computed cached values across the spill
+        /// rectangle. ClosedXML 0.105 has no spill model, so these are authored
+        /// directly on the saved bytes; the ClosedXML model leaves the spill cells
+        /// untouched (the anchor formula is never written through ClosedXML — it
+        /// would evaluate to #NAME?).
+        /// </summary>
+        public List<ExcelDynamicArrays.Pending> Spills { get; } = [];
+
+        /// <summary>
+        /// (1.4) What-if data tables queued for the post-save raw pass: the
+        /// <c>{=TABLE(rowInput,colInput)}</c> array construct plus the computed
+        /// cached results across the body. ClosedXML 0.105 has no data-table model.
+        /// </summary>
+        public List<ExcelDataTables.Pending> DataTables { get; } = [];
+
+        /// <summary>(1.4) Data tables queued for raw removal post-save (sheet name + 1-based index).</summary>
+        public List<(string Sheet, int Index)> RemovedDataTables { get; } = [];
+
+        /// <summary>True when any write-time formula evaluation must be authored after the save.</summary>
+        public bool HasEvaluatedFormulas => Spills.Count > 0 || DataTables.Count > 0;
+
+        /// <summary>
+        /// (1.4) Cells already claimed by a queued spill/data-table in this batch,
+        /// so a later op (and the next spill's clearance check) sees them as taken
+        /// even though the ClosedXML model is empty there.
+        /// </summary>
+        public bool Claims(string sheetName, int row, int column)
+        {
+            foreach (var s in Spills)
+            {
+                if (string.Equals(s.Sheet, sheetName, StringComparison.OrdinalIgnoreCase) &&
+                    row >= s.FirstRow && row < s.FirstRow + s.Grid.Count &&
+                    column >= s.FirstColumn && column < s.FirstColumn + (s.Grid.Count > 0 ? s.Grid[0].Count : 0))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>The batch's comment model, loaded lazily from the on-disk file.</summary>
@@ -680,7 +745,7 @@ public sealed partial class ExcelHandler
 
         if (props.TryGetPropertyValue("value", out var valueNode))
         {
-            SetValue(target, valueNode, ValueTypeOf(props), applied);
+            SetValue(target, valueNode, ValueTypeOf(props), applied, index, post);
         }
 
         if (props.TryGetPropertyValue("values", out var valuesNode))
@@ -1028,9 +1093,26 @@ public sealed partial class ExcelHandler
             ? node.GetValue<string>()
             : null;
 
-    private static void SetValue(ExcelTarget target, JsonNode? valueNode, string? valueType, List<string> applied)
+    private static void SetValue(
+        ExcelTarget target, JsonNode? valueNode, string? valueType, List<string> applied, int index, PostSaveWork post)
     {
         var parsed = ExcelValues.Parse(valueNode, valueType);
+
+        // (1.4) A dynamic-array function on a single cell is EVALUATED and spilled
+        // at write time (FILTER/UNIQUE/SORT/…): queue the computed result for the
+        // post-save raw pass and leave the ClosedXML model untouched (writing the
+        // formula through ClosedXML would only evaluate to #NAME?).
+        if (parsed.IsFormula && target.Kind == ExcelTargetKind.Cell &&
+            ExcelDynamicArrays.IsDynamicArrayFormula(parsed.Formula!))
+        {
+            var spill = ExcelDynamicArrays.Evaluate(
+                target.Sheet, target.Cell!, parsed.Formula!, index,
+                (r, c) => post.Claims(target.Sheet.Name, r, c));
+            post.Spills.Add(spill);
+            applied.Add("spill");
+            return;
+        }
+
         IEnumerable<IXLCell> cells = target.Kind switch
         {
             ExcelTargetKind.Cell => [target.Cell!],
@@ -1459,6 +1541,9 @@ public sealed partial class ExcelHandler
             case "embed":
                 AddEmbed(ctx, workbook, op, index, details, embeds);
                 break;
+            case "dataTable":
+                details.Add(ExcelDataTables.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index, post.DataTables));
+                break;
             case "equation":
                 // xlsx has no math-object model: Excel carries cell formulas, not
                 // OMML equations (docx and pptx do). This is N/A by design, not a gap.
@@ -1842,6 +1927,32 @@ public sealed partial class ExcelHandler
                 details.Add(new { op = "remove", path = canonical, removed = "formControl" });
                 break;
 
+            case ExcelTargetKind.DataTable:
+            {
+                // The data table lives entirely in raw bytes (the t="dataTable"
+                // anchor + cached body); validate the index against the on-disk
+                // file now and queue the raw clearance for the post-save pass.
+                var tablesOnSheet = ExcelDataTables.ReadOnSheet(ctx.File!, target.Sheet.Name);
+                var wanted = target.DataTableIndex!.Value;
+                if (tablesOnSheet.All(t => t.Index != wanted))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidPath,
+                        $"ops[{index}]: no dataTable[{wanted}] on sheet '{target.Sheet.Name}' " +
+                        $"({tablesOnSheet.Count} data table(s) exist).",
+                        tablesOnSheet.Count > 0
+                            ? "Data-table indices are 1-based per sheet; pick one of the candidates."
+                            : "This sheet has no data tables to remove.",
+                        candidates: tablesOnSheet.Count > 0
+                            ? [.. tablesOnSheet.Select(t => ExcelPaths.DataTablePath(target.Sheet, t.Index))]
+                            : [ExcelPaths.SheetPath(target.Sheet)]);
+                }
+
+                post.RemovedDataTables.Add((target.Sheet.Name, wanted));
+                details.Add(new { op = "remove", path = canonical, removed = "dataTable" });
+                break;
+            }
+
             case ExcelTargetKind.Cell:
                 target.Cell!.Clear(XLClearOptions.Contents);
                 details.Add(new { op = "remove", path = canonical, removed = "contents", note = "styles kept" });
@@ -1867,6 +1978,12 @@ public sealed partial class ExcelHandler
     private static List<Warning>? SaveWithCachedValues(XLWorkbook workbook, string file)
     {
         var unevaluated = new List<(string Sheet, string Address)>();
+
+        // (1.4) Financial iterative cells (RATE/IRR/XIRR) ClosedXML cannot evaluate
+        // are computed HERE and written back raw after the save, so they carry a
+        // real cached value instead of riding the formula_not_evaluated warning.
+        var financial = new List<(string Sheet, string Address, XLCellValue Value)>();
+
         foreach (var sheet in workbook.Worksheets)
         {
             foreach (var cell in sheet.CellsUsed().Where(c => c.HasFormula))
@@ -1878,12 +1995,25 @@ public sealed partial class ExcelHandler
                 }
                 catch (Exception)
                 {
+                    if (TryEvaluateFinancial(sheet, cell, financial) || IsSpilledArrayAnchor(cell))
+                    {
+                        continue;
+                    }
+
                     unevaluated.Add((sheet.Name, cell.Address.ToString()!));
                     continue;
                 }
 
                 if (value.IsError && value.GetError() == XLError.NameNotRecognized)
                 {
+                    // A dynamic-array anchor (FILTER/UNIQUE/…) round-tripping through
+                    // a later edit keeps the cached spill values aioffice wrote raw;
+                    // never strip them or warn (the result is already on disk).
+                    if (TryEvaluateFinancial(sheet, cell, financial) || IsSpilledArrayAnchor(cell))
+                    {
+                        continue;
+                    }
+
                     unevaluated.Add((sheet.Name, cell.Address.ToString()!));
                 }
             }
@@ -1913,6 +2043,7 @@ public sealed partial class ExcelHandler
         ExcelCoreProperties.NormalizeAfterSave(file);
 
         StripStaleCachedValues(file, unevaluated);
+        WriteFinancialCachedValues(file, financial);
 
         if (unevaluated.Count == 0)
         {
@@ -1971,6 +2102,105 @@ public sealed partial class ExcelHandler
                 {
                     cell.CellValue?.Remove();
                     cell.DataType = null;
+                    dirty = true;
+                }
+            }
+
+            if (dirty)
+            {
+                worksheetRoot.Save();
+            }
+        }
+    }
+
+    /// <summary>
+    /// (1.4) Computes one financial iterative formula (RATE/IRR/XIRR) ClosedXML
+    /// could not evaluate and records its value for the raw write-back. Returns
+    /// false when the cell is not one of those functions (so it keeps riding the
+    /// normal unevaluated path).
+    /// </summary>
+    private static bool TryEvaluateFinancial(
+        IXLWorksheet sheet, IXLCell cell, List<(string Sheet, string Address, XLCellValue Value)> sink)
+    {
+        if (!cell.HasFormula || !ExcelFinancialFunctions.IsFinancial(cell.FormulaA1))
+        {
+            return false;
+        }
+
+        var value = ExcelFinancialFunctions.Evaluate(sheet, cell.FormulaA1);
+        sink.Add((sheet.Name, cell.Address.ToString()!, value));
+        return true;
+    }
+
+    /// <summary>
+    /// (1.4) True when the cell is a dynamic-array anchor whose spill aioffice
+    /// already wrote raw (recognized by the array formula's multi-cell reference or
+    /// the function name). Such a cell keeps its cached value across re-saves — it
+    /// is neither stripped nor flagged formula_not_evaluated.
+    /// </summary>
+    private static bool IsSpilledArrayAnchor(IXLCell cell)
+    {
+        if (!cell.HasFormula)
+        {
+            return false;
+        }
+
+        if (cell.FormulaReference is { } reference &&
+            (reference.FirstAddress.RowNumber != reference.LastAddress.RowNumber ||
+             reference.FirstAddress.ColumnNumber != reference.LastAddress.ColumnNumber))
+        {
+            return true;
+        }
+
+        return ExcelDynamicArrays.IsDynamicArrayFormula(cell.FormulaA1);
+    }
+
+    /// <summary>Writes the computed financial cached values into the saved cells (formula text preserved).</summary>
+    private static void WriteFinancialCachedValues(
+        string file, List<(string Sheet, string Address, XLCellValue Value)> cells)
+    {
+        if (cells.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart is null)
+        {
+            return;
+        }
+
+        foreach (var group in cells.GroupBy(c => c.Sheet, StringComparer.OrdinalIgnoreCase))
+        {
+            var sheetElement = workbookPart.Workbook
+                ?.Descendants<Sheet>()
+                .FirstOrDefault(s => string.Equals(s.Name?.Value, group.Key, StringComparison.OrdinalIgnoreCase));
+            if (sheetElement?.Id?.Value is not { } relationshipId ||
+                workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart ||
+                worksheetPart.Worksheet is not { } worksheetRoot)
+            {
+                continue;
+            }
+
+            var byAddress = group.ToDictionary(g => g.Address, g => g.Value, StringComparer.OrdinalIgnoreCase);
+            var dirty = false;
+            foreach (var cell in worksheetRoot.Descendants<Cell>())
+            {
+                if (cell.CellReference?.Value is { } reference && byAddress.TryGetValue(reference, out var value))
+                {
+                    if (value.IsError)
+                    {
+                        cell.DataType = CellValues.Error;
+                        cell.CellValue = new CellValue(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        cell.DataType = CellValues.Number;
+                        cell.CellValue = new CellValue(
+                            value.GetNumber().ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+
                     dirty = true;
                 }
             }

@@ -106,11 +106,13 @@ The complete, closed set. Codes are stable snake_case strings:
 | `stale_address` | `--expect-rev` mismatch; nothing was written |
 | `file_too_large` | exceeds the size guard (`AIOFFICE_MAX_FILE_MB`) |
 | `formula_not_evaluated` | warning-level: a formula's cached value was returned |
+| `spill_blocked` | (1.4) a dynamic-array result would spill over non-empty cells; nothing was written |
 | `find_no_match` | warning-level: a replace matched nothing; the edit still succeeded |
 | `internal_error` | an unexpected failure |
 | `preview_not_running` | no live preview server for the file |
 
-No code in this table will be removed or renamed in the 1.0 line.
+No code in this table will be removed or renamed in the 1.0 line. (Codes added in a
+minor release — e.g. `spill_blocked` in 1.4 — are additive; existing codes are stable.)
 
 ## 3. Exit codes
 
@@ -316,6 +318,91 @@ unchanged.
   `office_help {topic:"themes"}`.
 - **New warning** (§1): `model3d_as_media` (a pptx 3D model was embedded as a 3D
   part behind a poster picture fallback; PowerPoint 2019+ renders the model).
+
+## 7d. 1.4.0 additions (additive within the frozen 1.0 line)
+
+Package **1.4.0** stays on **`surfaceVersion 1.0`** — every change below is purely
+**additive** (new evaluation behavior on the existing `set value` verb, new `add`
+type values, new prop keys, new addressing forms, extended `template` behavior, one
+new error code), so nothing in §§1–7 was removed or renamed. The op **kinds** in §5
+are unchanged. The 18 CLI verbs / 17 MCP tools are unchanged.
+
+### xlsx — dynamic arrays, financial functions, what-if data tables
+
+- **Dynamic-array formula evaluation + spill** (new behavior on `set value`):
+  setting a single cell to a dynamic-array formula — `FILTER`, `UNIQUE`, `SORT`,
+  `SORTBY`, `SEQUENCE`, `RANDARRAY` or `TRANSPOSE` — now EVALUATES it at write time,
+  computes the result array, and SPILLS it into the rectangle anchored at the cell
+  (the anchor carries the array formula + spill `ref`; every spilled cell carries a
+  cached value). These functions no longer emit `formula_not_evaluated`. `get` on
+  the anchor reports the new **`spillRange`** field. `RANDARRAY` is deterministic
+  here (seeded from its arguments) so round-trips are stable; Excel reseeds on open.
+- **Financial functions** (new behavior on `set value`): `RATE`, `IRR`, `XIRR`,
+  `NPV`, `PV`, `FV`, `PMT` and `NPER` are now evaluated at write time (iterative ones
+  by Newton's method with a bisection fallback) and the cached numeric result is
+  written into the cell. These functions no longer emit `formula_not_evaluated`.
+- **New `add` type** (§5, additive): `dataTable` — a one- or two-variable what-if
+  data table over a rectangular range
+  (`{op:add, type:dataTable, path:/Sheet1/A1:C10, props:{rowInput:"B1", colInput:"B2"}}`);
+  the corner formula is recomputed across the row/column input axes into a cached
+  body carrying the Excel `{=TABLE(…)}` construct. At least one of `rowInput` /
+  `colInput` is required.
+- **New addressing form** (§4, additive): `/Sheet1/dataTable[i]` (1-based per sheet,
+  row-major anchor order) — `get` reports `{body, rowInput, colInput, twoDimensional}`;
+  `remove` clears the table's construct and cached body.
+- **New error code** (§2): `spill_blocked` — a dynamic-array formula's result would
+  spill over non-empty cells; nothing was written (the suggestion names clearing the
+  target range). Exit code `2` (user error).
+
+### docx — mail-merge execution, IF fields, page borders
+
+- **Mail-merge execution** (extended behavior on the existing `template` verb /
+  `office_template` tool — NOT a new verb): when `--data` / `data` is a JSON **array**
+  of record objects, `template` runs a mail merge. With the new **`--output`** flag
+  (`office_template` gains an optional `output` param) given a path pattern — `{n}`
+  = the 1-based record index, `{Field}` = that record's value — it writes one merged
+  document per record; every expanded path is sandbox-resolved (an escaping pattern
+  → `sandbox_denied`, a colliding pattern → `invalid_args`). Without `--output` it
+  writes a single combined document (the body repeated per record, split by next-page
+  sections) back to the source with an auto-snapshot. A single-object `--data` keeps
+  the original one-document fill unchanged. Unresolved fields raise a single
+  `template_unresolved` warning. Each record fills `{{key}}` markers, `MERGEFIELD`
+  fields by name, and `ifField`s.
+- **New docx `add` type** (§5, additive): `ifField` — a Word «IF» field
+  (`props {field, operator, value, trueText, falseText}`; `operator` ∈
+  `= <> > < >= <=`) resolved per record during `template`/mail-merge from the
+  record's value for `field`. `get` reads the parsed parts back.
+- **New docx `set` prop** (§4, additive): `pageBorder` on a `/section[i]` —
+  `{style, color?, widthPt?, sides?}` (`style` ∈
+  `single|double|thick|dashed|dotted|wave`, `sides` ∈ `all|top|bottom|left|right`),
+  or the string `"none"` to clear it. `get /section[i]` reports it back.
+
+### pptx — zoom navigation, click-trigger animations, table styles
+
+- **New pptx `add` type** (§5, additive): `zoom` — a slide/section/summary zoom
+  navigation object added on a slide path (`{op:add, path:/slide[i], type:zoom,
+  props:{kind, target?, x?, y?, w?, h?}}`; `kind` ∈ `slide|section|summary`).
+- **New addressing form** (§4, additive): `/slide[i]/zoom[k]` (1-based per slide) —
+  `get` reports the zoom's kind and target; `remove` drops the frame. A zoom's
+  kind/target are immutable in place (remove + re-add to retarget).
+- **New pptx animation prop** (additive on `add type:"animation"`): `triggerOn:"@N"`
+  plays the effect when another shape (stable id `N`) is clicked (it joins that
+  shape's interactive `onClick` sequence). `N` must be a different shape on the
+  slide; a bad id is `invalid_path`. `get`/`structure` report the trigger shape.
+- **New pptx table props** (additive on `add type:"table"`): `style` (a built-in
+  table style — `none|light1|light2|medium1|medium2|medium3|dark1|dark2`) plus the
+  banding/edge flags `firstRow`, `lastRow`, `bandRow`, `firstCol`. `get`/`structure`
+  report the applied style and flags.
+
+### behavior improvement (backward-compatible)
+
+The dynamic-array and financial-function evaluation above is a **behavior
+improvement** within the frozen contract, not a breaking change: cells that used to
+carry a `formula_not_evaluated` warning for `FILTER`/`UNIQUE`/`SORT`/`RATE`/`IRR`
+(etc.) now carry a **cached value** and the warning no longer fires for them. The
+`formula_not_evaluated` warning code itself is unchanged and still fires for other
+unevaluated formulas, so an agent that handled the warning continues to work — it
+simply stops seeing it for the now-evaluated functions.
 
 ## 8. What is experimental (NOT frozen)
 

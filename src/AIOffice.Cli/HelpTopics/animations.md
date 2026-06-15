@@ -21,6 +21,22 @@ shape: `/slide[i]/shape[@id=N]`.
 `bottom`); `colorPulse` takes a `color`. `trigger`: `click` (default) ·
 `afterPrevious` · `withPrevious`.
 
+## click triggers (1.4)
+
+`triggerOn:"@N"` makes the effect play when **another shape** (stable id `N`) is
+clicked, instead of advancing in the main click sequence. The effect joins that
+trigger shape's interactive `onClick` sequence.
+
+```jsonc
+{op:"add", path:"/slide[1]/shape[@id=5]", type:"animation",
+ props:{effect:"fade", triggerOn:"@9"}}   // shape 5 fades in when shape 9 is clicked
+```
+
+- `triggerOn` names a **different** shape on the same slide (a shape cannot trigger
+  its own animation); an unknown id is `invalid_path` with the available ids.
+- `read --view structure` and `get /slide[i]/animation[k]` report the trigger shape.
+- Works with every effect class, including `motionPath`. `validate` stays clean.
+
 ## motion paths (1.3)
 
 `effect:"motionPath"` moves the shape along a path instead of animating in place.

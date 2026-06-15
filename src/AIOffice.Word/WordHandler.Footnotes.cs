@@ -241,6 +241,13 @@ public sealed partial class WordHandler
                     sb.Append("[^e").Append(reference.Id?.Value ?? 0).Append(']');
                     break;
 
+                // A complex field's instruction code (w:instrText) is never the
+                // displayed text — only its cached result (between separate and end)
+                // shows. Skipping it keeps e.g. an IF/MERGEFIELD instruction out of
+                // the text view, matching what Word renders.
+                case FieldCode:
+                    break;
+
                 case OpenXmlLeafTextElement leaf:
                     sb.Append(leaf.Text);
                     break;

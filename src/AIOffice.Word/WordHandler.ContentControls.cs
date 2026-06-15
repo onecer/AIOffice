@@ -327,6 +327,10 @@ public sealed partial class WordHandler
         var mergeFields = MergeFieldsView(doc);
         fields.AddRange(mergeFields);
 
+        // IF merge fields (v1.4.0) join the same view, distinguished by kind:"ifField".
+        var ifFields = IfFieldsView(doc);
+        fields.AddRange(ifFields);
+
         // Legacy form fields (v1.3.0) join the same view, distinguished by kind:"formField".
         var formFields = FormFieldsView(doc);
         fields.AddRange(formFields);

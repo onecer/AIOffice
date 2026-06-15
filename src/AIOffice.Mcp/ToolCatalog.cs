@@ -78,7 +78,7 @@ public static class ToolCatalog
                   "op":{"type":"string","enum":["set","add","remove","move","replace","accept","reject","extract"],
                     "description":"accept/reject resolve docx tracked revisions (path: /revision[@id=N] or a scope like /body). replace = find/replace in scope: props {find,replace,regex?,matchCase?,wholeWord?}; path \"/\" = whole document (docx body+headers+footers, every sheet, every slide+notes); 0 matches -> ok + find_no_match warning. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does NOT modify the source"},
                   "path":{"type":"string","description":"set/remove/move: target element. add: PARENT element, e.g. \"/body\", \"/slide[2]\", \"/Sheet1\". replace: container scope or \"/\""},
-                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video), smartart/connector/group/ungroup (pptx), tableOfFigures/indexEntry/index/mergeField (docx), formControl (xlsx)"},
+                  "type":{"type":"string","description":"add only: element type, e.g. paragraph, run, table (docx/pptx/xlsx ListObject), row, col, cell, slide, shape, image, comment, reply, note, style, header, footer, chart, pivot, conditionalFormat, toc, watermark, footnote, endnote, sectionBreak, equation (docx LaTeX), columnBreak, animation, section (pptx), layout (pptx clone), group (xlsx outline), field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video), smartart/connector/group/ungroup (pptx), tableOfFigures/indexEntry/index/mergeField (docx), formControl (xlsx), dataTable (xlsx what-if), ifField (docx «IF» merge field), zoom (pptx slide/section/summary nav). A dynamic-array formula on a cell (=FILTER/UNIQUE/SORT/SORTBY/SEQUENCE/RANDARRAY/TRANSPOSE) spills automatically; office_help {topic:\"formulas\"}"},
                   "props":{"type":"object","additionalProperties":{"type":"string"},
                     "description":"String-valued props, e.g. {\"text\":\"Hi\",\"bold\":\"true\",\"size\":\"12pt\",\"fill\":\"FF0000\"}. Sizes unit-qualified; colors hex/named. Table cells merge via {\"mergeRight\":\"2\"}/{\"mergeDown\":\"2\"}. pptx add chart: {\"dataFrom\":\"book.xlsx!Sheet1/A1:B5\"} pulls categories+series from a workbook (first col = categories, header row = series names) instead of literals"},
                   "position":{"type":["integer","string"],
@@ -132,13 +132,13 @@ public static class ToolCatalog
             """),
         Make(
             "office_template",
-            "Fill {{key}} placeholders in text runs from a merge map (docx/xlsx/pptx; placeholders split across runs are matched).",
+            "Fill {{key}} placeholders (and docx MERGEFIELD / «IF» fields) in text runs from a merge map. An OBJECT data fills one document; an ARRAY of records runs a mail merge (v1.4). Placeholders split across runs are matched.",
             """
             {"type":"object","properties":{
-              "file":{"type":"string","description":"Template document containing {{key}} placeholders in text runs"},
-              "data":{"type":"object","additionalProperties":{"type":"string"},
-                "description":"Merge map, e.g. {\"client\":\"ACME Corp\",\"date\":\"2026-06-12\"}"},
-              "output":{"type":"string","description":"Result path (recommended). Omit = merge in place; pre-image auto-snapshotted"},
+              "file":{"type":"string","description":"Template document containing {{key}} placeholders (docx also fills MERGEFIELD / «IF» fields by name)"},
+              "data":{"type":["object","array"],
+                "description":"OBJECT {\"client\":\"ACME\"} fills ONE document; ARRAY [{...},{...}] of record objects runs a mail merge — one merge per record (v1.4)"},
+              "output":{"type":"string","description":"Single fill: result path (recommended; omit = in place, snapshotted). Mail merge (array data): a path PATTERN — {n}=1-based record index, {Field}=that record's value, e.g. \"letter-{n}.docx\". Every expanded path is sandbox-resolved. Omit for one combined doc (a next-page section per record). office_help {topic:\"mail-merge\"}"},
               "overwrite":{"type":"boolean","default":false}},
              "required":["file","data"]}
             """),

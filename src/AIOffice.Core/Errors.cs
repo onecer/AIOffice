@@ -26,6 +26,13 @@ public static class ErrorCodes
     /// <summary>Warning-level: a formula could not be evaluated; cached value returned.</summary>
     public const string FormulaNotEvaluated = "formula_not_evaluated";
 
+    /// <summary>
+    /// (1.4) A dynamic-array formula's computed result would spill over cells that
+    /// already hold content. Nothing was written. Suggestion MUST name clearing
+    /// the target range.
+    /// </summary>
+    public const string SpillBlocked = "spill_blocked";
+
     /// <summary>Warning-level: a replace op matched nothing (replacements = 0); the edit still succeeds.</summary>
     public const string FindNoMatch = "find_no_match";
 
@@ -38,7 +45,8 @@ public static class ErrorCodes
     public static readonly IReadOnlyList<string> All =
     [
         InvalidArgs, FileNotFound, SandboxDenied, InvalidPath, UnsupportedFeature,
-        FormatCorrupt, StaleAddress, FileTooLarge, FormulaNotEvaluated, FindNoMatch, InternalError, PreviewNotRunning,
+        FormatCorrupt, StaleAddress, FileTooLarge, FormulaNotEvaluated, SpillBlocked, FindNoMatch, InternalError,
+        PreviewNotRunning,
     ];
 }
 

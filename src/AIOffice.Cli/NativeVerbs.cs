@@ -20,6 +20,8 @@ public sealed class NativeVerbs
         "smartart", "connectors", "number-formats", "structural-fields",
         // v1.3 additive topics.
         "chart-polish", "conditional-format", "themes", "3d-models", "form-fields", "animations",
+        // v1.4 additive topics.
+        "formulas", "data-tables", "mail-merge", "page-borders", "zoom", "table-styles",
     ];
 
     private readonly Workspace _workspace;

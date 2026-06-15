@@ -251,6 +251,8 @@ public sealed partial class WordHandler
 
         var mergeFields = MergeFieldsView(doc);
 
+        var ifFields = IfFieldsView(doc);
+
         var embeds = EnumerateEmbeds(doc)
             .Select(e => new
             {
@@ -289,6 +291,7 @@ public sealed partial class WordHandler
             tablesOfFigures = tablesOfFigures.Count > 0 ? tablesOfFigures : null,
             indexes = indexes.Count > 0 ? indexes : null,
             mergeFields = mergeFields.Count > 0 ? mergeFields : null,
+            ifFields = ifFields.Count > 0 ? ifFields : null,
             embeds = embeds.Count > 0 ? embeds : null,
             sources = sources.Count > 0 ? sources : null,
             bibliographies = bibliographies.Count > 0 ? bibliographies : null,

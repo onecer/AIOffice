@@ -164,6 +164,8 @@ public sealed partial class WordHandler
             "add" when op.Type == "index" => ApplyAddIndex(doc, op, session),
             "add" when op.Type == "mergeField" && session.Track => throw TrackedStructureUnsupported("mergeField"),
             "add" when op.Type == "mergeField" => ApplyAddMergeField(doc, op),
+            "add" when op.Type == "ifField" && session.Track => throw TrackedStructureUnsupported("ifField"),
+            "add" when op.Type == "ifField" => ApplyAddIfField(doc, op),
             "add" when op.Type == "watermark" && session.Track => throw TrackedStructureUnsupported("watermark"),
             "add" when op.Type == "watermark" => ApplyAddWatermark(doc, file, op),
             "add" when op.Type == "sectionBreak" && session.Track => throw TrackedStructureUnsupported("sectionBreak"),
@@ -330,6 +332,7 @@ public sealed partial class WordHandler
                 "tableOfFigures (props.label — lists captions of one label), " +
                 "indexEntry (props.text — marks an XE field), index (props.columns — builds the index), " +
                 "mergeField (props.name — a MERGEFIELD the template verb fills by name), " +
+                "ifField (props.field/operator/value/trueText/falseText — an «IF» field resolved during merge), " +
                 "embed (props.src — embeds any file as an OLE package object), " +
                 "source (props.tag/kind/title — adds a bibliography source at /sources), " +
                 "citation (props.source — cites a source by tag), bibliography (props.style), " +
@@ -340,7 +343,7 @@ public sealed partial class WordHandler
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
                     "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
-                    "caption", "crossRef", "tableOfFigures", "indexEntry", "index", "mergeField",
+                    "caption", "crossRef", "tableOfFigures", "indexEntry", "index", "mergeField", "ifField",
                     "embed", "source", "citation", "bibliography", "shape", "textBox", "formField"]),
         };
 

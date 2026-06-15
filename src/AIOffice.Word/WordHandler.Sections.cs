@@ -10,7 +10,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] SectionProps =
-        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap"];
+        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap", "pageBorder"];
 
     /// <summary>Known page sizes as portrait (width, height) in twentieths of a point.</summary>
     private static readonly Dictionary<string, (uint Width, uint Height)> PageSizes = new(StringComparer.OrdinalIgnoreCase)
@@ -98,12 +98,19 @@ public sealed partial class WordHandler
         var margins = new List<(string Key, uint Twips)>();
         JsonNode? columnsNode = null;
         uint? columnGapTwips = null;
+        JsonNode? pageBorderNode = null;
+        var pageBorderSet = false;
 
         foreach (var (key, node) in props)
         {
             var value = NodeToString(node);
             switch (key)
             {
+                case "pageBorder":
+                    pageBorderNode = node;
+                    pageBorderSet = true;
+                    break;
+
                 case "columns":
                     columnsNode = node;
                     break;
@@ -179,6 +186,11 @@ public sealed partial class WordHandler
         if (columnsNode is not null || columnGapTwips is not null)
         {
             ApplyColumns(sectPr, columnsNode, columnGapTwips);
+        }
+
+        if (pageBorderSet)
+        {
+            ApplyPageBorder(sectPr, pageBorderNode);
         }
 
         var canonical = path.ToCanonicalString();
@@ -728,6 +740,7 @@ public sealed partial class WordHandler
             ["columns"] = ColumnCountOf(cols),
             ["columnGapCm"] = ColumnGapCm(cols),
             ["columnWidthsCm"] = ColumnWidthsCm(cols),
+            ["pageBorder"] = PageBorderShape(sectPr),
         };
     }
 

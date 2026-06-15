@@ -52,7 +52,7 @@ internal sealed partial record PptxAddress
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
         "/slide[2]/smartart[1], /slide[2]/group[@id=7], /slide[2]/group[@id=7]/shape[@id=9], " +
-        "/slide[2]/animation[1], /slide[2]/comment[@id=3], " +
+        "/slide[2]/animation[1], /slide[2]/zoom[1], /slide[2]/comment[@id=3], " +
         "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/media[1], /slide[2]/media[@id=7], " +
         "/slide[2]/model3d[1], /slide[2]/model3d[@id=7], " +
         "/slide[2]/shape[@id=7]/omath[1], " +
@@ -96,6 +96,9 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^animation\[([0-9]+)\]$")]
     private static partial Regex AnimationSegment();
+
+    [GeneratedRegex(@"^zoom\[([0-9]+)\]$")]
+    private static partial Regex ZoomSegment();
 
     [GeneratedRegex(@"^comment\[@id=([0-9]+)\]$")]
     private static partial Regex CommentSegment();
@@ -173,6 +176,9 @@ internal sealed partial record PptxAddress
     /// <summary>1-based animation index on the slide (/slide[i]/animation[k]); null otherwise.</summary>
     public int? AnimationIndex { get; init; }
 
+    /// <summary>1-based zoom index on the slide (/slide[i]/zoom[k], a zoom navigation object); null otherwise.</summary>
+    public int? ZoomIndex { get; init; }
+
     /// <summary>Stable comment id on the slide (/slide[i]/comment[@id=N]); null otherwise.</summary>
     public uint? CommentId { get; init; }
 
@@ -223,6 +229,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses an animation by index (/slide[i]/animation[k]).</summary>
     public bool IsAnimation => AnimationIndex.HasValue;
+
+    /// <summary>True when the path addresses a zoom navigation object by index (/slide[i]/zoom[k]).</summary>
+    public bool IsZoom => ZoomIndex.HasValue;
 
     /// <summary>True when the path addresses a comment by id (/slide[i]/comment[@id=N]).</summary>
     public bool IsComment => CommentId.HasValue;
@@ -392,6 +401,16 @@ internal sealed partial record PptxAddress
             return address with { AnimationIndex = ParseIndex(animationMatch.Groups[1].Value, raw) };
         }
 
+        if (ZoomSegment().Match(segments[1]) is { Success: true } zoomMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow zoom[k].");
+            }
+
+            return address with { ZoomIndex = ParseIndex(zoomMatch.Groups[1].Value, raw) };
+        }
+
         if (CommentSegment().Match(segments[1]) is { Success: true } commentMatch)
         {
             if (segments.Length > 2)
@@ -463,7 +482,7 @@ internal sealed partial record PptxAddress
         }
 
         var shaped = WithShapeSegment(address, segments[1], raw,
-            $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
+            $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], zoom[k], comment[@id=N], " +
             $"embed[k], embed[@id=N], media[k], media[@id=N], model3d[k], model3d[@id=N], group[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
@@ -607,6 +626,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical animation-index path (/slide[i]/animation[k]) of the addressed animation.</summary>
     public string CanonicalAnimationPath => Units.Inv($"/slide[{SlideIndex}]/animation[{AnimationIndex}]");
+
+    /// <summary>The canonical zoom-index path (/slide[i]/zoom[k]) of the addressed zoom object.</summary>
+    public string CanonicalZoomPath => Units.Inv($"/slide[{SlideIndex}]/zoom[{ZoomIndex}]");
 
     /// <summary>The canonical comment path (/slide[i]/comment[@id=N]) of the addressed comment.</summary>
     public string CanonicalCommentPath => Units.Inv($"/slide[{SlideIndex}]/comment[@id={CommentId}]");

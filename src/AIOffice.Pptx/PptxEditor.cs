@@ -27,7 +27,7 @@ internal sealed record PptxOpOutcome(
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "model3d", "equation",
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "zoom", "comment", "reply", "embed", "media", "model3d", "equation",
          "smartart", "connector", "group", "ungroup"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
@@ -250,6 +250,21 @@ internal static class PptxEditor
             case "animation":
                 return PptxAnimations.Add(presentation, address, op.Props);
 
+            case "zoom":
+            {
+                if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation ||
+                    address.IsZoom || address.IsComment || address.IsGroup || address.IsSmartArt)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add zoom targets a slide, not '{op.Path}'.",
+                        "Use the slide path: {\"op\":\"add\",\"path\":\"/slide[2]\",\"type\":\"zoom\"," +
+                        "\"props\":{\"kind\":\"slide\",\"target\":\"slide 3\"}}.");
+                }
+
+                return PptxZoom.Add(presentation, address, op.Props);
+            }
+
             case "comment":
             {
                 if (address.IsComment)
@@ -294,7 +309,8 @@ internal static class PptxEditor
                     "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture), " +
                     "chart (bar/line/pie/doughnut/radar/bubble/stackedBar/percentStackedBar/stackedArea/combo), " +
                     "table (with rows/cols), row (on a table path), " +
-                    "animation (on a shape path), comment and reply (on a comment path), embed (a file as an OLE object), " +
+                    "animation (on a shape path), zoom (slide/section/summary navigation, on a slide path), " +
+                    "comment and reply (on a comment path), embed (a file as an OLE object), " +
                     "media (an mp4/mov video or m4a/mp3/wav audio clip), " +
                     "model3d (a glb/gltf 3D model behind a poster fallback), " +
                     "equation (LaTeX -> OMML math in a text box), " +
@@ -613,6 +629,15 @@ internal static class PptxEditor
             return PptxAnimations.Set(presentation, address, op.Props);
         }
 
+        if (address.IsZoom)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "A zoom's kind and target cannot be edited in place.",
+                "Remove the zoom ({\"op\":\"remove\",\"path\":\"" + address.CanonicalZoomPath + "\"}) and add it again " +
+                "with the new kind/target; position/size/name sets target its shape path (/slide[i]/shape[@id=N]).");
+        }
+
         if (address.IsComment)
         {
             throw new AiofficeException(
@@ -912,6 +937,11 @@ internal static class PptxEditor
             return PptxAnimations.Remove(presentation, address);
         }
 
+        if (address.IsZoom)
+        {
+            return PptxZoom.Remove(presentation, address);
+        }
+
         if (address.IsComment)
         {
             return PptxComments.Remove(presentation, address);
@@ -1059,6 +1089,14 @@ internal static class PptxEditor
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved by model3d path.",
                 "Reorder the host picture by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
+        }
+
+        if (address.IsZoom)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved by zoom path.",
+                "Reorder the host graphic frame by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
         }
 
         if (address.IsPresentation || address.IsSection || address.IsMaster)

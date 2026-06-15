@@ -101,6 +101,7 @@ public sealed partial class ExcelHandler
             ExcelTargetKind.Embed => Envelope.Ok(
                 ExcelEmbeds.Describe(ExcelEmbeds.Resolve(file, target)), MetaFor(file, sw)),
             ExcelTargetKind.FormControl => Envelope.Ok(FormControlTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.DataTable => Envelope.Ok(DataTableTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -188,6 +189,29 @@ public sealed partial class ExcelHandler
         }
 
         return ExcelSlicers.Describe(info);
+    }
+
+    /// <summary>One what-if data table, read back raw (the t="dataTable" anchor; ClosedXML cannot see it).</summary>
+    private static object DataTableTargetInfo(string file, ExcelTarget target)
+    {
+        var tables = ExcelDataTables.ReadOnSheet(file, target.Sheet.Name);
+        var wanted = target.DataTableIndex!.Value;
+        var info = tables.FirstOrDefault(t => t.Index == wanted);
+        if (info is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No dataTable[{wanted}] on sheet '{target.Sheet.Name}' ({tables.Count} data table(s) exist).",
+                tables.Count > 0
+                    ? "Data-table indices are 1-based per sheet; pick one of the candidates."
+                    : "This sheet has no data tables; add one with {op:add, type:dataTable, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + "/A1:C10, props:{rowInput:\"B1\", colInput:\"B2\"}}.",
+                candidates: tables.Count > 0
+                    ? [.. tables.Select(t => ExcelPaths.DataTablePath(target.Sheet, t.Index))]
+                    : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return ExcelDataTables.Describe(info);
     }
 
     /// <summary>One form control, read back from the raw package (ClosedXML cannot see controls).</summary>
@@ -358,6 +382,10 @@ public sealed partial class ExcelHandler
             type = ExcelValues.TypeName(value.Type),
             formula = cell.HasFormula ? "=" + cell.FormulaA1 : null,
             cachedValue = cell.HasFormula ? ExcelValues.ToJson(cell.CachedValue) : null,
+            // (1.4) When the cell is a dynamic-array anchor, surface the rectangle
+            // the result spills into (read off the array formula's ref); a plain
+            // single-cell formula reports null.
+            spillRange = SpillRangeOf(cell),
             text = ExcelValues.SafeFormatted(cell),
             numberFormat = string.IsNullOrEmpty(numberFormat) ? null : numberFormat,
             bold = cell.Style.Font.Bold ? true : (bool?)null,
@@ -376,6 +404,23 @@ public sealed partial class ExcelHandler
             note = NoteInfo(cell),
             comment,
         };
+    }
+
+    /// <summary>
+    /// (1.4) The spill rectangle of a dynamic-array anchor (FILTER/UNIQUE/SORT/…):
+    /// the array formula's <c>ref</c> when it spans more than the anchor cell,
+    /// otherwise null (a plain single-cell formula does not spill).
+    /// </summary>
+    private static string? SpillRangeOf(IXLCell cell)
+    {
+        if (!cell.HasFormula || cell.FormulaReference is not { } reference)
+        {
+            return null;
+        }
+
+        var single = reference.FirstAddress.RowNumber == reference.LastAddress.RowNumber &&
+                     reference.FirstAddress.ColumnNumber == reference.LastAddress.ColumnNumber;
+        return single ? null : reference.ToString();
     }
 
     private static string? MergedRangeOf(IXLWorksheet sheet, IXLCell cell)

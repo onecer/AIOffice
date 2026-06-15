@@ -279,11 +279,16 @@ public sealed class FileVerbs
                 innerException: ex);
         }
 
-        var output = args.GetOption("o") ?? args.GetOption("out");
+        // --output is the documented mail-merge flag (v1.4); -o/--out remain the
+        // single-document aliases. The raw value is passed through unresolved: the
+        // handler sandbox-resolves it (a single path in FillOne, or every
+        // {n}/{Field}-expanded path per record in a mail merge), so an escaping
+        // output/pattern is denied inside the handler.
+        var output = args.GetOption("output") ?? args.GetOption("o") ?? args.GetOption("out");
         var ctx = Context(file, new JsonObject
         {
             ["data"] = data,
-            ["output"] = output is null ? null : _workspace.Resolve(output),
+            ["output"] = output,
         });
         return ResolveHandler(file, kindOverride: null).Template(ctx);
     }

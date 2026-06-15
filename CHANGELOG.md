@@ -4,6 +4,71 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.4.0 — fourth post-1.0 feature release (additive)
+
+`surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0
+contract line (new evaluation behavior on `set value`, new `add` type values, new
+prop keys, new addressing forms, extended `template` behavior, one new error code).
+Nothing was removed or renamed; the op **kinds** are unchanged and the 18 CLI verbs /
+17 MCP tools stand. **The long-standing dynamic-array gap is closed**: FILTER /
+UNIQUE / SORT (and friends) now evaluate and spill instead of only being recognised.
+**2016 tests** across 7 projects (Core 124 · Word 580 · Excel 545 · Pptx 625 ·
+MCP 87 · Preview 24 · Render 31), green on macOS + Windows.
+
+### Added
+
+- **Dynamic-array evaluation + spill** (xlsx): setting a cell to `=FILTER`,
+  `=UNIQUE`, `=SORT`, `=SORTBY`, `=SEQUENCE`, `=RANDARRAY` or `=TRANSPOSE` now
+  EVALUATES the formula and SPILLS the result array into the rectangle anchored at the
+  cell (anchor keeps the array formula; every spilled cell carries a cached value).
+  These no longer emit `formula_not_evaluated`; `get` on the anchor reports a
+  `spillRange`. `RANDARRAY` is seeded deterministically for stable round-trips. See
+  `aioffice help formulas`.
+- **Financial functions** (xlsx): `RATE`, `IRR`, `XIRR`, `NPV`, `PV`, `FV`, `PMT` and
+  `NPER` are now evaluated at write time (iterative ones by Newton's method with a
+  bisection fallback) and the cached numeric value is written — no more
+  `formula_not_evaluated` for them.
+- **What-if data tables** (xlsx): a new `add` type `dataTable` builds a one- or
+  two-variable data table over a range (`props {rowInput?, colInput?}`); the corner
+  formula is recomputed across the input axes into a cached body carrying the Excel
+  `{=TABLE(…)}` construct. Addressed by `/Sheet1/dataTable[i]`. See
+  `aioffice help data-tables`.
+- **New error code** `spill_blocked` (exit 2): a dynamic array whose result would
+  overwrite non-empty cells writes nothing; the suggestion names the range to clear.
+- **Mail-merge execution** (docx): the existing `template` verb now runs a mail merge
+  when `--data` is a JSON **array** of records — one merged document per record with
+  the new **`--output`** flag (`{n}` = record index, `{Field}` = a record value; every
+  expanded path sandbox-resolved), or a single combined document (a section per
+  record) without it. `office_template` gains an optional `output` param. A single
+  object `--data` still fills one document unchanged. See `aioffice help mail-merge`.
+- **IF fields** (docx): a new `add` type `ifField` adds a Word «IF» field
+  (`props {field, operator, value, trueText, falseText}`) resolved per record during a
+  merge. See `aioffice help page-borders`.
+- **Page borders** (docx): a `pageBorder` `set` prop on `/section[i]`
+  (`{style, color?, widthPt?, sides?}`, or `"none"`). See `aioffice help page-borders`.
+- **Slide zoom** (pptx): a new `add` type `zoom` adds a slide/section/summary zoom
+  navigation object on a slide (`props {kind, target?, x?, y?, w?, h?}`), addressed by
+  `/slide[i]/zoom[k]`. See `aioffice help zoom`.
+- **Click-trigger animations** (pptx): a new `triggerOn:"@N"` prop on `add
+  type:"animation"` plays the effect when another shape (stable id `N`) is clicked.
+  See `aioffice help animations`.
+- **Table styles** (pptx): `add type:"table"` accepts a built-in `style`
+  (`none|light1|light2|medium1|medium2|medium3|dark1|dark2`) plus banding/edge flags
+  `firstRow`, `lastRow`, `bandRow`, `firstCol`. See `aioffice help table-styles`.
+- **New help topics**: `formulas`, `data-tables`, `mail-merge`, `page-borders`,
+  `zoom`, `table-styles` (CLI + `office_help`); `animations` extended with `triggerOn`.
+
+### Notes
+
+- **The dynamic-array / financial evaluation is backward-compatible.** Cells that used
+  to carry a `formula_not_evaluated` warning for these functions now carry a cached
+  value, and the warning no longer fires for them. The warning code is unchanged and
+  still fires for other unevaluated formulas — an agent that handled it keeps working.
+- `surfaceVersion` stays **1.0**; the 18 CLI verbs and 17 MCP tools are unchanged
+  (the new things are `add` types, prop keys, addressing forms and extended
+  `template` behavior — no new verb or tool). The MCP tool surface stays inside its
+  token budget.
+
 ## 1.3.0 — third post-1.0 feature release (additive)
 
 `surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0

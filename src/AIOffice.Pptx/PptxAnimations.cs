@@ -19,7 +19,8 @@ internal sealed record AnimationView(
     uint? ShapeId,
     string? Duration,
     string? Delay,
-    string? Direction);
+    string? Direction,
+    uint? TriggerShapeId = null);
 
 /// <summary>
 /// Shape animations (p:timing): add via
@@ -57,11 +58,11 @@ internal static class PptxAnimations
     private static readonly IReadOnlyList<string> Directions = ["left", "right", "top", "bottom"];
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["effect", "trigger", "duration", "delay", "direction", "color"];
+        ["effect", "trigger", "duration", "delay", "direction", "color", "triggerOn"];
 
     /// <summary>add motionPath additionally accepts a path kind and (for custom) a points list.</summary>
     private static readonly IReadOnlyList<string> MotionAddProps =
-        ["effect", "trigger", "duration", "delay", "path", "direction", "points"];
+        ["effect", "trigger", "duration", "delay", "path", "direction", "points", "triggerOn"];
 
     /// <summary>The motion preset class id PowerPoint uses for custom user paths.</summary>
     private const int CustomPathPresetId = 0;
@@ -113,31 +114,97 @@ internal static class PptxAnimations
             "The slide part has no slide XML.",
             "The slide part is malformed; re-export the file or restore a snapshot.");
 
+        // triggerOn:"@M" makes the effect play when shape M is clicked: the effect par lives
+        // in an interactive p:seq keyed to M's onClick, not the main click sequence.
+        var triggerShapeId = ParseTriggerOn(props, slidePart, view.Id, address);
+
         // A motion-path effect (the additive "path" preset class) takes its own props
         // (path/points) and builds a p:animMotion rather than the entrance/exit behaviors.
         if (IsMotionPath(props))
         {
             var motion = ParseMotionProps(props!);
-            var motionMainSeq = EnsureMainSequence(slide);
-            var motionNextId = NextTimeNodeId(slide.Timing!);
-            var motionGroup = motion.Trigger == "click" || LastGroupChildren(motionMainSeq) is null
-                ? NewClickGroup(motionMainSeq, ref motionNextId)
-                : LastGroupChildren(motionMainSeq)!;
+            var motionGroup = ResolveTargetGroup(slide, triggerShapeId, motion.Trigger, out var motionNextId);
             motionGroup.Append(BuildMotionPar(motion, view.Id, ref motionNextId));
             return Units.Inv($"/slide[{address.SlideIndex}]/animation[{List(slidePart).Count}]");
         }
 
         var spec = ParseProps(props);
-        var mainSequenceChildren = EnsureMainSequence(slide);
-        var nextId = NextTimeNodeId(slide.Timing!);
-
-        var groupChildren = spec.Trigger == "click" || LastGroupChildren(mainSequenceChildren) is null
-            ? NewClickGroup(mainSequenceChildren, ref nextId)
-            : LastGroupChildren(mainSequenceChildren)!;
+        var groupChildren = ResolveTargetGroup(slide, triggerShapeId, spec.Trigger, out var nextId);
         groupChildren.Append(BuildEffectPar(spec, view.Id, ref nextId));
 
         var index = List(slidePart).Count;
         return Units.Inv($"/slide[{address.SlideIndex}]/animation[{index}]");
+    }
+
+    /// <summary>
+    /// The childTnLst the new effect par joins (ensuring the timing skeleton first): when
+    /// <paramref name="triggerShapeId"/> is set the effect lives in (a new click group inside) that
+    /// shape's interactive onClick sequence; otherwise it joins the main sequence (a click effect
+    /// opens a new group, with/after join the open one). <paramref name="nextId"/> returns the next
+    /// free time-node id after any skeleton was built.
+    /// </summary>
+    private static P.ChildTimeNodeList ResolveTargetGroup(P.Slide slide, uint? triggerShapeId, string trigger, out uint nextId)
+    {
+        if (triggerShapeId is { } shapeId)
+        {
+            nextId = 0;
+            var interactive = EnsureInteractiveSequence(slide, shapeId, ref nextId);
+            nextId = NextTimeNodeId(slide.Timing!);
+            return trigger == "click" || LastGroupChildren(interactive) is null
+                ? NewClickGroup(interactive, ref nextId)
+                : LastGroupChildren(interactive)!;
+        }
+
+        var mainSequenceChildren = EnsureMainSequence(slide);
+        nextId = NextTimeNodeId(slide.Timing!);
+        return trigger == "click" || LastGroupChildren(mainSequenceChildren) is null
+            ? NewClickGroup(mainSequenceChildren, ref nextId)
+            : LastGroupChildren(mainSequenceChildren)!;
+    }
+
+    /// <summary>
+    /// Parses triggerOn:"@M" into the trigger shape's stable id, validating it names a real,
+    /// distinct shape on the slide (invalid_path with the slide's shape ids otherwise). Returns
+    /// null when no triggerOn was given.
+    /// </summary>
+    private static uint? ParseTriggerOn(JsonObject? props, SlidePart slidePart, uint animatedShapeId, PptxAddress address)
+    {
+        if (props is null || !props.TryGetPropertyValue("triggerOn", out var node) || node is null)
+        {
+            return null;
+        }
+
+        var raw = J.ScalarText(node).Trim();
+        var digits = raw.StartsWith('@') ? raw[1..].Trim() : raw;
+        if (!uint.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var triggerId))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"triggerOn must be a shape id like \"@5\"; got {node.ToJsonString()}.",
+                "Pass the trigger shape's stable id, e.g. {\"triggerOn\":\"@5\"} — the effect plays when shape 5 is clicked. " +
+                "Run 'aioffice read <file> --view structure' to list shape ids.");
+        }
+
+        var shapes = PptxDoc.Shapes(slidePart);
+        if (!shapes.Any(s => s.Id == triggerId))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                Units.Inv($"No shape with id {triggerId} on slide {address.SlideIndex} to trigger the animation."),
+                "triggerOn names another shape on the slide (its stable id); " +
+                "run 'aioffice read <file> --view structure' to list shape ids.",
+                candidates: [.. shapes.Take(10).Select(s => Units.Inv($"@{s.Id}"))]);
+        }
+
+        if (triggerId == animatedShapeId)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"triggerOn @{triggerId} is the animated shape itself."),
+                "A shape cannot trigger its own animation by click; point triggerOn at a different shape on the slide.");
+        }
+
+        return triggerId;
     }
 
     // ----- set (retime) ----------------------------------------------------------
@@ -213,8 +280,17 @@ internal static class PptxAnimations
         // so rebuild the whole mainSeq from the (unchanged) effect order with the new trigger applied.
         if (!string.Equals(trigger, view.Trigger, StringComparison.Ordinal))
         {
+            if (view.TriggerShapeId is not null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "Cannot retrigger an animation that plays on another shape's click.",
+                    "An interactive (triggerOn) animation's start is the trigger shape's click; remove it and re-add " +
+                    "with a different triggerOn (or without one for a main-sequence trigger). delay/duration are still settable.");
+            }
+
             node.NodeType = TriggerNodeType(trigger!);
-            RebuildGroups(slidePart, applyTriggerToIndex: (view.Index, trigger!));
+            RebuildGroups(slidePart, applyTrigger: (view.Par, trigger!));
         }
 
         return address.CanonicalAnimationPath;
@@ -235,6 +311,15 @@ internal static class PptxAnimations
         if (from < 1 || from > animations.Count)
         {
             _ = Resolve(slidePart, address); // throws invalid_path with candidates
+        }
+
+        if (animations[from - 1].TriggerShapeId is not null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "An animation that plays on another shape's click has no place in the click order to move.",
+                "Interactive (triggerOn) animations fire on their trigger shape's click, not in sequence; " +
+                "reorder the main-sequence animations instead, or remove and re-add this one.");
         }
 
         // Reorder by anchor reference so indices never go stale mid-shuffle.
@@ -316,15 +401,20 @@ internal static class PptxAnimations
     /// <summary>
     /// Rebuilds the mainSeq click-group structure from the current (or given) effect order. Each effect's
     /// own trigger decides grouping: a click effect (or the first effect) opens a new group; with/after
-    /// effects join the open group. Effect pars are reused (their behaviors/ids are untouched).
+    /// effects join the open group. Effect pars are reused (their behaviors/ids are untouched). Only
+    /// main-sequence effects are rebuilt — interactive (triggerOn) effects keep their own onClick seq.
     /// </summary>
     private static void RebuildGroups(
         SlidePart slidePart,
         List<P.ParallelTimeNode>? orderedPars = null,
-        (int Index, string Trigger)? applyTriggerToIndex = null)
+        (P.ParallelTimeNode Par, string Trigger)? applyTrigger = null)
     {
         var slide = slidePart.Slide!;
-        var pars = orderedPars ?? List(slidePart).Select(a => a.Par).ToList();
+        var allPars = orderedPars ?? List(slidePart).Select(a => a.Par).ToList();
+
+        // Interactive-triggered effects live in their own onClick seq and must not be folded
+        // into the main sequence; rebuild only the main-sequence effects.
+        var pars = allPars.Where(p => EnclosingTriggerShapeId(p) is null).ToList();
 
         var mainSequenceChildren = EnsureMainSequence(slide);
 
@@ -341,12 +431,10 @@ internal static class PptxAnimations
 
         var nextId = NextTimeNodeId(slide.Timing!);
         P.ChildTimeNodeList? openGroup = null;
-        var index = 0;
         foreach (var par in pars)
         {
-            index++;
             var effectNode = par.CommonTimeNode!;
-            var trigger = applyTriggerToIndex is { } at && at.Index == index
+            var trigger = applyTrigger is { } at && ReferenceEquals(at.Par, par)
                 ? at.Trigger
                 : TriggerOf(effectNode);
 
@@ -626,6 +714,98 @@ internal static class PptxAnimations
                 NodeType = P.TimeNodeValues.TmingRoot,
             })));
         return mainSequenceChildren;
+    }
+
+    /// <summary>
+    /// The childTnLst of the interactive p:seq that fires when <paramref name="triggerShapeId"/> is
+    /// clicked, building the timing skeleton + main sequence first when missing, then reusing an
+    /// existing interactive seq for the same trigger shape or appending a fresh one as a sibling of
+    /// the main sequence under the tmRoot.
+    /// </summary>
+    private static P.ChildTimeNodeList EnsureInteractiveSequence(P.Slide slide, uint triggerShapeId, ref uint nextId)
+    {
+        // The root + main sequence must exist so the interactive seq has a tmRoot to live under.
+        var mainSequenceChildren = EnsureMainSequence(slide);
+
+        // An empty mainSeq childTnLst is schema-invalid; when this is the slide's only animation the
+        // main sequence carries no effects, so drop its empty list (the seq's cTn keeps it optional).
+        if (!mainSequenceChildren.HasChildren)
+        {
+            mainSequenceChildren.Remove();
+        }
+
+        nextId = NextTimeNodeId(slide.Timing!);
+
+        var rootChildren = slide.Timing!.TimeNodeList?.Elements<P.ParallelTimeNode>().FirstOrDefault()?
+            .CommonTimeNode?.GetFirstChild<P.ChildTimeNodeList>()
+            ?? throw new AiofficeException(
+                ErrorCodes.FormatCorrupt,
+                "The slide timing tree has no root child list.",
+                "The slide's p:timing is malformed; re-export the file or restore a snapshot.");
+
+        // Reuse an existing interactive seq already keyed to this trigger shape's onClick.
+        foreach (var seq in rootChildren.Elements<P.SequenceTimeNode>())
+        {
+            if (seq.CommonTimeNode?.NodeType?.Value == P.TimeNodeValues.InteractiveSequence &&
+                InteractiveTriggerShapeId(seq) == triggerShapeId)
+            {
+                return seq.CommonTimeNode.GetFirstChild<P.ChildTimeNodeList>()
+                    ?? seq.CommonTimeNode.AppendChild(new P.ChildTimeNodeList());
+            }
+        }
+
+        var children = new P.ChildTimeNodeList();
+        var sequence = new P.SequenceTimeNode(
+            new P.CommonTimeNode(
+                new P.StartConditionList(new P.Condition(
+                    new P.TargetElement(new P.ShapeTarget { ShapeId = Inv(triggerShapeId) }))
+                {
+                    Event = P.TriggerEventValues.OnClick,
+                    Delay = "0",
+                }),
+                new P.EndSync(new P.RuntimeNodeTrigger { Val = P.TriggerRuntimeNodeValues.All })
+                {
+                    Event = P.TriggerEventValues.End,
+                    Delay = "0",
+                },
+                children)
+            {
+                Id = nextId,
+                Restart = P.TimeNodeRestartValues.WhenNotActive,
+                Fill = P.TimeNodeFillValues.Hold,
+                NodeType = P.TimeNodeValues.InteractiveSequence,
+            },
+            new P.PreviousConditionList(new P.Condition(new P.TargetElement(new P.SlideTarget()))
+            {
+                Event = P.TriggerEventValues.OnPrevious,
+                Delay = "0",
+            }),
+            new P.NextConditionList(new P.Condition(new P.TargetElement(new P.SlideTarget()))
+            {
+                Event = P.TriggerEventValues.OnNext,
+                Delay = "0",
+            }))
+        {
+            Concurrent = true,
+            NextAction = P.NextActionValues.Seek,
+        };
+
+        rootChildren.Append(sequence);
+        nextId++;
+        return children;
+    }
+
+    /// <summary>The shape id an interactive seq fires on (its onClick stCondLst target), or null.</summary>
+    private static uint? InteractiveTriggerShapeId(P.SequenceTimeNode seq)
+    {
+        var condition = seq.CommonTimeNode?.GetFirstChild<P.StartConditionList>()?.GetFirstChild<P.Condition>();
+        if (condition?.Event?.Value != P.TriggerEventValues.OnClick)
+        {
+            return null;
+        }
+
+        var spid = condition.TargetElement?.GetFirstChild<P.ShapeTarget>()?.ShapeId?.Value;
+        return uint.TryParse(spid, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : null;
     }
 
     private static uint NextTimeNodeId(P.Timing timing)
@@ -1198,10 +1378,26 @@ internal static class PptxAnimations
                 FirstShapeTargetId(par),
                 ReadDuration(par),
                 ReadDelay(node),
-                direction));
+                direction,
+                EnclosingTriggerShapeId(par)));
         }
 
         return views;
+    }
+
+    /// <summary>The trigger shape id when the effect par lives in an interactive (onClick) p:seq, else null.</summary>
+    private static uint? EnclosingTriggerShapeId(P.ParallelTimeNode par)
+    {
+        for (OpenXmlElement? ancestor = par.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ancestor is P.SequenceTimeNode seq &&
+                seq.CommonTimeNode?.NodeType?.Value == P.TimeNodeValues.InteractiveSequence)
+            {
+                return InteractiveTriggerShapeId(seq);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Classifies a motion par's path string back to line/arc/circle/custom (best-effort for foreign decks).</summary>
@@ -1307,6 +1503,15 @@ internal static class PptxAnimations
             targetPath = exists ? Units.Inv($"/slide[{slideIndex}]/shape[@id={shapeId}]") : null;
         }
 
+        // An interactive-trigger effect surfaces the trigger shape (path + id) so
+        // read --view structure and get show what click starts it.
+        string? triggerPath = null;
+        if (view.TriggerShapeId is { } triggerId)
+        {
+            var triggerExists = PptxDoc.Shapes(slidePart).Any(s => s.Id == triggerId);
+            triggerPath = triggerExists ? Units.Inv($"/slide[{slideIndex}]/shape[@id={triggerId}]") : null;
+        }
+
         return new
         {
             Path = Units.Inv($"/slide[{slideIndex}]/animation[{view.Index}]"),
@@ -1320,6 +1525,8 @@ internal static class PptxAnimations
             Duration = view.Duration,
             Delay = view.Delay,
             Direction = view.Direction,
+            TriggerOn = triggerPath,
+            TriggerShapeId = view.TriggerShapeId,
         };
     }
 

@@ -97,7 +97,7 @@ public static class CommandSurface
                 new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject|extract, path, type?, props?, position?}]. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does not modify the source."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
-                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video). v1.2: smartart/connector/group/ungroup (pptx), tableOfFigures/indexEntry/index/mergeField (docx), formControl (xlsx)."),
+                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video). v1.2: smartart/connector/group/ungroup (pptx), tableOfFigures/indexEntry/index/mergeField (docx), formControl (xlsx). v1.4: dataTable (xlsx what-if), ifField (docx «IF» merge field), zoom (pptx slide/section/summary navigation). A dynamic-array formula on a cell (=FILTER/UNIQUE/SORT/SORTBY/SEQUENCE/RANDARRAY/TRANSPOSE) spills automatically on --set value=…; see 'aioffice help formulas'."),
                 new("remove", "<path>", "Sugar: remove the node at <path>.", Repeatable: true),
                 new("find", "<text>", "Sugar: document-wide find/replace (docx body+headers+footers, every sheet, every slide incl. notes); aggregate {replacements, locations} in the result."),
                 new("replace", "<text>", "Replacement text for --find (default: empty = delete matches); in --regex mode $1 etc. substitute groups."),
@@ -131,12 +131,13 @@ public static class CommandSurface
             "office_validate"),
 
         new("template",
-            "Merge {{key}} placeholders in text runs with JSON data.",
-            "aioffice template <file> --data <json|@file> [-o out]",
-            [new("file", true, "Template document containing {{key}} placeholders.")],
+            "Merge {{key}} placeholders (and docx MERGEFIELD / «IF» fields) in text runs with JSON data. A single JSON object fills one document; an ARRAY of records runs a mail merge (v1.4).",
+            "aioffice template <file> --data <json|@file> [-o out | --output PATTERN]",
+            [new("file", true, "Template document containing {{key}} placeholders (docx also fills MERGEFIELD / «IF» fields by name).")],
             [
-                new("data", "<json|@file>", "JSON object with the merge values."),
-                new("o", "<file>", "Write the merged document here (default: in place)."),
+                new("data", "<json|@file>", "A JSON object of merge values fills ONE document; a JSON array of record objects runs a mail merge — one merge per record (v1.4)."),
+                new("o", "<file>", "Write the merged document here (default: in place). Single-object fill, or the combined mail-merge doc when --output is omitted for an array."),
+                new("output", "<pattern>", "Mail-merge (array --data): one output document per record. {n} = 1-based record index, {Field} = that record's value, e.g. --output \"letter-{n}.docx\" or \"letters/{Name}.docx\". Every expanded path is sandbox-resolved; an escaping pattern is denied. Omit for a single combined document (one next-page section per record). See 'aioffice help mail-merge'."),
             ],
             "office_template"),
 
@@ -202,7 +203,7 @@ public static class CommandSurface
         new("help",
             "Progressive documentation: addressing grammar, selectors, per-format properties, errors.",
             "aioffice help [topic]",
-            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert, smartart, connectors, number-formats, structural-fields, chart-polish, conditional-format, themes, 3d-models, form-fields, animations (or any verb name). Omit for the index.")],
+            [new("topic", false, "One of: addressing, selectors, properties-docx, properties-xlsx, properties-pptx, errors, equations, embeds, rtl, sections, audit, diff, convert, smartart, connectors, number-formats, structural-fields, chart-polish, conditional-format, themes, 3d-models, form-fields, animations, formulas, data-tables, mail-merge, page-borders, zoom, table-styles (or any verb name). Omit for the index.")],
             [],
             "office_help"),
 
@@ -287,6 +288,7 @@ public static class GrammarPointers
                   "xlsx: /Sheet1/A1, /Sheet1/A1:C10, /Sheet1/row[3], /'Q3 Data'/B2, /Pivot/pivot[@name=SalesPivot], " +
                   "/Sheet1/conditionalFormat[1], /Sheet1/image[1], /Sheet1/slicer[1], /Sheet1/embed[1], /properties. " +
                   "pptx: /slide[2], /slide[2]/shape[3], /slide[2]/shape[3]/p[1], /slide[2]/notes, " +
+                  "/slide[2]/zoom[1], /slide[2]/animation[1], " +
                   "/slide[2]/shape[@id=9]/omath[1], /slide[2]/embed[@id=7], /properties.",
         helpTopic = "addressing",
         examples = new[]
@@ -294,7 +296,7 @@ public static class GrammarPointers
             "/body/p[3]", "/revision[@id=3]", "/comment[@id=1]", "/style[@id=Callout]",
             "/caption[@label=Figure][1]", "/body/p[3]/omath[1]", "/embed[1]", "/Sheet1/A1:C10",
             "/Pivot/pivot[@name=SalesPivot]", "/Sheet1/conditionalFormat[1]", "/Sheet1/slicer[1]",
-            "/Sheet1/embed[1]", "/slide[2]/shape[3]", "/slide[2]/notes",
+            "/Sheet1/embed[1]", "/slide[2]/shape[3]", "/slide[2]/notes", "/slide[2]/zoom[1]",
             "/slide[2]/shape[@id=9]/omath[1]", "/slide[2]/embed[@id=7]",
         },
     };

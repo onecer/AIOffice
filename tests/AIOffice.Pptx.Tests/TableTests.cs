@@ -106,7 +106,10 @@ public sealed class TableTests : IDisposable
             props: TestEnv.Props(("rows", 2), ("cols", 2), ("style", "neon")))]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Equal(["light", "medium", "dark"], error.Candidates!);
+        // The direct-paint looks plus the v1.4.0 built-in presets.
+        Assert.Equal(
+            ["light", "medium", "dark", "none", "light1", "light2", "medium1", "medium2", "medium3", "dark1", "dark2"],
+            error.Candidates!);
     }
 
     [Fact]

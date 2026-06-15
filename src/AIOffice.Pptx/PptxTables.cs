@@ -25,11 +25,40 @@ internal sealed record PptxTableLook(
 /// </summary>
 internal static class PptxTables
 {
-    /// <summary>The built-in looks add table understands.</summary>
+    /// <summary>The direct-paint looks add table understands (each painted per-cell, theme-independent).</summary>
     public static readonly IReadOnlyList<string> Styles = ["light", "medium", "dark"];
 
+    /// <summary>
+    /// The built-in PowerPoint table-style presets (v1.4.0, additive): these map to
+    /// the workbook's stock a:tableStyleId GUIDs rather than direct per-cell paint, so
+    /// PowerPoint themes the table itself. "none" clears the style id. They are accepted
+    /// on the same <c>style</c> prop as the direct-paint looks above; the token decides.
+    /// </summary>
+    public static readonly IReadOnlyList<string> StylePresets =
+        ["none", "light1", "light2", "medium1", "medium2", "medium3", "dark1", "dark2"];
+
+    /// <summary>The built-in style toggles a preset-styled table accepts (a:tblPr flags).</summary>
+    public static readonly IReadOnlyList<string> StyleOptions = ["firstRow", "lastRow", "bandRow", "firstCol"];
+
+    /// <summary>
+    /// The stock built-in table-style GUIDs PowerPoint ships, keyed by preset token. These
+    /// are the well-known ids the table-style part references; "none" has no id (it clears).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> PresetStyleIds =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["light1"] = "{9D7B26C5-4107-4FEC-AEDC-1716B250A1EF}", // Light Style 1
+            ["light2"] = "{7E9639D4-E3E2-4D34-9284-5A2195B3D0D7}", // Light Style 2 - Accent 1
+            ["medium1"] = "{3C2FFA5D-87B4-456A-9821-1D502468CF0F}", // Medium Style 1
+            ["medium2"] = "{21E4AEA4-8DFA-4A89-87EB-49C32662AFE0}", // Medium Style 2 - Accent 1
+            ["medium3"] = "{C083E6E3-FA7D-4D7B-A595-EF9225AFEA82}", // Medium Style 3
+            ["dark1"] = "{E8034E78-7F5D-4C2E-B375-FC64B27BC917}", // Dark Style 1
+            ["dark2"] = "{5940675A-B579-460E-94D1-54222C63F5DA}", // Dark Style 2
+        };
+
     private static readonly IReadOnlyList<string> AddProps =
-        ["rows", "cols", "x", "y", "w", "h", "headerRow", "style", "columnWidths", "name"];
+        ["rows", "cols", "x", "y", "w", "h", "headerRow", "style", "columnWidths", "name",
+         "firstRow", "lastRow", "bandRow", "firstCol"];
 
     private static readonly IReadOnlyList<string> CellPropKeys =
         ["text", "bold", "color", "fontSize", "align", "fill", "mergeRight", "mergeDown"];
@@ -64,15 +93,17 @@ internal static class PptxTables
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown table prop '{key}'.",
-                    "Table props: rows, cols, x, y, w, h, headerRow, style, columnWidths, name.",
+                    "Table props: rows, cols, x, y, w, h, headerRow, style, columnWidths, name, " +
+                    "firstRow, lastRow, bandRow, firstCol.",
                     candidates: AddProps);
             }
         }
 
         var rows = CountProp(props, "rows", MaxRows);
         var cols = CountProp(props, "cols", MaxCols);
-        var look = ParseStyle(props);
+        var plan = ParseStylePlan(props);
         var headerRow = props.TryGetPropertyValue("headerRow", out var headerNode) && AsBool("headerRow", headerNode);
+        var options = ParseStyleOptions(props, plan.PresetToken is not null, headerRow);
 
         var x = Length(props, "x", Units.CmToEmu(2.5));
         var y = Length(props, "y", Units.CmToEmu(2.5));
@@ -97,13 +128,16 @@ internal static class PptxTables
             grid.Append(new A.GridColumn { Width = columnWidths?[c] ?? w / cols });
         }
 
-        var table = new A.Table(BuildTableProperties(headerRow), grid);
+        var table = new A.Table(BuildTableProperties(plan.PresetId, options), grid);
         for (var r = 1; r <= rows; r++)
         {
             var row = new A.TableRow { Height = rowHeight };
             for (var c = 0; c < cols; c++)
             {
-                row.Append(BuildCell(look, headerRow, r));
+                // A built-in preset themes the table itself, so its cells stay neutral
+                // (one empty styled run, no direct fill/borders); a direct-paint look
+                // paints each cell explicitly so it survives any theme.
+                row.Append(plan.Look is { } look ? BuildCell(look, headerRow, r) : BuildNeutralCell(headerRow, r));
             }
 
             table.Append(row);
@@ -125,15 +159,50 @@ internal static class PptxTables
         return Tables(slidePart).Count;
     }
 
-    private static A.TableProperties BuildTableProperties(bool headerRow)
+    /// <summary>
+    /// The a:tblPr for a new table: a direct-paint look records only headerRow as the
+    /// FirstRow flag (the paint carries the look); a built-in preset records its
+    /// a:tableStyleId GUID plus the requested first/last/band/firstCol flags. "none"
+    /// keeps the flags but writes no style id.
+    /// </summary>
+    private static A.TableProperties BuildTableProperties(string? presetId, StyleOptionFlags options)
     {
         var properties = new A.TableProperties();
-        if (headerRow)
+        ApplyStyleFlags(properties, options);
+        if (presetId is not null)
         {
-            properties.FirstRow = true;
+            // The a:tableStyleId is a child element (it must follow the flag attributes,
+            // which the SDK orders for us).
+            properties.Append(new A.TableStyleId(presetId));
         }
 
         return properties;
+    }
+
+    /// <summary>Writes the first/last/band/firstCol flags onto an a:tblPr (only the true ones).</summary>
+    private static void ApplyStyleFlags(A.TableProperties properties, StyleOptionFlags options)
+    {
+        properties.FirstRow = options.FirstRow ? true : null;
+        properties.LastRow = options.LastRow ? true : null;
+        properties.BandRow = options.BandRow ? true : null;
+        properties.FirstColumn = options.FirstCol ? true : null;
+    }
+
+    /// <summary>One neutral cell for a preset-styled table: a styled empty run, no direct fill or borders.</summary>
+    private static A.TableCell BuildNeutralCell(bool headerRow, int rowIndex)
+    {
+        var runProperties = new A.RunProperties { Language = "en-US" };
+        if (headerRow && rowIndex == 1)
+        {
+            runProperties.Bold = true;
+        }
+
+        return new A.TableCell(
+            new A.TextBody(
+                new A.BodyProperties(),
+                new A.ListStyle(),
+                new A.Paragraph(new A.Run(runProperties, new A.Text(string.Empty)))),
+            new A.TableCellProperties());
     }
 
     /// <summary>One cell painted per the look: explicit borders + solid fill + a styled empty run.</summary>
@@ -170,24 +239,82 @@ internal static class PptxTables
                 new A.SolidFill(new A.RgbColorModelHex { Val = fill })));
     }
 
-    private static PptxTableLook ParseStyle(JsonObject props)
+    /// <summary>
+    /// The chosen styling: either a direct-paint <see cref="Look"/> (light/medium/dark)
+    /// or a built-in <see cref="PresetId"/> (the a:tableStyleId GUID; null for the "none"
+    /// preset, which still takes flags). Exactly one of Look/PresetToken is set.
+    /// </summary>
+    private sealed record StylePlan(PptxTableLook? Look, string? PresetToken, string? PresetId);
+
+    private readonly record struct StyleOptionFlags(bool FirstRow, bool LastRow, bool BandRow, bool FirstCol);
+
+    /// <summary>
+    /// Resolves props.style into a styling plan. A direct-paint look (light/medium/dark, the
+    /// default) paints each cell; a built-in preset (none/light1/.../dark2) writes an
+    /// a:tableStyleId and leaves the cells neutral for PowerPoint to theme.
+    /// </summary>
+    private static StylePlan ParseStylePlan(JsonObject props)
     {
         if (!props.TryGetPropertyValue("style", out var node) || node is null)
         {
-            return Looks["light"];
+            return new StylePlan(Looks["light"], null, null);
         }
 
-        var token = J.ScalarText(node).Trim().ToLowerInvariant();
+        var raw = J.ScalarText(node).Trim();
+        var token = raw.ToLowerInvariant();
         if (Looks.TryGetValue(token, out var look))
         {
-            return look;
+            return new StylePlan(look, null, null);
+        }
+
+        if (StylePresets.Contains(token, StringComparer.Ordinal))
+        {
+            // "none" keeps the flags but writes no style id; every other preset maps to a GUID.
+            return new StylePlan(null, token, token == "none" ? null : PresetStyleIds[token]);
         }
 
         throw new AiofficeException(
             ErrorCodes.UnsupportedFeature,
-            $"Table style '{token}' is not supported.",
-            "Built-in table styles: light, medium, dark. Pick the closest one and restyle cells via fill/color sets.",
-            candidates: Styles);
+            $"Table style '{raw}' is not supported.",
+            "Direct-paint looks: light, medium, dark. Built-in presets (a:tableStyleId): " +
+            "none, light1, light2, medium1, medium2, medium3, dark1, dark2.",
+            candidates: [.. Styles, .. StylePresets]);
+    }
+
+    /// <summary>
+    /// Reads the first/last/band/firstCol style toggles. They only apply to a built-in preset
+    /// (direct-paint looks carry their own banding); on a direct-paint look they are rejected.
+    /// With a preset and no explicit flags, headerRow seeds FirstRow so the header still reads.
+    /// </summary>
+    private static StyleOptionFlags ParseStyleOptions(JsonObject props, bool isPreset, bool headerRow)
+    {
+        var anyFlag = StyleOptions.Any(props.ContainsKey);
+        if (!isPreset)
+        {
+            if (anyFlag)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "firstRow/lastRow/bandRow/firstCol apply only to a built-in table preset.",
+                    "Pass a preset style (e.g. {\"style\":\"medium2\",\"bandRow\":true}); the direct-paint " +
+                    "looks (light/medium/dark) already band their rows.",
+                    candidates: StyleOptions);
+            }
+
+            // A direct-paint look still records headerRow as the FirstRow flag (the paint
+            // carries the look; the flag keeps get/structure and the existing contract honest).
+            return new StyleOptionFlags(FirstRow: headerRow, LastRow: false, BandRow: false, FirstCol: false);
+        }
+
+        bool Flag(string key, bool fallback) =>
+            props.TryGetPropertyValue(key, out var node) ? AsBool(key, node) : fallback;
+
+        // Default the header band on when headerRow was asked for; the rest default off.
+        return new StyleOptionFlags(
+            FirstRow: Flag("firstRow", headerRow),
+            LastRow: Flag("lastRow", false),
+            BandRow: Flag("bandRow", false),
+            FirstCol: Flag("firstCol", false));
     }
 
     private static int CountProp(JsonObject props, string key, int max)
@@ -384,19 +511,33 @@ internal static class PptxTables
                 "(columnWidths); use add/remove with type row to restructure.");
         }
 
+        // style/firstRow/lastRow/bandRow/firstCol restyle the a:tblPr (a built-in preset);
+        // they are applied together after validating the whole batch.
+        var hasStyle = props.ContainsKey("style");
+        var hasFlag = StyleOptions.Any(props.ContainsKey);
         foreach (var (key, value) in props)
         {
-            if (key != "columnWidths")
+            switch (key)
             {
-                throw new AiofficeException(
-                    ErrorCodes.InvalidArgs,
-                    $"Prop '{key}' does not apply to a table.",
-                    "Table sets take columnWidths; position/size/name sets target its shape path (" +
-                    view.CanonicalPath(address.SlideIndex) + "); text/fill target cells.",
-                    candidates: ["columnWidths"]);
+                case "columnWidths":
+                    SetColumnWidths(table, view, value);
+                    break;
+                case "style" or "firstRow" or "lastRow" or "bandRow" or "firstCol":
+                    break; // handled below, once
+                default:
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Prop '{key}' does not apply to a table.",
+                        "Table sets take columnWidths and style (a built-in preset, with firstRow/lastRow/bandRow/firstCol " +
+                        "toggles); position/size/name sets target its shape path (" +
+                        view.CanonicalPath(address.SlideIndex) + "); text/fill target cells.",
+                        candidates: ["columnWidths", "style", .. StyleOptions]);
             }
+        }
 
-            SetColumnWidths(table, view, value);
+        if (hasStyle || hasFlag)
+        {
+            RestyleTable(table, props, hasStyle, hasFlag);
         }
 
         if (props.Count == 0)
@@ -404,10 +545,71 @@ internal static class PptxTables
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"set on '{address.Raw}' has no props.",
-                "Pass {\"columnWidths\":[\"8cm\",\"5cm\"]} on the table, or target a cell for text/fill.");
+                "Pass {\"columnWidths\":[\"8cm\",\"5cm\"]} or {\"style\":\"medium2\"} on the table, or target a cell for text/fill.");
         }
 
         return address.CanonicalTablePath;
+    }
+
+    /// <summary>
+    /// Restyles an existing table's a:tblPr in place: a new built-in preset rewrites its
+    /// a:tableStyleId ("none" clears it), and the first/last/band/firstCol toggles update the
+    /// flags. Only a built-in preset may carry the toggles — direct-paint looks are rejected
+    /// (their banding is painted, not flagged). The cells keep their content.
+    /// </summary>
+    private static void RestyleTable(A.Table table, JsonObject props, bool hasStyle, bool hasFlag)
+    {
+        var properties = table.TableProperties ??= new A.TableProperties();
+
+        string? presetToken = null;
+        if (hasStyle)
+        {
+            var raw = props["style"] is { } node ? J.ScalarText(node).Trim() : string.Empty;
+            var token = raw.ToLowerInvariant();
+            if (!StylePresets.Contains(token, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    Looks.ContainsKey(token)
+                        ? $"Table style '{raw}' is a direct-paint look — it can be set only when adding a table."
+                        : $"Table style '{raw}' is not supported.",
+                    "set style takes a built-in preset (a:tableStyleId): none, light1, light2, medium1, medium2, " +
+                    "medium3, dark1, dark2. Re-add the table to switch to a direct-paint look (light/medium/dark).",
+                    candidates: StylePresets);
+            }
+
+            presetToken = token;
+            foreach (var id in properties.Elements<A.TableStyleId>().ToList())
+            {
+                id.Remove();
+            }
+
+            if (token != "none")
+            {
+                properties.Append(new A.TableStyleId(PresetStyleIds[token]));
+            }
+        }
+        else if (properties.GetFirstChild<A.TableStyleId>() is null)
+        {
+            // Flags alone require a preset table; without an a:tableStyleId there is no
+            // built-in style for them to drive.
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "firstRow/lastRow/bandRow/firstCol need a built-in table preset.",
+                "Set a preset first (e.g. {\"style\":\"medium2\"}); a direct-paint table (light/medium/dark) " +
+                "bands its rows by paint, not flags.");
+        }
+
+        if (hasFlag)
+        {
+            bool Flag(string key, bool current) =>
+                props.TryGetPropertyValue(key, out var node) ? AsBool(key, node) : current;
+            ApplyStyleFlags(properties, new StyleOptionFlags(
+                FirstRow: Flag("firstRow", properties.FirstRow?.Value ?? false),
+                LastRow: Flag("lastRow", properties.LastRow?.Value ?? false),
+                BandRow: Flag("bandRow", properties.BandRow?.Value ?? false),
+                FirstCol: Flag("firstCol", properties.FirstColumn?.Value ?? false)));
+        }
     }
 
     /// <summary>Rewrites the grid column widths (and keeps the frame width in sync).</summary>
@@ -905,6 +1107,8 @@ internal static class PptxTables
             Rows = rows.Count,
             Cols = columns.Count,
             HeaderRow = table.TableProperties?.FirstRow?.Value == true,
+            Style = StyleTokenOf(table),
+            StyleOptions = StyleOptionsOf(table),
             ColumnWidths = columns.Select(c => Units.EmuToCm(c.Width?.Value ?? 0)).ToList(),
             RowHeights = rows.Select(r => Units.EmuToCm(r.Height?.Value ?? 0)).ToList(),
             X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
@@ -919,6 +1123,56 @@ internal static class PptxTables
                     .Select((cell, c) => CellProjection(cell, tablePath, r + 1, c + 1, table))
                     .ToList(),
             }).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// The built-in preset token a table carries (none/light1/.../dark2), or null when it
+    /// is a direct-paint look (no a:tableStyleId) or carries an unrecognized GUID.
+    /// </summary>
+    private static string? StyleTokenOf(A.Table table)
+    {
+        var id = table.TableProperties?.GetFirstChild<A.TableStyleId>()?.Text;
+        if (id is null)
+        {
+            return null;
+        }
+
+        foreach (var (token, guid) in PresetStyleIds)
+        {
+            if (string.Equals(id, guid, StringComparison.OrdinalIgnoreCase))
+            {
+                return token;
+            }
+        }
+
+        return null; // a foreign/custom table style GUID: truthfully not one of our presets
+    }
+
+    /// <summary>The a:tblPr first/last/band/firstCol flags as a small object, or null when all are off.</summary>
+    private static object? StyleOptionsOf(A.Table table)
+    {
+        var properties = table.TableProperties;
+        if (properties is null)
+        {
+            return null;
+        }
+
+        var firstRow = properties.FirstRow?.Value == true;
+        var lastRow = properties.LastRow?.Value == true;
+        var bandRow = properties.BandRow?.Value == true;
+        var firstCol = properties.FirstColumn?.Value == true;
+        if (!firstRow && !lastRow && !bandRow && !firstCol)
+        {
+            return null;
+        }
+
+        return new
+        {
+            FirstRow = firstRow ? true : (bool?)null,
+            LastRow = lastRow ? true : (bool?)null,
+            BandRow = bandRow ? true : (bool?)null,
+            FirstCol = firstCol ? true : (bool?)null,
         };
     }
 

@@ -71,8 +71,11 @@ public sealed class EditTests : ExcelTestBase
     {
         var file = CreateWorkbook();
 
-        // SEQUENCE is a dynamic-array function ClosedXML's engine cannot evaluate.
-        var envelope = EditOps(file, SetOp("/Sheet1/C1", ("value", "=SEQUENCE(3)")));
+        // XLOOKUP is a modern function ClosedXML's engine cannot evaluate and
+        // aioffice does not special-case; it rides the honest formula_not_evaluated
+        // path. (SEQUENCE and the other dynamic arrays are now EVALUATED — see the
+        // DynamicArrayTests — so they no longer warn.)
+        var envelope = EditOps(file, SetOp("/Sheet1/C1", ("value", "=XLOOKUP(1,A1:A3,B1:B3)")));
 
         Assert.True(envelope.IsOk, envelope.ToJson()); // the edit itself succeeds
         var warning = Assert.Single(envelope.Meta.Warnings!);
@@ -83,7 +86,7 @@ public sealed class EditTests : ExcelTestBase
         // value is stripped so Excel recalculates the cell on open.
         var raw = RawCell(file, "Sheet1", "C1");
         Assert.NotNull(raw.Formula);
-        Assert.Contains("SEQUENCE", raw.Formula, StringComparison.Ordinal);
+        Assert.Contains("XLOOKUP", raw.Formula, StringComparison.Ordinal);
         Assert.Null(raw.CachedValue);
         AssertValidatorClean(file);
     }

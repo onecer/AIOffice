@@ -49,6 +49,16 @@ public sealed partial class WordHandler
                     MetaFor(file, Rev.OfBytes(bytes)));
             }
 
+            // IF merge fields use an /ifField[@field=X] virtual path (v1.4.0),
+            // addressed by the field their condition tests, like merge fields.
+            if (pathArg.StartsWith("/ifField[", StringComparison.Ordinal))
+            {
+                var (ifFieldPath, ifFieldProps) = GetIfFieldProperties(doc, pathArg);
+                return Envelope.Ok(
+                    new { path = ifFieldPath, type = "ifField", properties = ifFieldProps },
+                    MetaFor(file, Rev.OfBytes(bytes)));
+            }
+
             // Legacy form fields use a /formField[@name=X] virtual path (v1.3.0).
             if (pathArg.StartsWith("/formField[", StringComparison.Ordinal))
             {

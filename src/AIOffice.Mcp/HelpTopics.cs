@@ -78,7 +78,13 @@ public static class HelpTopics
                 - themes          edit /theme color + font scheme (docx) (1.3)
                 - 3d-models       embed a .glb/.gltf 3D model on a slide (1.3)
                 - form-fields     docx legacy text/checkbox/dropdown form fields (1.3)
-                - animations      pptx animations incl. the motionPath effect (1.3)
+                - animations      pptx animations incl. motionPath (1.3) + triggerOn click triggers (1.4)
+                - formulas        xlsx dynamic-array spill (FILTER/UNIQUE/SORT/…) + financial functions, now EVALUATED (1.4)
+                - data-tables     xlsx what-if data tables: add type "dataTable" (1.4)
+                - mail-merge      office_template with an array data → one doc per record / a combined doc (1.4)
+                - page-borders    docx page borders + «IF» merge fields: add type "ifField" (1.4)
+                - zoom            pptx slide/section/summary zoom navigation: add type "zoom" (1.4)
+                - table-styles    pptx built-in table styles + banded rows on add type "table" (1.4)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
@@ -848,13 +854,77 @@ public static class HelpTopics
 
             ["animations"] = (
                 """
-                ## pptx animations (motion paths 1.3) — add type "animation" on /slide[i]/shape[@id=N]
-                {"op":"add","path":"/slide[1]/shape[@id=5]","type":"animation","props":{"effect":…,"trigger"?,"duration"?,"delay"?,"direction"?,"color"?}}
+                ## pptx animations (motion paths 1.3, click triggers 1.4) — add type "animation" on /slide[i]/shape[@id=N]
+                {"op":"add","path":"/slide[1]/shape[@id=5]","type":"animation","props":{"effect":…,"trigger"?,"duration"?,"delay"?,"direction"?,"color"?,"triggerOn"?}}
                 entrance appear|fade|flyIn|wipe · emphasis pulse|grow|spin|colorPulse · exit fadeOut|flyOut|wipeOut
                 1.3 motion: effect "motionPath", path line|arc|circle|custom; custom takes a points[] of normalized [x,y] pairs; direction orients line/arc.
-                trigger click(default)|afterPrevious|withPrevious. read {view:"structure"} lists each animation (incl. motionPath). set /slide[i]/animation[k] retimes; move reorders.
+                1.4 click trigger: triggerOn:"@N" plays the effect when ANOTHER shape (stable id N) is clicked — it joins N's interactive onClick seq, not the main click sequence. N must be a different shape on the slide; a bad id is invalid_path.
+                trigger click(default)|afterPrevious|withPrevious. read {view:"structure"} lists each animation (incl. motionPath + triggerOn). set /slide[i]/animation[k] retimes; move reorders.
                 """,
                 ["pptx/animation", "pptx/shape", "edit-ops"]),
+
+            ["formulas"] = (
+                """
+                ## formulas (1.4) — dynamic-array spill + financial evaluation (xlsx); set a cell value=<formula>
+                Dynamic arrays (EVALUATED + SPILLED 1.4): =FILTER, =UNIQUE, =SORT, =SORTBY, =SEQUENCE, =RANDARRAY, =TRANSPOSE.
+                  Anchor carries the array formula; every cell of the result rectangle carries its cached value; Excel re-spills on open.
+                  {"op":"set","path":"/Sheet1/D1","props":{"value":"=UNIQUE(A1:A20)"}}  -> spills distinct values; get D1 shows the spill range.
+                  spill_blocked (1.4 error): result rectangle would overwrite a non-empty cell -> nothing written; clear the named range first.
+                Financial (EVALUATED 1.4): RATE, IRR, XIRR, NPV, PV, FV, PMT, NPER -> the cell carries a cached numeric value (iterative ones converge).
+                Backward-compatible: these no longer raise formula_not_evaluated — cells that used to warn now carry a cached value; an agent that handled the warning still works.
+                """,
+                ["xlsx/cell", "data-tables", "errors"]),
+
+            ["data-tables"] = (
+                """
+                ## data-tables (1.4) — what-if data table (xlsx); add type "dataTable" over a range
+                {"op":"add","path":"/Sheet1/A1:B6","type":"dataTable","props":{"colInput":"$C$1"}}  // one-variable column table
+                {"op":"add","path":"/Sheet1/A1:E6","type":"dataTable","props":{"rowInput":"$C$1","colInput":"$C$2"}}  // two-variable
+                The corner cell (top-left of the range) must already hold the formula to analyze; row/column inputs feed the {rowInput,colInput} cells.
+                Body cells carry cached results (a recalc per probe); Excel keeps the live {=TABLE(...)} array on open. read {view:"structure"} lists them; remove /Sheet1/dataTable[k].
+                """,
+                ["formulas", "xlsx/cell", "edit-ops"]),
+
+            ["mail-merge"] = (
+                """
+                ## mail-merge (1.4) — office_template with an ARRAY data (docx); SAME tool, additive behavior
+                Object data fills ONE doc (unchanged). ARRAY data [{...},{...}] runs a merge — one record at a time.
+                With output: one document per record. output is a PATTERN — {n}=1-based index, {Field}=record value, e.g. "letters/letter-{n}.docx".
+                  Every expanded path is sandbox-resolved (an escaping pattern -> sandbox_denied); a duplicate path -> invalid_args. Result {records, produced:[paths], unresolved}.
+                Without output: ONE combined document (source body repeated per record, next-page section breaks), written back with an auto-snapshot.
+                Each record fills {{key}}, MERGEFIELD-by-name, and «IF» fields; unresolved fields raise one template_unresolved warning. Single-object fill returns {replaced,keys,unresolved,written} as before.
+                """,
+                ["office_template", "page-borders", "edit-ops"]),
+
+            ["page-borders"] = (
+                """
+                ## page-borders + IF fields (1.4, docx)
+                Page border (set on a section): {"op":"set","path":"/section[1]","props":{"pageBorder":{"style":"single","color":"38BDF8","widthPt":1.5,"sides":"all"}}}
+                  style single|double|thick|dashed|dotted|wave; color hex (default auto); widthPt > 0 (default 0.5); sides all|top|bottom|left|right. "none" removes it. get /section[i] reads it back.
+                IF field (add): {"op":"add","path":"/body/p[2]","type":"ifField","props":{"field":"Country","operator":"=","value":"US","trueText":"Domestic","falseText":"International"}}
+                  operator = | <> | > | < | >= | <= (default =). Resolved per record during template/mail-merge from the record's value for field. get reads field/operator/value/trueText/falseText.
+                """,
+                ["docx/section", "mail-merge", "edit-ops"]),
+
+            ["zoom"] = (
+                """
+                ## zoom (1.4) — slide/section/summary navigation (pptx); add type "zoom" on a slide path -> /slide[i]/zoom[k]
+                {"op":"add","path":"/slide[1]","type":"zoom","props":{"kind":"slide","target":"slide3","x":"2cm","y":"2cm"}}
+                kind slide|section|summary. target: slide zoom = slide index/"slide3"; section zoom = the section name; summary = one frame per section.
+                x/y/w/h position+size (lengths, defaults sensible); name optional. Target slide(s) referenced by a real relationship so PowerPoint navigates. get /slide[i]/zoom[k] reports kind+target; read {view:"structure"} lists zooms.
+                kind/target are immutable in place — remove + re-add to retarget. validate clean for every kind.
+                """,
+                ["pptx/slide", "pptx/section", "edit-ops"]),
+
+            ["table-styles"] = (
+                """
+                ## table-styles (1.4) — built-in table look + banding (pptx); props on add type "table"
+                {"op":"add","path":"/slide[2]","type":"table","props":{"rows":"4","cols":"3","style":"medium2","firstRow":"true","bandRow":"true"}}
+                style: none | light1|light2 | medium1|medium2|medium3 | dark1|dark2 (maps to PowerPoint's built-in a:tableStyleId GUIDs).
+                option flags: firstRow (header), lastRow (total), bandRow (banded rows), firstCol. headerRow:"true" is a shortcut for firstRow.
+                Every style+option combo validates clean; read {view:"structure"} / get /slide[i]/table[k] report the style + flags.
+                """,
+                ["pptx/table", "edit-ops"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

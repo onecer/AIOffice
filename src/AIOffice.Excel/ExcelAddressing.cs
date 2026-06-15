@@ -24,6 +24,7 @@ internal enum ExcelTargetKind
     Slicer,
     Embed,
     FormControl,
+    DataTable,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -83,6 +84,9 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based per-sheet form-control index when <see cref="Kind"/> is FormControl.</summary>
     public int? FormControlIndex { get; init; }
+
+    /// <summary>1-based per-sheet data-table index when <see cref="Kind"/> is DataTable (1.4).</summary>
+    public int? DataTableIndex { get; init; }
 }
 
 /// <summary>
@@ -339,6 +343,16 @@ internal static partial class ExcelPaths
                     FormControlIndex = formControlIndex,
                 };
 
+            case PathSegmentKind.Element when
+                string.Equals(segment.Name, "dataTable", StringComparison.OrdinalIgnoreCase) &&
+                segment.Index is { } dataTableIndex:
+                return new ExcelTarget
+                {
+                    Kind = ExcelTargetKind.DataTable,
+                    Sheet = sheet,
+                    DataTableIndex = dataTableIndex,
+                };
+
             default:
                 throw new AiofficeException(
                     ErrorCodes.InvalidPath,
@@ -379,6 +393,9 @@ internal static partial class ExcelPaths
 
     public static string FormControlPath(IXLWorksheet sheet, int index) =>
         string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/formControl[{index}]");
+
+    public static string DataTablePath(IXLWorksheet sheet, int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"{SheetPath(sheet)}/dataTable[{index}]");
 
     /// <summary>The canonical column path aioffice emits: <c>/Sheet1/col[C]</c> (letter form).</summary>
     public static string ColumnPath(IXLWorksheet sheet, int columnNumber) =>
