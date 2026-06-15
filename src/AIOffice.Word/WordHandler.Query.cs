@@ -233,6 +233,14 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "buildingBlock":
+                {
+                    var (bbPath, bbProps) = GetBuildingBlockProperties(doc, pathArg);
+                    return Envelope.Ok(
+                        new { path = bbPath, type = "buildingBlock", properties = bbProps },
+                        meta);
+                }
+
                 default:
                     break;
             }

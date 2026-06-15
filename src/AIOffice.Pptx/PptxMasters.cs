@@ -194,13 +194,14 @@ internal static class PptxMasters
         props ??= [];
         foreach (var (key, _) in props)
         {
-            if (key is not ("name" or "basedOn"))
+            if (key is not ("name" or "basedOn" or "placeholders"))
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown add-layout prop '{key}'.",
-                    "add layout takes name (the layout's display name) and basedOn (a 1-based layout index to clone).",
-                    candidates: ["name", "basedOn"]);
+                    "add layout takes name (the layout's display name), basedOn (a 1-based layout index to clone) " +
+                    "and placeholders (a list of {type,x,y,w,h} placeholder shapes for a fresh layout).",
+                    candidates: ["name", "basedOn", "placeholders"]);
             }
         }
 
@@ -211,17 +212,39 @@ internal static class PptxMasters
             throw Corrupt("the master has no layouts to clone from");
         }
 
-        var source = ResolveBasedOn(masterPart, address.MasterIndex, layouts, props);
-        var clonedXml = (P.SlideLayout)source.SlideLayout!.CloneNode(true);
+        var hasPlaceholders = props.TryGetPropertyValue("placeholders", out var placeholdersNode) && placeholdersNode is not null;
+        P.SlideLayout newLayoutXml;
+        if (hasPlaceholders)
+        {
+            // A fresh custom layout: an empty shape tree carrying just the specified
+            // placeholder shapes (basedOn may not be combined — the placeholders ARE
+            // the layout's content).
+            if (props.ContainsKey("basedOn"))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "add layout cannot combine basedOn with placeholders.",
+                    "Use basedOn to clone an existing layout, OR placeholders to build a fresh one — not both.");
+            }
+
+            newLayoutXml = BuildCustomLayout(placeholdersNode!);
+        }
+        else
+        {
+            var source = ResolveBasedOn(masterPart, address.MasterIndex, layouts, props);
+            newLayoutXml = (P.SlideLayout)source.SlideLayout!.CloneNode(true);
+        }
 
         if (props.TryGetPropertyValue("name", out var nameNode) && nameNode is not null)
         {
-            (clonedXml.CommonSlideData ??= new P.CommonSlideData(PptxFactory.EmptyShapeTree())).Name =
+            (newLayoutXml.CommonSlideData ??= new P.CommonSlideData(PptxFactory.EmptyShapeTree())).Name =
                 J.ScalarText(nameNode);
         }
 
+        RejectDuplicateLayoutName(layouts, newLayoutXml.CommonSlideData?.Name?.Value);
+
         var newLayout = masterPart.AddNewPart<SlideLayoutPart>();
-        newLayout.SlideLayout = clonedXml;
+        newLayout.SlideLayout = newLayoutXml;
         newLayout.AddPart(masterPart); // a layout must reference its master
 
         var idList = masterPart.SlideMaster!.SlideLayoutIdList
@@ -386,6 +409,141 @@ internal static class PptxMasters
             PptxDoc.RequireShapeTree(masterPart),
             address.CanonicalMasterPath,
             Units.Inv($"on master {address.MasterIndex}"));
+    }
+
+    /// <summary>The placeholder types a custom layout can declare, mapped to their OOXML ph type + idx base.</summary>
+    private static readonly IReadOnlyDictionary<string, P.PlaceholderValues> PlaceholderTypes =
+        new Dictionary<string, P.PlaceholderValues>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["title"] = P.PlaceholderValues.Title,
+            ["body"] = P.PlaceholderValues.Body,
+            ["pic"] = P.PlaceholderValues.Picture,
+            ["picture"] = P.PlaceholderValues.Picture,
+            ["chart"] = P.PlaceholderValues.Chart,
+            ["table"] = P.PlaceholderValues.Table,
+        };
+
+    /// <summary>
+    /// Builds a fresh custom slide layout from a placeholders list. Each entry is a
+    /// {type,x,y,w,h} placeholder shape with the correct ph type and a unique idx
+    /// (the title placeholder has no idx; the rest get 1,2,3,…). The layout type is
+    /// "custom".
+    /// </summary>
+    private static P.SlideLayout BuildCustomLayout(JsonNode placeholdersNode)
+    {
+        if (placeholdersNode is not JsonArray placeholders || placeholders.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "props.placeholders must be a non-empty array of {type,x,y,w,h} objects.",
+                "Pass placeholders like " +
+                "[{\"type\":\"title\",\"x\":\"2cm\",\"y\":\"1cm\",\"w\":\"28cm\",\"h\":\"3cm\"}," +
+                "{\"type\":\"body\",\"x\":\"2cm\",\"y\":\"5cm\",\"w\":\"28cm\",\"h\":\"12cm\"}].");
+        }
+
+        var tree = PptxFactory.EmptyShapeTree();
+        uint shapeId = 2; // id 1 is the root group
+        uint nextIdx = 1; // non-title placeholders need a unique idx
+        var seenTitle = false;
+
+        foreach (var entry in placeholders)
+        {
+            if (entry is not JsonObject placeholder)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "Each placeholder must be a {type,x,y,w,h} object.",
+                    "See 'aioffice help' for the layout placeholder shape.");
+            }
+
+            var typeText = placeholder.TryGetPropertyValue("type", out var typeNode) && typeNode is not null
+                ? J.ScalarText(typeNode).Trim()
+                : string.Empty;
+            if (!PlaceholderTypes.TryGetValue(typeText, out var phType))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    $"Placeholder type '{(typeText.Length == 0 ? "(none)" : typeText)}' is not supported.",
+                    "Supported placeholder types: title, body, pic, chart, table.",
+                    candidates: ["title", "body", "pic", "chart", "table"]);
+            }
+
+            foreach (var (key, _) in placeholder)
+            {
+                if (key is not ("type" or "x" or "y" or "w" or "h" or "name"))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown placeholder prop '{key}'.",
+                        "A layout placeholder takes type, x, y, w, h and name.",
+                        candidates: ["type", "x", "y", "w", "h", "name"]);
+                }
+            }
+
+            var isTitle = phType == P.PlaceholderValues.Title;
+            if (isTitle && seenTitle)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "A layout can declare at most one title placeholder.",
+                    "Drop the extra title, or make it a body placeholder.");
+            }
+
+            seenTitle |= isTitle;
+
+            var x = placeholder.TryGetPropertyValue("x", out var xNode) ? Units.ParseLengthEmu("x", xNode) : Units.CmToEmu(2);
+            var y = placeholder.TryGetPropertyValue("y", out var yNode) ? Units.ParseLengthEmu("y", yNode) : Units.CmToEmu(2);
+            var w = placeholder.TryGetPropertyValue("w", out var wNode) ? Units.ParseLengthEmu("w", wNode) : Units.CmToEmu(10);
+            var h = placeholder.TryGetPropertyValue("h", out var hNode) ? Units.ParseLengthEmu("h", hNode) : Units.CmToEmu(3);
+            var name = placeholder.TryGetPropertyValue("name", out var nameNode) && nameNode is not null && J.ScalarText(nameNode).Trim().Length > 0
+                ? J.ScalarText(nameNode).Trim()
+                : Units.Inv($"{char.ToUpperInvariant(typeText[0])}{typeText[1..]} Placeholder {shapeId}");
+
+            var ph = new P.PlaceholderShape { Type = phType };
+            if (!isTitle)
+            {
+                ph.Index = nextIdx++;
+            }
+
+            tree.Append(new P.Shape(
+                new P.NonVisualShapeProperties(
+                    new P.NonVisualDrawingProperties { Id = shapeId, Name = name },
+                    new P.NonVisualShapeDrawingProperties(new A.ShapeLocks { NoGrouping = true }),
+                    new P.ApplicationNonVisualDrawingProperties(ph)),
+                new P.ShapeProperties(
+                    new A.Transform2D(new A.Offset { X = x, Y = y }, new A.Extents { Cx = w, Cy = h }),
+                    new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle }),
+                new P.TextBody(new A.BodyProperties(), new A.ListStyle(), new A.Paragraph(new A.EndParagraphRunProperties()))));
+
+            shapeId++;
+        }
+
+        return new P.SlideLayout(
+            new P.CommonSlideData(tree),
+            new P.ColorMapOverride(new A.MasterColorMapping()))
+        {
+            Type = P.SlideLayoutValues.Custom,
+        };
+    }
+
+    /// <summary>Rejects a layout add when its name already exists on the master (names address layouts).</summary>
+    private static void RejectDuplicateLayoutName(List<(int Index, SlideLayoutPart Part)> layouts, string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        foreach (var (_, layoutPart) in layouts)
+        {
+            if (string.Equals(PptxDoc.LayoutName(layoutPart), name, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"A layout named '{name}' already exists on this master.",
+                    "Pick a different name; layout names address layouts (/master[m]/layout[@name=...]).");
+            }
+        }
     }
 
     private static uint NextLayoutId(P.SlideLayoutIdList idList)

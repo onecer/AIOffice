@@ -181,6 +181,46 @@ internal static class TestImages
     }
 }
 
+/// <summary>Generates small font byte payloads for embedded-font tests.</summary>
+internal static class TestFonts
+{
+    /// <summary>
+    /// A small TrueType-flavoured payload: the sfnt version tag (0x00010000) plus
+    /// some filler. The bytes round-trip verbatim through the font part; the
+    /// validator never inspects the glyph tables.
+    /// </summary>
+    public static byte[] Ttf(int filler = 64)
+    {
+        var bytes = new byte[4 + filler];
+        bytes[0] = 0x00;
+        bytes[1] = 0x01;
+        bytes[2] = 0x00;
+        bytes[3] = 0x00; // sfnt version 1.0
+        for (var i = 4; i < bytes.Length; i++)
+        {
+            bytes[i] = (byte)(i & 0xFF);
+        }
+
+        return bytes;
+    }
+
+    /// <summary>A small OpenType-flavoured payload: the "OTTO" sfnt tag plus filler.</summary>
+    public static byte[] Otf(int filler = 64)
+    {
+        var bytes = new byte[4 + filler];
+        bytes[0] = (byte)'O';
+        bytes[1] = (byte)'T';
+        bytes[2] = (byte)'T';
+        bytes[3] = (byte)'O';
+        for (var i = 4; i < bytes.Length; i++)
+        {
+            bytes[i] = (byte)((i * 7) & 0xFF);
+        }
+
+        return bytes;
+    }
+}
+
 /// <summary>Generates small but well-formed 3D-model files for model3d tests.</summary>
 internal static class TestModels
 {

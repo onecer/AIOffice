@@ -279,6 +279,9 @@ public sealed partial class WordHandler
         var formFields = FormFieldsView(doc);
         var theme = doc.MainDocumentPart?.ThemePart is not null ? GetThemeProperties(doc) : null;
 
+        // v1.5.0: reusable building blocks stored in the glossary part.
+        var buildingBlocks = BuildingBlocksStructure(doc);
+
         return new
         {
             view = "structure",
@@ -298,6 +301,7 @@ public sealed partial class WordHandler
             shapes = shapes.Count > 0 ? shapes : null,
             textBoxes = textBoxes.Count > 0 ? textBoxes : null,
             formFields = formFields.Count > 0 ? formFields : null,
+            buildingBlocks = buildingBlocks.Count > 0 ? buildingBlocks : null,
             theme,
             sections = SectionsStructure(body),
         };

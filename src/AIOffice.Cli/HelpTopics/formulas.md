@@ -1,6 +1,6 @@
-# formulas — dynamic arrays + financial functions (xlsx, 1.4)
+# formulas — dynamic arrays + scalar + financial functions (xlsx, 1.4/1.5)
 
-Set a cell's `value` to a formula and aioffice evaluates two families that the
+Set a cell's `value` to a formula and aioffice evaluates three families that the
 underlying engine cannot, writing the cached result(s) back into the saved file.
 
 ## dynamic arrays (spill)
@@ -30,6 +30,34 @@ are not supported.
   non-empty cell, nothing is written — clear the target range first, then set the
   formula. The suggestion names the exact range to clear.
 
+`=TEXTSPLIT(text, col_delim, [row_delim], …)` joins this family in 1.5: it splits
+text into a spilled array (1-D by the column delimiter, 2-D with a row delimiter);
+the text and delimiters may be string literals or cell references.
+
+## scalar functions (1.5)
+
+`=XLOOKUP`, `=IFS`, `=SWITCH`, `=LET`, `=MAXIFS`, `=MINIFS` and `=AVERAGEIFS` —
+which the base engine returns `#NAME?` for — are now **evaluated** at write time
+and the cached scalar value is written, so headless readers see a real result with
+no `formula_not_evaluated` warning.
+
+```jsonc
+{op:"set", path:"/Sheet1/D2", props:{value:"=XLOOKUP(\"Widget\",A1:A20,B1:B20)"}} // exact match (default)
+{op:"set", path:"/Sheet1/D3", props:{value:"=IFS(A1>90,\"A\",A1>80,\"B\",TRUE,\"C\")"}}
+{op:"set", path:"/Sheet1/D4", props:{value:"=LET(x,5,x*2)"}}                        // binds x then evaluates -> 10
+{op:"set", path:"/Sheet1/D5", props:{value:"=TEXTJOIN(\",\",TRUE,A1:A5)"}}
+```
+
+`XLOOKUP` does exact (default) or approximate (`match_mode` -1/1) match and returns
+`if_not_found` on a miss; `LET` binds names left-to-right then evaluates the
+calculation; the conditional aggregates honour numeric/text criteria operators.
+`TEXTJOIN`, `CONCAT`, `CONCATENATE`, `IFERROR`, `SUMIFS` and `COUNTIFS` were already
+evaluated by the base engine and keep working.
+
+Still **not** evaluated (an honest `formula_not_evaluated` warning, never a wrong
+value): stored `LAMBDA` and the lambda-helpers `MAP`/`REDUCE`/`SCAN`/`BYROW`/`BYCOL`
+— Excel computes them on open.
+
 ## financial functions
 
 `RATE`, `IRR`, `XIRR`, `NPV`, `PV`, `FV`, `PMT`, `NPER` are **evaluated** at save
@@ -48,4 +76,5 @@ carry a `formula_not_evaluated` warning now carry a cached value, and the warnin
 no longer fires for these functions. An agent that handled the warning still
 works — the warning simply stops appearing for the now-evaluated functions.
 
-See also: `aioffice help data-tables` (what-if data tables).
+See also: `aioffice help data-tables` (what-if data tables),
+`aioffice help scenarios` (scenario manager) and `aioffice help goal-seek`.

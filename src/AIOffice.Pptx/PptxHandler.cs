@@ -108,6 +108,13 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
 
         var presentation = PptxDoc.RequirePresentationPart(doc, file);
 
+        if (address.IsFonts)
+        {
+            return address.FontName is null
+                ? PptxFonts.List(presentation)
+                : PptxFonts.Detail(presentation, address);
+        }
+
         if (address.IsPresentation)
         {
             return PptxSlideSize.Detail(presentation);
@@ -180,6 +187,15 @@ public sealed partial class PptxHandler : IFormatHandler, IEmbedHost
 
         if (address.IsMaster)
         {
+            // A layout addressed by name (/master[m]/layout[@name=...]) resolves to its
+            // 1-based index here so the rest of the get path is index-uniform.
+            if (address.LayoutName is { } layoutName)
+            {
+                var masterPart = PptxDoc.ResolveMaster(presentation, address.MasterIndex, address.Raw);
+                var layoutIndex = PptxDoc.ResolveLayoutIndexByName(masterPart, address.MasterIndex, layoutName, address.Raw);
+                address = address with { LayoutIndex = layoutIndex, LayoutName = null };
+            }
+
             return address.HasShape
                 ? PptxQueryEngine.MasterShapeDetail(presentation, address)
                 : address.LayoutIndex is null

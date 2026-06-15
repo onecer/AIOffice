@@ -12,7 +12,7 @@ public sealed partial class WordHandler
         ["borders", "borderColor", "borderWidthPt", "shading", "headerRow", "columnWidths", "width", "alignment", "cellPaddingCm", "rtl"];
 
     private static readonly string[] CellProps =
-        ["text", "mergeRight", "mergeDown", "shading", "valign"];
+        ["text", "formula", "numberFormat", "mergeRight", "mergeDown", "shading", "valign"];
 
     private const double TwipsPerEmu = 1.0 / 635.0;
 
@@ -418,11 +418,19 @@ public sealed partial class WordHandler
     /// deep-table props — mergeRight (w:gridSpan, 1 unmerges), mergeDown
     /// (w:vMerge restart/continue chain, 1 unmerges), shading and valign.
     /// </summary>
-    private static object ApplySetCell(TableCell cell, ResolvedNode node, JsonObject props)
+    private static object ApplySetCell(TableCell cell, ResolvedNode node, JsonObject props, EditSession session)
     {
-        // Merges restructure the row, so they run before cosmetic props.
-        var ordered = props.OrderBy(kv => kv.Key switch { "mergeRight" => 0, "mergeDown" => 1, _ => 2 });
+        // numberFormat is a modifier of formula, applied together — peel it out so
+        // the generic loop never treats it as a standalone unsupported prop.
+        var numberFormat = props.TryGetPropertyValue("numberFormat", out var nfNode) ? NodeToString(nfNode) : null;
+
+        // Merges restructure the row, then text replaces content, then a formula
+        // (which reads the final grid and rewrites this cell) runs last.
+        var ordered = props
+            .Where(kv => kv.Key != "numberFormat")
+            .OrderBy(kv => kv.Key switch { "mergeRight" => 0, "mergeDown" => 1, "text" => 2, "formula" => 4, _ => 3 });
         var applied = new List<string>();
+        string? formulaCached = null;
         foreach (var (name, value) in ordered)
         {
             switch (name)
@@ -431,6 +439,28 @@ public sealed partial class WordHandler
                     cell.RemoveAllChildren<Paragraph>();
                     cell.AppendChild(WordFactory.Paragraph(NodeToString(value)));
                     break;
+
+                case "formula":
+                {
+                    var (cached, inputsAreFields) = ApplyCellFormula(cell, node, NodeToString(value), numberFormat);
+                    formulaCached = cached;
+                    if (numberFormat is not null)
+                    {
+                        applied.Add("numberFormat");
+                    }
+
+                    if (inputsAreFields &&
+                        !session.Warnings.Any(w => w.Code == WarningCodes.TableFormulaCached))
+                    {
+                        session.Warnings.Add(new Warning(
+                            WarningCodes.TableFormulaCached,
+                            "The table formula was computed from the current cell values, but one or more input " +
+                            "cells are themselves fields, so Word may recompute it to a different number when it " +
+                            "refreshes fields (F9). Static cell values compute exactly."));
+                    }
+
+                    break;
+                }
 
                 case "mergeRight":
                     MergeRight(cell, node, RequireMergeCount(name, value));
@@ -473,8 +503,21 @@ public sealed partial class WordHandler
             applied.Add(name);
         }
 
+        // numberFormat on its own (no formula) shapes nothing — reject it so a typo
+        // is not silently swallowed.
+        if (numberFormat is not null && !applied.Contains("numberFormat"))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "numberFormat only applies alongside a formula prop on the same cell.",
+                "Add a formula too, e.g. {\"props\":{\"formula\":\"=SUM(ABOVE)\",\"numberFormat\":\"number\"}}, " +
+                "or drop numberFormat.");
+        }
+
         var (colspan, rowspan) = CellSpans(cell);
-        return new { op = "set", path = node.CanonicalPath, type = "tc", colspan, rowspan, properties = applied };
+        return formulaCached is not null
+            ? new { op = "set", path = node.CanonicalPath, type = "tc", colspan, rowspan, properties = applied, formula = (object?)CellFormula(cell), cached = (object?)formulaCached }
+            : new { op = "set", path = node.CanonicalPath, type = "tc", colspan, rowspan, properties = applied, formula = (object?)null, cached = (object?)null };
     }
 
     private static int RequireMergeCount(string name, JsonNode? value)
@@ -802,6 +845,14 @@ public sealed partial class WordHandler
             ["shading"] = tcPr?.Shading?.Fill?.Value,
             ["valign"] = CellValignName(tcPr?.TableCellVerticalAlignment),
         };
+
+        // A formula cell reports its expression plus the cached computed value
+        // (the field result), so get is reopen-verifiable.
+        if (CellFormula(cell) is { } formula)
+        {
+            properties["formula"] = formula;
+            properties["cached"] = CellFormulaCachedValue(cell);
+        }
 
         if (rowspan == 0)
         {

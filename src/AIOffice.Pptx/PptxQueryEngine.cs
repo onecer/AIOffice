@@ -620,6 +620,7 @@ internal static class PptxQueryEngine
                 ? new { Kind = mediaKind, Path = Units.Inv($"{address.CanonicalSlidePath}/media[@id={view.Id}]") }
                 : null,
             Connector = view.Element is P.ConnectionShape connector ? ConnectorInfo(connector) : null,
+            ActionButton = PptxActionButtons.Summary(presentation, slidePart, view.Element),
         };
     }
 
@@ -728,6 +729,23 @@ internal static class PptxQueryEngine
         var containerPath = address.CanonicalContainerPath;
         var shapes = PptxDoc.Shapes(PptxDoc.RequireShapeTree(layoutPart));
         var summary = LayoutSummary(presentation, address.MasterIndex, address.LayoutIndex.Value, layoutPart);
+        var placeholders = shapes
+            .Where(s => PptxDoc.PlaceholderType(s.Element) is not null)
+            .Select(s =>
+            {
+                var geometry = PptxDoc.Geometry(s.Element);
+                return (object)new
+                {
+                    Path = s.CanonicalPathIn(containerPath),
+                    Type = PptxDoc.PlaceholderType(s.Element),
+                    Name = s.Name,
+                    X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
+                    Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
+                    W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
+                    H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
+                };
+            })
+            .ToList();
         return new
         {
             Path = containerPath,
@@ -738,6 +756,7 @@ internal static class PptxQueryEngine
             Type = summary.Type,
             UsedBySlides = summary.UsedBySlides,
             ShapeCount = shapes.Count,
+            Placeholders = placeholders.Count == 0 ? null : placeholders,
             Shapes = ShapeSummaries(shapes, containerPath),
         };
     }

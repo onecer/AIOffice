@@ -28,7 +28,7 @@ internal static class ExcelDynamicArrays
 {
     /// <summary>The dynamic-array functions this module evaluates and spills.</summary>
     public static readonly IReadOnlyList<string> Functions =
-        ["FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE", "RANDARRAY", "TRANSPOSE"];
+        ["FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE", "RANDARRAY", "TRANSPOSE", "TEXTSPLIT"];
 
     /// <summary>A computed dynamic-array spill queued for the post-save raw write.</summary>
     public sealed record Pending(
@@ -148,6 +148,7 @@ internal static class ExcelDynamicArrays
             "SEQUENCE" => Sequence(args, opIndex),
             "RANDARRAY" => RandArray(args, opIndex),
             "TRANSPOSE" => Transpose(sheet, args, opIndex),
+            "TEXTSPLIT" => TextSplit(sheet, args, opIndex),
             _ => throw Unsupported(name, opIndex),
         };
     }
@@ -331,6 +332,104 @@ internal static class ExcelDynamicArrays
         }
 
         return grid;
+    }
+
+    /// <summary>
+    /// =TEXTSPLIT(text, col_delimiter, [row_delimiter], [ignore_empty], [match_mode],
+    /// [pad_with]) — splits text into a spilled array: by col_delimiter across
+    /// columns and (when given) by row_delimiter down rows. The text and delimiters
+    /// may be string literals or single-cell references. ignore_empty drops empty
+    /// fields; pad_with fills ragged rows (default <c>#N/A</c>).
+    /// </summary>
+    private static List<List<XLCellValue>> TextSplit(IXLWorksheet sheet, List<string> args, int opIndex)
+    {
+        RequireArgCount("TEXTSPLIT", args, 2, 6, opIndex);
+        var text = TextArg(sheet, args[0], opIndex);
+        var colDelimiter = TextArg(sheet, args[1], opIndex);
+        var rowDelimiter = args.Count >= 3 && args[2].Length > 0 ? TextArg(sheet, args[2], opIndex) : null;
+        var ignoreEmpty = args.Count >= 4 && args[3].Length > 0 && ConstBool(args[3]);
+        XLCellValue pad = args.Count >= 6 && args[5].Length > 0 ? TextArg(sheet, args[5], opIndex) : XLError.NoValueAvailable;
+
+        if (colDelimiter.Length == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: TEXTSPLIT needs a non-empty column delimiter.",
+                "Pass the delimiter as the second argument, e.g. =TEXTSPLIT(\"a,b,c\", \",\").");
+        }
+
+        // Split into rows first (by row delimiter, or one row), then each row into
+        // columns. Empty fields are dropped only when ignore_empty is set.
+        var rawRows = rowDelimiter is null || rowDelimiter.Length == 0
+            ? [text]
+            : SplitText(text, rowDelimiter, ignoreEmpty);
+
+        var rows = new List<List<string>>(rawRows.Count);
+        var width = 0;
+        foreach (var rawRow in rawRows)
+        {
+            var columns = SplitText(rawRow, colDelimiter, ignoreEmpty);
+            rows.Add(columns);
+            width = Math.Max(width, columns.Count);
+        }
+
+        if (rows.Count == 0 || width == 0)
+        {
+            return [[(XLCellValue)string.Empty]];
+        }
+
+        var grid = new List<List<XLCellValue>>(rows.Count);
+        foreach (var row in rows)
+        {
+            var cells = new List<XLCellValue>(width);
+            for (var c = 0; c < width; c++)
+            {
+                cells.Add(c < row.Count ? row[c] : pad);
+            }
+
+            grid.Add(cells);
+        }
+
+        return grid;
+    }
+
+    /// <summary>Splits a string on a literal delimiter, optionally dropping empty fields.</summary>
+    private static List<string> SplitText(string text, string delimiter, bool ignoreEmpty)
+    {
+        var parts = text.Split(delimiter, StringSplitOptions.None);
+        var result = new List<string>(parts.Length);
+        foreach (var part in parts)
+        {
+            if (ignoreEmpty && part.Length == 0)
+            {
+                continue;
+            }
+
+            result.Add(part);
+        }
+
+        return result;
+    }
+
+    /// <summary>Reads a TEXTSPLIT argument as text: a quoted literal, or a single-cell reference's value.</summary>
+    private static string TextArg(IXLWorksheet sheet, string arg, int opIndex)
+    {
+        var t = arg.Trim();
+        if (t.Length >= 2 && t[0] == '"' && t[^1] == '"')
+        {
+            return t[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal);
+        }
+
+        var (data, _) = ReadRange(sheet, t, opIndex);
+        if (data.Count == 0 || data[0].Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var value = data[0][0];
+        return value.Type == XLDataType.Text
+            ? value.GetText()
+            : value.ToString(CultureInfo.InvariantCulture);
     }
 
     // ----- range + arg reading ----------------------------------------------

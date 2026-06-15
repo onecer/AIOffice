@@ -25,6 +25,7 @@ internal enum ExcelTargetKind
     Embed,
     FormControl,
     DataTable,
+    Scenario,
 }
 
 /// <summary>A resolved xlsx address: the worksheet plus an optional cell/range/row.</summary>
@@ -87,6 +88,9 @@ internal sealed record ExcelTarget
 
     /// <summary>1-based per-sheet data-table index when <see cref="Kind"/> is DataTable (1.4).</summary>
     public int? DataTableIndex { get; init; }
+
+    /// <summary>Scenario name when <see cref="Kind"/> is Scenario (<c>scenario[@name=…]</c>, 1.5).</summary>
+    public string? ScenarioName { get; init; }
 }
 
 /// <summary>
@@ -130,6 +134,13 @@ internal static partial class ExcelPaths
     /// </summary>
     [GeneratedRegex(@"^(?<sheet>/.+)/(?i:slicer)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
     private static partial Regex SlicerByName();
+
+    /// <summary>
+    /// The stable-name scenario form <c>/Sheet/scenario[@name=X]</c> (bare or
+    /// <c>'quoted'</c> name), peeled off like the pivot/table/slicer forms (1.5).
+    /// </summary>
+    [GeneratedRegex(@"^(?<sheet>/.+)/(?i:scenario)\[@name=(?:'(?<quoted>(?:[^']|'')+)'|(?<bare>[^\]]+))\]$")]
+    private static partial Regex ScenarioByName();
 
     /// <summary>Quotes a sheet name when it would not survive the path grammar bare.</summary>
     public static string QuoteSheet(string name) =>
@@ -217,6 +228,25 @@ internal static partial class ExcelPaths
                 ? bySlicer.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
                 : bySlicer.Groups["bare"].Value;
             return new ExcelTarget { Kind = ExcelTargetKind.Slicer, Sheet = sheetTarget.Sheet, SlicerName = name };
+        }
+
+        // /Sheet/scenario[@name=X] gets the same id-form peel-off (1.5).
+        var byScenario = ScenarioByName().Match(pathText);
+        if (byScenario.Success)
+        {
+            var sheetTarget = Resolve(workbook, byScenario.Groups["sheet"].Value);
+            if (sheetTarget.Kind != ExcelTargetKind.Sheet)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidPath,
+                    $"scenario[@name=…] must follow a sheet name: {pathText}",
+                    "Use /SheetName/scenario[@name=X]; quote names with specials: scenario[@name='Best Case'].");
+            }
+
+            var name = byScenario.Groups["quoted"].Success
+                ? byScenario.Groups["quoted"].Value.Replace("''", "'", StringComparison.Ordinal)
+                : byScenario.Groups["bare"].Value;
+            return new ExcelTarget { Kind = ExcelTargetKind.Scenario, Sheet = sheetTarget.Sheet, ScenarioName = name };
         }
 
         var path = DocPath.Parse(pathText);

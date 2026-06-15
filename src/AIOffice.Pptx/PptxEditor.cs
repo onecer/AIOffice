@@ -28,7 +28,7 @@ internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
         ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "zoom", "comment", "reply", "embed", "media", "model3d", "equation",
-         "smartart", "connector", "group", "ungroup"];
+         "smartart", "connector", "actionButton", "group", "ungroup"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
@@ -108,6 +108,30 @@ internal static class PptxEditor
             return PptxNotes.Append(presentation, address, op);
         }
 
+        if (address.IsFonts)
+        {
+            var fontType = op.Type?.Trim().ToLowerInvariant();
+            if (fontType == "font")
+            {
+                if (address.FontName is not null)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"add font targets the /fonts list, not '{op.Path}'.",
+                        "Use {\"op\":\"add\",\"path\":\"/fonts\",\"type\":\"font\",\"props\":{\"src\":\"MyFont.ttf\"}}.");
+                }
+
+                return PptxFonts.Add(presentation, op.Props, workspace);
+            }
+
+            throw new AiofficeException(
+                op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
+                op.Type is null ? "add on /fonts requires a type." : $"Cannot add '{op.Type}' on '{op.Path}'.",
+                "The only thing you can add on /fonts is a font " +
+                "({\"op\":\"add\",\"path\":\"/fonts\",\"type\":\"font\",\"props\":{\"src\":\"MyFont.ttf\"}}).",
+                candidates: ["font"]);
+        }
+
         if (address.IsMaster)
         {
             return PptxMasters.Add(presentation, address, op);
@@ -174,6 +198,12 @@ internal static class PptxEditor
                 var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "connector");
                 var id = PptxConnectors.Add(slidePart, op.Props);
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
+            }
+
+            case "actionbutton":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "actionButton");
+                return PptxActionButtons.Add(presentation, slidePart, address.SlideIndex, op.Props);
             }
 
             case "group":
@@ -315,6 +345,7 @@ internal static class PptxEditor
                     "model3d (a glb/gltf 3D model behind a poster fallback), " +
                     "equation (LaTeX -> OMML math in a text box), " +
                     "smartart (a list/process/hierarchy/orgChart/cycle diagram), connector (a line/elbow/curved link between two shapes), " +
+                    "actionButton (a navigation button: first/last/next/prev/home/end/slide/url), " +
                     "group (wrap shapes in a group), ungroup (dissolve a group, on a group path).",
                     candidates: AddTypes);
         }
@@ -496,6 +527,27 @@ internal static class PptxEditor
             throw CorruptPresentation("no slide layout part exists");
         }
 
+        // A layout name binds a slide to a layout by its display name ("My Layout");
+        // it is a distinct prop from the 1-based layout index so the index path keeps
+        // its strict numeric contract. layoutName wins when both are present.
+        if (props is not null && props.TryGetPropertyValue("layoutName", out var nameNode) && nameNode is not null)
+        {
+            var wantedName = J.ScalarText(nameNode).Trim();
+            foreach (var (_, layoutPart) in layouts)
+            {
+                if (string.Equals(PptxDoc.LayoutName(layoutPart), wantedName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return layoutPart;
+                }
+            }
+
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"No layout named '{wantedName}' on master 1.",
+                "Use a layout name from the deck (run 'aioffice read <file> --view structure'), or a 1-based 'layout' index.",
+                candidates: [.. layouts.Select(l => PptxDoc.LayoutName(l.Part)).Where(n => !string.IsNullOrEmpty(n)).Take(10).Select(n => n!)]);
+        }
+
         if (props is null || !props.TryGetPropertyValue("layout", out var layoutNode))
         {
             return layouts[0].Part;
@@ -513,7 +565,8 @@ internal static class PptxEditor
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"props.layout is not a valid layout index: {layoutNode?.ToJsonString() ?? "null"}",
-                "Use a 1-based integer index into the master's layouts; run 'aioffice read <file> --view structure' to list them.");
+                "Use a 1-based integer index into the master's layouts (or 'layoutName' to bind by name); " +
+                "run 'aioffice read <file> --view structure' to list them.");
         }
 
         var index = (int)number;
@@ -568,6 +621,15 @@ internal static class PptxEditor
         if (address.IsNotes)
         {
             return PptxNotes.Set(presentation, address, op.Props);
+        }
+
+        if (address.IsFonts)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Embedded fonts cannot be edited in place.",
+                "Remove the font ({\"op\":\"remove\",\"path\":\"/fonts/font[@name=...]\"}) and add it again with the new file; " +
+                "add a font with {\"op\":\"add\",\"path\":\"/fonts\",\"type\":\"font\",\"props\":{\"src\":\"MyFont.ttf\"}}.");
         }
 
         if (address.IsPresentation)
@@ -904,6 +966,20 @@ internal static class PptxEditor
             return PptxNotes.Clear(presentation, address);
         }
 
+        if (address.IsFonts)
+        {
+            if (address.FontName is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "remove targets one embedded font, not the whole /fonts list.",
+                    "Name the font: {\"op\":\"remove\",\"path\":\"/fonts/font[@name=MyFont]\"} — " +
+                    "run 'aioffice get <file> /fonts' to list them.");
+            }
+
+            return PptxFonts.Remove(presentation, address);
+        }
+
         if (address.IsPresentation)
         {
             throw new AiofficeException(
@@ -1099,13 +1175,13 @@ internal static class PptxEditor
                 "Reorder the host graphic frame by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
         }
 
-        if (address.IsPresentation || address.IsSection || address.IsMaster)
+        if (address.IsPresentation || address.IsSection || address.IsMaster || address.IsFonts)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved.",
                 "Move slides (/slide[i]) or reorder animations; sections follow slide order, " +
-                "and masters/layouts have no order to change.");
+                "masters/layouts have no order to change, and embedded fonts are unordered.");
         }
 
         if (address.IsTable && (address.TableRowIndex is not null || address.TableCellIndex is not null))

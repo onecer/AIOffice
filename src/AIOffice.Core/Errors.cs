@@ -84,6 +84,9 @@ public static class WarningCodes
     /// <summary>An index's entries were pre-rendered/alphabetized from the marked XE fields; Word computes page numbers on open/refresh.</summary>
     public const string IndexCached = "index_cached";
 
+    /// <summary>(1.5) A table formula's value was computed from a static grid, but one or more input cells are themselves fields; Word may recompute to a different number on refresh (F9).</summary>
+    public const string TableFormulaCached = "table_formula_cached";
+
     /// <summary>An equation carried a LaTeX construct the converter only partially rendered.</summary>
     public const string EquationPartial = "equation_partial";
 
@@ -92,6 +95,9 @@ public static class WarningCodes
 
     /// <summary>A formula could not be evaluated headlessly; its cached value was returned.</summary>
     public const string FormulaNotEvaluated = "formula_not_evaluated";
+
+    /// <summary>(1.5) A goal-seek solve did not converge; the changing cell was left unchanged.</summary>
+    public const string GoalSeekNoSolution = "goal_seek_no_solution";
 
     /// <summary>A markdown block had no neutral equivalent and was skipped on import.</summary>
     public const string MdBlockSkipped = "md_block_skipped";
@@ -130,9 +136,9 @@ public static class WarningCodes
     public static readonly IReadOnlyList<string> All =
     [
         AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
-        EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, IndexCached, MdBlockSkipped, MdHtmlSkipped,
-        MdImageSkipped, MdLinkSkipped, Model3DAsMedia, ResultTruncated, ScopeDefaulted, StreamFallback,
-        TemplateUnresolved, TocPagesUnknown, TocRefreshed,
+        EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, GoalSeekNoSolution, IndexCached,
+        MdBlockSkipped, MdHtmlSkipped, MdImageSkipped, MdLinkSkipped, Model3DAsMedia, ResultTruncated,
+        ScopeDefaulted, StreamFallback, TableFormulaCached, TemplateUnresolved, TocPagesUnknown, TocRefreshed,
     ];
 }
 

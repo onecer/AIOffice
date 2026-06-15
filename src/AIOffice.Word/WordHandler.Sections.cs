@@ -10,7 +10,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] SectionProps =
-        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap", "pageBorder"];
+        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap", "pageBorder", "lineNumbers"];
 
     /// <summary>Known page sizes as portrait (width, height) in twentieths of a point.</summary>
     private static readonly Dictionary<string, (uint Width, uint Height)> PageSizes = new(StringComparer.OrdinalIgnoreCase)
@@ -100,6 +100,8 @@ public sealed partial class WordHandler
         uint? columnGapTwips = null;
         JsonNode? pageBorderNode = null;
         var pageBorderSet = false;
+        JsonNode? lineNumbersNode = null;
+        var lineNumbersSet = false;
 
         foreach (var (key, node) in props)
         {
@@ -109,6 +111,11 @@ public sealed partial class WordHandler
                 case "pageBorder":
                     pageBorderNode = node;
                     pageBorderSet = true;
+                    break;
+
+                case "lineNumbers":
+                    lineNumbersNode = node;
+                    lineNumbersSet = true;
                     break;
 
                 case "columns":
@@ -191,6 +198,11 @@ public sealed partial class WordHandler
         if (pageBorderSet)
         {
             ApplyPageBorder(sectPr, pageBorderNode);
+        }
+
+        if (lineNumbersSet)
+        {
+            ApplyLineNumbers(sectPr, lineNumbersNode);
         }
 
         var canonical = path.ToCanonicalString();
@@ -371,6 +383,101 @@ public sealed partial class WordHandler
         {
             sectPr.InsertBefore(child, before);
         }
+    }
+
+    // --------------------------------------------------------- line numbering
+
+    /// <summary>
+    /// Applies <c>lineNumbers</c> to a section's <c>w:lnNumType</c>. The value is
+    /// either the string <c>"none"</c> (removes line numbering) or an object
+    /// <c>{start,increment,restart,distance?}</c>: <c>start</c> is the first
+    /// number (default 1), <c>increment</c> shows every Nth line (default 1),
+    /// <c>restart</c> is continuous | newPage | newSection (default continuous) and
+    /// <c>distance</c> is the gutter between the numbers and the text (a length).
+    /// </summary>
+    private static void ApplyLineNumbers(SectionProperties sectPr, JsonNode? node)
+    {
+        if (node is null || (node is JsonValue && NodeToString(node).Equals("none", StringComparison.OrdinalIgnoreCase)))
+        {
+            sectPr.RemoveAllChildren<LineNumberType>();
+            return;
+        }
+
+        if (node is not JsonObject options)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "lineNumbers must be an object {start,increment,restart,distance?} or the string \"none\".",
+                "Example: {\"props\":{\"lineNumbers\":{\"start\":1,\"increment\":1,\"restart\":\"continuous\"}}}, " +
+                "or {\"lineNumbers\":\"none\"} to clear it.");
+        }
+
+        var start = options["start"] is { } startNode && int.TryParse(NodeToString(startNode), out var s) ? s : 1;
+        var increment = options["increment"] is { } incNode && int.TryParse(NodeToString(incNode), out var i) ? i : 1;
+        if (start < 0 || increment < 1)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"lineNumbers needs start >= 0 and increment >= 1, got start={start}, increment={increment}.",
+                "Use e.g. {\"start\":1,\"increment\":1} to number every line from 1.");
+        }
+
+        var restartArg = options["restart"] is { } restartNode ? NodeToString(restartNode) : "continuous";
+        var restart = restartArg.ToLowerInvariant() switch
+        {
+            "continuous" => LineNumberRestartValues.Continuous,
+            "newpage" => LineNumberRestartValues.NewPage,
+            "newsection" => LineNumberRestartValues.NewSection,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown lineNumbers restart '{restartArg}'.",
+                "Use restart continuous, newPage or newSection.",
+                candidates: ["continuous", "newPage", "newSection"]),
+        };
+
+        var lnNumType = new LineNumberType
+        {
+            Start = (short)start,
+            CountBy = (short)increment,
+            Restart = restart,
+        };
+
+        if (options["distance"] is { } distanceNode && NodeToString(distanceNode) is { Length: > 0 } distanceRaw)
+        {
+            var twips = (long)Math.Max(0, Math.Round(ParseLengthEmu("lineNumbers.distance", distanceRaw) * TwipsPerEmu));
+            lnNumType.Distance = twips.ToString(CultureInfo.InvariantCulture);
+        }
+
+        sectPr.RemoveAllChildren<LineNumberType>();
+        InsertSectionChild(sectPr, lnNumType);
+    }
+
+    /// <summary>get /section[i] line-numbering shape, or null when the section has none.</summary>
+    private static Dictionary<string, object?>? LineNumbersShape(SectionProperties? sectPr)
+    {
+        if (sectPr?.GetFirstChild<LineNumberType>() is not { } ln)
+        {
+            return null;
+        }
+
+        var restart = ln.Restart?.Value;
+        var restartName = restart switch
+        {
+            { } v when v == LineNumberRestartValues.NewPage => "newPage",
+            { } v when v == LineNumberRestartValues.NewSection => "newSection",
+            _ => "continuous",
+        };
+
+        return new Dictionary<string, object?>
+        {
+            ["start"] = ln.Start?.Value ?? 1,
+            ["increment"] = ln.CountBy?.Value ?? 1,
+            ["restart"] = restartName,
+            ["distanceCm"] = ln.Distance?.Value is { } dist &&
+                long.TryParse(dist, NumberStyles.Integer, CultureInfo.InvariantCulture, out var twips)
+                    ? TwipsToCm(twips)
+                    : null,
+        };
     }
 
     // ----------------------------------------------------------- add / remove
@@ -741,6 +848,7 @@ public sealed partial class WordHandler
             ["columnGapCm"] = ColumnGapCm(cols),
             ["columnWidthsCm"] = ColumnWidthsCm(cols),
             ["pageBorder"] = PageBorderShape(sectPr),
+            ["lineNumbers"] = LineNumbersShape(sectPr),
         };
     }
 

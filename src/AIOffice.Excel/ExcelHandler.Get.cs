@@ -102,6 +102,7 @@ public sealed partial class ExcelHandler
                 ExcelEmbeds.Describe(ExcelEmbeds.Resolve(file, target)), MetaFor(file, sw)),
             ExcelTargetKind.FormControl => Envelope.Ok(FormControlTargetInfo(file, target), MetaFor(file, sw)),
             ExcelTargetKind.DataTable => Envelope.Ok(DataTableTargetInfo(file, target), MetaFor(file, sw)),
+            ExcelTargetKind.Scenario => Envelope.Ok(ScenarioTargetInfo(file, target), MetaFor(file, sw)),
             _ => RangeInfo(ctx, target, file, sw),
         };
     });
@@ -212,6 +213,29 @@ public sealed partial class ExcelHandler
         }
 
         return ExcelDataTables.Describe(info);
+    }
+
+    /// <summary>One scenario, read back raw from the worksheet's scenarios part (ClosedXML cannot see it).</summary>
+    private static object ScenarioTargetInfo(string file, ExcelTarget target)
+    {
+        var scenarios = ExcelScenarios.ReadOnSheet(file, target.Sheet.Name);
+        var wanted = target.ScenarioName!;
+        var info = scenarios.FirstOrDefault(s => string.Equals(s.Name, wanted, StringComparison.OrdinalIgnoreCase));
+        if (info is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidPath,
+                $"No scenario named '{wanted}' on sheet '{target.Sheet.Name}' ({scenarios.Count} scenario(s) exist).",
+                scenarios.Count > 0
+                    ? "Pick one of the candidates; scenario names are case-insensitive."
+                    : "This sheet has no scenarios; add one with {op:add, type:scenario, path:" +
+                      ExcelPaths.SheetPath(target.Sheet) + ", props:{name:\"Best Case\", cells:{\"B1\":120}}}.",
+                candidates: scenarios.Count > 0
+                    ? [.. scenarios.Select(s => ExcelScenarios.ScenarioPath(target.Sheet, s.Name))]
+                    : [ExcelPaths.SheetPath(target.Sheet)]);
+        }
+
+        return ExcelScenarios.Describe(target.Sheet, info);
     }
 
     /// <summary>One form control, read back from the raw package (ClosedXML cannot see controls).</summary>

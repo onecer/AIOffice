@@ -18,6 +18,9 @@ internal enum PptxRootKind
 
     /// <summary>The package document properties ("/properties"): core + custom metadata.</summary>
     Properties,
+
+    /// <summary>The deck's embedded-font list ("/fonts"): embed/list/remove fonts.</summary>
+    Fonts,
 }
 
 /// <summary>
@@ -56,8 +59,9 @@ internal sealed partial record PptxAddress
         "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/media[1], /slide[2]/media[@id=7], " +
         "/slide[2]/model3d[1], /slide[2]/model3d[@id=7], " +
         "/slide[2]/shape[@id=7]/omath[1], " +
-        "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
-        "/section[1] (a slide section), /properties (document core + custom metadata) " +
+        "/master[1], /master[1]/layout[2], /master[1]/layout[@name=My Layout], /master[1]/shape[1], " +
+        "/section[1] (a slide section), /properties (document core + custom metadata), " +
+        "/fonts (embedded fonts) or /fonts/font[@name=MyFont] " +
         "or / (the presentation: slide size and sections); " +
         "indices are 1-based, @id is the stable id from query/get.";
 
@@ -72,6 +76,12 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^layout\[([0-9]+)\]$")]
     private static partial Regex LayoutSegment();
+
+    [GeneratedRegex(@"^layout\[@name=(.+)\]$")]
+    private static partial Regex LayoutNameSegment();
+
+    [GeneratedRegex(@"^font\[@name=(.+)\]$")]
+    private static partial Regex FontNameSegment();
 
     [GeneratedRegex(@"^shape\[([0-9]+)\]$")]
     private static partial Regex ShapeOrdinalSegment();
@@ -147,6 +157,12 @@ internal sealed partial record PptxAddress
 
     /// <summary>1-based layout index beneath the master; null for the master itself.</summary>
     public int? LayoutIndex { get; init; }
+
+    /// <summary>Layout display name ("/master[m]/layout[@name=...]"); null when the layout is addressed by index.</summary>
+    public string? LayoutName { get; init; }
+
+    /// <summary>Embedded-font display name ("/fonts/font[@name=...]"); null for the whole /fonts list.</summary>
+    public string? FontName { get; init; }
 
     /// <summary>1-based slide-section index ("/section[i]"); 0 when <see cref="Root"/> is not Section.</summary>
     public int SectionIndex { get; init; }
@@ -259,6 +275,9 @@ internal sealed partial record PptxAddress
     /// <summary>True when the path is the document-properties root ("/properties").</summary>
     public bool IsProperties => Root == PptxRootKind.Properties;
 
+    /// <summary>True when the path is the embedded-font root ("/fonts" or "/fonts/font[@name=...]").</summary>
+    public bool IsFonts => Root == PptxRootKind.Fonts;
+
     /// <summary>Parses an address or throws a typed <c>invalid_path</c>/<c>unsupported_feature</c>.</summary>
     public static PptxAddress Parse(string raw)
     {
@@ -272,6 +291,28 @@ internal sealed partial record PptxAddress
         if (string.Equals(raw, "/properties", StringComparison.OrdinalIgnoreCase))
         {
             return new PptxAddress { Raw = raw, Root = PptxRootKind.Properties };
+        }
+
+        // "/fonts" is the embedded-font list root; "/fonts/font[@name=...]" addresses one font.
+        if (string.Equals(raw, "/fonts", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PptxAddress { Raw = raw, Root = PptxRootKind.Fonts };
+        }
+
+        if (raw.StartsWith("/fonts/", StringComparison.OrdinalIgnoreCase))
+        {
+            var fontSeg = raw["/fonts/".Length..];
+            if (FontNameSegment().Match(fontSeg) is { Success: true } fontMatch)
+            {
+                return new PptxAddress
+                {
+                    Raw = raw,
+                    Root = PptxRootKind.Fonts,
+                    FontName = fontMatch.Groups[1].Value,
+                };
+            }
+
+            throw Invalid(raw, "After /fonts comes font[@name=...]; got '" + fontSeg + "'.");
         }
 
         if (string.IsNullOrWhiteSpace(raw) || raw[0] != '/' || raw.Length < 2 || raw[^1] == '/')
@@ -567,6 +608,11 @@ internal sealed partial record PptxAddress
             address = address with { LayoutIndex = ParseIndex(layoutMatch.Groups[1].Value, raw) };
             next = 2;
         }
+        else if (segments.Length > 1 && LayoutNameSegment().Match(segments[1]) is { Success: true } layoutNameMatch)
+        {
+            address = address with { LayoutName = layoutNameMatch.Groups[1].Value };
+            next = 2;
+        }
 
         if (segments.Length == next)
         {
@@ -654,6 +700,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical layout path (/master[m]/layout[l]) of the addressed layout.</summary>
     public string CanonicalLayoutPath => Units.Inv($"/master[{MasterIndex}]/layout[{LayoutIndex}]");
+
+    /// <summary>The canonical embedded-font path (/fonts/font[@name=...]) for a font name.</summary>
+    public static string CanonicalFontPath(string name) => Units.Inv($"/fonts/font[@name={name}]");
 
     /// <summary>The container the address points into: /slide[i], /master[m] or /master[m]/layout[l].</summary>
     public string CanonicalContainerPath => Root == PptxRootKind.Master

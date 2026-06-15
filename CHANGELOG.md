@@ -4,6 +4,96 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.5.0 — fifth post-1.0 feature release (additive)
+
+`surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0
+contract line (new write-time evaluation behavior on `set value`, new `add` type
+values, new `set` prop keys, new addressing forms, two new warning codes). Nothing was
+removed or renamed; the 18 CLI verbs / 17 MCP tools stand unchanged. **The modern
+scalar-function gap is closed** (XLOOKUP / IFS / SWITCH / LET / MAXIFS / MINIFS /
+AVERAGEIFS now evaluate), and the spreadsheet **what-if toolkit** gains the Scenario
+Manager and Goal Seek. Word gains **table-cell formula fields**, **reusable building
+blocks** and **section line numbering**; PowerPoint gains **embedded fonts**, **action
+buttons** and **custom layouts with placeholders**.
+**2125 tests** across 7 projects (Core 124 · Word 612 · Excel 572 · Pptx 675 ·
+MCP 87 · Preview 24 · Render 31), green on macOS + Windows.
+
+### Added
+
+- **Scalar function evaluation** (xlsx): `=XLOOKUP`, `=IFS`, `=SWITCH`, `=LET`,
+  `=MAXIFS`, `=MINIFS` and `=AVERAGEIFS` — which ClosedXML returns `#NAME?` for — are
+  now evaluated at write time and the cached value is written, so headless readers see
+  a real result with no `formula_not_evaluated` warning. XLOOKUP does exact (default)
+  or approximate (`match_mode` -1/1) match and returns `if_not_found` on a miss; LET
+  binds names left-to-right then evaluates the calculation; the conditional
+  aggregates honour numeric/text criteria operators. `TEXTJOIN`, `CONCAT`,
+  `CONCATENATE`, `IFERROR`, `SUMIFS` and `COUNTIFS` were already evaluated by the base
+  engine and keep working. See `aioffice help formulas`.
+- **`TEXTSPLIT` dynamic array** (xlsx): `=TEXTSPLIT(text, col_delim, [row_delim], …)`
+  joins the FILTER/UNIQUE/SORT spill family — it splits text into a spilled array
+  (1-D by the column delimiter, 2-D with a row delimiter); the text/delimiters may be
+  string literals or cell references.
+- **Scenario Manager** (xlsx): a new `add` type `scenario`
+  (`props {name, cells:{addr:value,…}, comment?}`) saves a named set of changing cells
+  and the constant values they take into the worksheet's scenarios part.
+  `{op:set, props:{applyScenario:"name"}}` writes those values into the cells and
+  recalculates dependents (real cached values). Addressed by
+  `/Sheet1/scenario[@name=…]` for `get`/`remove`; `read --view structure` lists each
+  sheet's scenarios. See `aioffice help scenarios`.
+- **Goal Seek** (xlsx): `{op:set, path:/Sheet1/B1, props:{goalSeek:{targetCell,
+  targetValue}}}` solves for the value of the changing cell that makes the target
+  formula cell equal `targetValue` (Newton's method with a bisection fallback), SETs
+  the changing cell to the found value and recalculates; the op result reports the
+  found input and achieved target. A compute action that persists its result —
+  additive behavior on the frozen `set` verb, no new verb. See `aioffice help
+  goal-seek`.
+- **New warning code** `goal_seek_no_solution`: when goal seek does not converge the
+  changing cell is left unchanged and this non-fatal warning rides `meta.warnings`
+  (the command still succeeds — correctness over coverage; never a wrong value).
+- **Word table-cell formulas** (docx): a table cell gains a `formula` prop —
+  `=SUM(ABOVE)` / `=AVERAGE(LEFT)` / `=PRODUCT(ABOVE)` directional aggregates or
+  cell-ref arithmetic (`=A1*B2`) over the table's A1 grid. It becomes a `w:fldSimple`
+  formula field with the value computed headlessly and cached, so `read --view text`,
+  `get` and Word (before F9) agree. An optional `numberFormat` (preset or a raw `\#`
+  picture) shapes the cached text. See `aioffice help table-formulas`.
+- **New warning code** `table_formula_cached`: when a table-formula input is itself a
+  field the cached value is still written but this non-fatal warning flags that Word
+  may refresh to a different number on F9.
+- **Word building blocks** (docx): a new `add` type `buildingBlock`
+  (`props {name, gallery:quickParts|autoText, category?, content}`) stores reusable
+  AutoText / Quick Parts content in the glossary part; `buildingBlockRef`
+  (`props {name, position?}`) inserts a stored block's content into the body.
+  `get /buildingBlock[@name=…]`, `remove`, and `read --view structure` round-trip
+  them. See `aioffice help building-blocks`.
+- **Word section line numbering** (docx): a section gains a `lineNumbers` prop
+  (`{start, increment, restart:continuous|newPage|newSection, distance?}` or `"none"`)
+  writing `w:lnNumType`. `get /section[i]` reads it back. See
+  `aioffice help line-numbers`.
+- **Embedded fonts** (pptx): a new `add` type `font` on `/fonts`
+  (`props {src, name?, embedAll?, bold?, italic?, boldItalic?}`) embeds a
+  sandbox-resolved `.ttf`/`.otf` file as a font part and registers a `p:embeddedFont`
+  in `p:embeddedFontLst` (regular slot by default; `embedAll` plus the per-style files
+  fill all four slots). `src` is required and must live inside the workspace —
+  aioffice cannot pull a system font; an escaping `src` is `sandbox_denied`.
+  `get /fonts`, `get /fonts/font[@name=…]` and `remove` round-trip them. See
+  `aioffice help embedded-fonts`.
+- **Action buttons** (pptx): a new `add` type `actionButton` on a slide
+  (`props {action, target?, x?, y?, w?, h?, label?, fill?}`) creates a navigation
+  button — `first/last/next/prev/home/end` show-jumps, `slide` (slide-jump with a real
+  relationship) or `url` (external link) — building on M8 shape hyperlinks; the SVG
+  render draws the glyph. See `aioffice help action-buttons`.
+- **Custom layouts with placeholders** (pptx): the M6 `add` type `layout` is extended
+  with a `placeholders` prop (a list of `{type, x, y, w, h}` placeholder shapes) that
+  builds a fresh `slideLayout` part on a master; a slide then binds to it by name
+  (`add /slide[i] type:slide props:{layoutName:"Hero"}`). `basedOn` (clone) and
+  `placeholders` (build fresh) are mutually exclusive. See `aioffice help layouts`.
+
+### Honest non-support (unchanged, documented)
+
+- Stored `LAMBDA` and the lambda-helpers (`MAP`/`REDUCE`/`SCAN`/`BYROW`/`BYCOL`) still
+  emit `formula_not_evaluated` — they cannot be evaluated headlessly and Excel
+  computes them on open. The formula text is saved with no stale cached value.
+
 ## 1.4.0 — fourth post-1.0 feature release (additive)
 
 `surfaceVersion` stays **1.0** — every change is **additive** within the frozen 1.0

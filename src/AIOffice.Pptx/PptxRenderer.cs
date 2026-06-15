@@ -173,6 +173,16 @@ internal static class PptxRenderer
             return;
         }
 
+        // An action button (navigation): a 3D-style button face with a centered glyph.
+        if (shape.Element is P.Shape actionShape &&
+            actionShape.ShapeProperties?.GetFirstChild<A.PresetGeometry>()?.Preset is { } actionPreset &&
+            PptxActionButtons.IsActionButtonGeometry(actionPreset))
+        {
+            AppendActionButton(svg, actionPreset, x, y, w, h, fill);
+            svg.Append("  </g>\n");
+            return;
+        }
+
         AppendOutline(svg, shape, x, y, w, h, fill);
 
         if (shape.Kind == "picture")
@@ -214,6 +224,27 @@ internal static class PptxRenderer
         }
 
         svg.Append("  </g>\n");
+    }
+
+    /// <summary>
+    /// Draws an action button: a rounded "button" face plus the navigation glyph for
+    /// its preset geometry (|◄ ◄ ► ►| ⌂ ↩ …). The button reads as clickable and the
+    /// surrounding g still carries the data-aio-path + data-aio-hyperlink contract.
+    /// </summary>
+    private static void AppendActionButton(StringBuilder svg, A.ShapeTypeValues preset, double x, double y, double w, double h, string? fill)
+    {
+        var face = fill is null ? "e5e7eb" : fill.ToLowerInvariant();
+        var radius = Math.Min(w, h) / 8;
+        svg.Append(Units.Inv($"    <rect class=\"aio-action-button\" x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
+        svg.Append(Units.Inv($"rx=\"{radius:0.#}\" fill=\"#{face}\" stroke=\"#6b7280\" stroke-width=\"1.5\"/>\n"));
+
+        var glyph = PptxActionButtons.GlyphFor(preset);
+        if (glyph is { Length: > 0 })
+        {
+            var fontPx = Math.Max(Math.Min(w, h) * 0.45, 8);
+            svg.Append(Units.Inv($"    <text x=\"{x + (w / 2):0.#}\" y=\"{y + (h / 2) + (fontPx * 0.35):0.#}\" font-size=\"{fontPx:0.#}\" "));
+            svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#374151\">{Escape(glyph)}</text>\n"));
+        }
     }
 
     /// <summary>

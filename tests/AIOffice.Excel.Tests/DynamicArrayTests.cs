@@ -130,6 +130,56 @@ public sealed class DynamicArrayTests : ExcelTestBase
     }
 
     [Fact]
+    public void Textsplit_spills_a_delimited_string_across_columns()
+    {
+        var file = CreateWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1/A1", ("value", "=TEXTSPLIT(\"a,b,c\",\",\")")));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        Assert.Null(Json(envelope)["meta"]!["warnings"]);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/A1:C1"))));
+        Assert.Equal("a", data["values"]![0]![0]!.GetValue<string>());
+        Assert.Equal("b", data["values"]![0]![1]!.GetValue<string>());
+        Assert.Equal("c", data["values"]![0]![2]!.GetValue<string>());
+
+        // The anchor reports the array formula and the 1x3 spill rectangle.
+        var anchor = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/A1"))));
+        Assert.Equal("=TEXTSPLIT(\"a,b,c\",\",\")", anchor["formula"]!.GetValue<string>());
+        Assert.Equal("A1:C1", anchor["spillRange"]!.GetValue<string>());
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Textsplit_with_a_row_delimiter_spills_a_grid()
+    {
+        var file = CreateWorkbook();
+        // Column delimiter ",", row delimiter ";" -> a 2x2 grid.
+        Assert.True(EditOps(
+            file, SetOp("/Sheet1/A1", ("value", "=TEXTSPLIT(\"a,b;c,d\",\",\",\";\")"))).IsOk);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/A1:B2"))));
+        Assert.Equal("a", data["values"]![0]![0]!.GetValue<string>());
+        Assert.Equal("b", data["values"]![0]![1]!.GetValue<string>());
+        Assert.Equal("c", data["values"]![1]![0]!.GetValue<string>());
+        Assert.Equal("d", data["values"]![1]![1]!.GetValue<string>());
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Textsplit_reads_the_text_from_a_cell_reference()
+    {
+        var file = CreateWorkbook();
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1", ("value", "x|y|z"))).IsOk);
+        Assert.True(EditOps(file, SetOp("/Sheet1/C1", ("value", "=TEXTSPLIT(A1,\"|\")"))).IsOk);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C1:E1"))));
+        Assert.Equal("x", data["values"]![0]![0]!.GetValue<string>());
+        Assert.Equal("y", data["values"]![0]![1]!.GetValue<string>());
+        Assert.Equal("z", data["values"]![0]![2]!.GetValue<string>());
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
     public void Spill_blocked_when_the_target_range_is_occupied()
     {
         var file = SeedColumn("x", "y", "z");

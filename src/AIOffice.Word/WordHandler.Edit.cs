@@ -190,8 +190,13 @@ public sealed partial class WordHandler
             "add" when op.Type == "citation" => ApplyAddCitation(doc, op),
             "add" when op.Type == "bibliography" && session.Track => throw TrackedStructureUnsupported("bibliography"),
             "add" when op.Type == "bibliography" => ApplyAddBibliography(doc, file, op, session),
+            "add" when op.Type == "buildingBlock" && session.Track => throw TrackedStructureUnsupported("buildingBlock"),
+            "add" when op.Type == "buildingBlock" => ApplyAddBuildingBlock(doc, op),
+            "add" when op.Type == "buildingBlockRef" && session.Track => throw TrackedStructureUnsupported("buildingBlockRef"),
+            "add" when op.Type == "buildingBlockRef" => ApplyAddBuildingBlockRef(doc, op),
             "add" => ApplyAdd(doc, op, session),
             "remove" when rootName == "source" => ApplyRemoveSource(doc, op),
+            "remove" when rootName == "buildingBlock" => ApplyRemoveBuildingBlock(doc, op),
             "remove" when rootName == "bibliography" => ApplyRemoveBibliography(doc, op),
             "remove" when rootName == "embed" => ApplyRemoveEmbed(doc, op),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
@@ -237,7 +242,7 @@ public sealed partial class WordHandler
 
         if (node.Element is TableCell cell)
         {
-            return ApplySetCell(cell, node, props);
+            return ApplySetCell(cell, node, props, session);
         }
 
         // Image-carrying paragraphs/runs take an alt/descr property: it sets the

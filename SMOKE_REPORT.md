@@ -2259,3 +2259,94 @@ $ add type:zoom (slide)  → /slide[1]/zoom[1] → validate 0
 - MCP tool surface ~3150 tokens, within the 3500 ceiling (TokenBudgetTests green).
 - Binary size 38,528,457 bytes (~36.7 MB).
 - No git commit/push, no tags (left for the human release engineer).
+
+# AIOffice 1.5.0 — Integration Smoke Report
+
+Date: 2026-06-15 · Machine: macOS 26.3.0 arm64 · dotnet 10.0.300 (TFM net10.0)
+Fifth post-1.0 feature release — purely additive, `surfaceVersion` stays `1.0`.
+Closes the modern scalar-function gap (XLOOKUP/IFS/SWITCH/LET/TEXTJOIN now evaluate)
+and adds the what-if toolkit (Scenario Manager + Goal Seek); Word table-cell formulas,
+building blocks, line numbering; PowerPoint embedded fonts, action buttons, custom layouts.
+
+## Build & tests — PASS (2125/2125 across 7 projects)
+
+```
+$ dotnet build AIOffice.sln -warnaserror           → 0 warnings, 0 errors
+$ dotnet test AIOffice.sln --no-build              → all green
+  Core 124 · Word 612 · Excel 572 · Pptx 675 · MCP 87 · Preview 24 · Render 31
+SchemaConsistencyTests / TokenBudgetTests: PASS (18 verbs / 17 MCP tools; surface ~3235 ≤ 3500 tokens)
+```
+
+New dedicated feature tests landed WITH the features: ScalarFunctionTests, ScenarioTests,
+GoalSeekTests (Excel), TableFormulaTests, BuildingBlockTests, LineNumberTests (Word),
+FontEmbedTests, ActionButtonTests, CustomLayoutTests (Pptx). CI-hygiene scan of the new
+test files: no Environment.NewLine, no exact-byte-size asserts, no unsorted-order asserts.
+
+## Surface wiring (additive within frozen 1.0)
+
+- `office_edit` `type` enum (CLI + MCP) gains `scenario` (xlsx), `buildingBlock` /
+  `buildingBlockRef` (docx), `font` (pptx), `actionButton` (pptx); the M6 `layout` add
+  gains a `placeholders` prop. Scalar XLOOKUP/IFS/SWITCH/LET/TEXTJOIN on `set value`
+  now evaluate to cached values.
+- New `set` props surfaced: `applyScenario` + `goalSeek` (xlsx), table-cell `formula` +
+  `lineNumbers` (docx), `embedAll` (pptx font).
+- New addressing forms: `/Sheet1/scenario[@name=…]`, `/buildingBlock[@name=…]`, `/fonts`,
+  `/fonts/font[@name=…]`.
+- New warning codes `goal_seek_no_solution`, `table_formula_cached`. New `office_help`
+  topics: `scenarios`, `goal-seek`, `table-formulas`, `building-blocks`, `embedded-fonts`,
+  `action-buttons`, `layouts`, `line-numbers`; `formulas` extended with the scalar functions
+  (both the MCP HelpTopics registry and the CLI HelpTopics/*.md embedded resources).
+- `doctor` reports version 1.5.0 / surfaceVersion 1.0 / verbs 18 / tools 17.
+
+## Real end-to-end smoke (`dotnet run`, fresh temp workspace) — PASS
+
+- **xlsx**: `=XLOOKUP("Banana",A1:A3,B1:B3)` → cached **20** (no `formula_not_evaluated`);
+  `=IFS(B1>15,…)` → "small" (B1=10); `=TEXTJOIN(",",TRUE,A1:A3)` → "Apple,Banana,Cherry";
+  `=LET(x,5,x*2)` → **10**. Added scenario "High" (B1=120, B2=80) + `applyScenario` →
+  B1 became 120, B2 80, and B5(`=B1*2`) recalculated to **240**. `goalSeek` B1 so B5=100 →
+  B1 solved to ~**50** (converged, achievedTarget ~100). validate → 0 errors.
+- **docx**: 3-row numeric table, bottom cell `=SUM(ABOVE)` → `get` shows formula
+  `=SUM(ABOVE)` + cached **30** (raw `w:fldSimple` renders 30). Building block "Note" added
+  + inserted into body — its content appears at `/body/p[3]` (`read --view text`). Section
+  line numbering start 1 → `get /section[1]` reflects `{start:1, increment:1,
+  restart:continuous}`. validate → 0 errors.
+- **pptx**: embedded a tiny generated `.ttf` → `ppt/fonts/font.ttf` part present +
+  `embeddedFontLst`/`embeddedFont`/`p:font` registered + `get /fonts` lists it; an escaping
+  `src` (`../../etc/hosts`) → `sandbox_denied` (never read). Custom layout "Hero" with
+  title+body placeholders added on master[1] (type `cust`, shapeCount 2); a new slide bound
+  via `layoutName:"Hero"` references `/master[1]/layout[2]`. A "next" action button added.
+  validate → 0 errors.
+
+## Published-binary smoke loop (dist/osx-arm64/aioffice) — PASS
+
+```
+$ aioffice doctor      → version 1.5.0 · surfaceVersion 1.0 · verbs 18 · tools 17
+$ XLOOKUP loop         → D1 = 20 (no warning), validate ok
+$ table-formula loop   → =SUM(ABOVE) cached 30, validate ok
+$ embedded-font loop   → embed .ttf, get /fonts count 1, validate ok
+```
+
+## Manual-check fixtures (1.5) — added
+
+- `fixtures/manual-check/workbook-1.5-scenarios.xlsx` — a `=XLOOKUP("South",…)` lookup, a
+  `=B2*2` dependent, and a saved "High" scenario (validator-clean).
+- `fixtures/manual-check/doc-1.5-table-formula.docx` — a 3-row table with a
+  `=SUM(ABOVE)` formula cell (integer-formatted, cached 350), a "Footer Note" building block
+  inserted into the body, and section line numbering (validator-clean).
+- `fixtures/manual-check/deck-1.5-fonts.pptx` — an embedded "Brand Sans" font, a custom
+  "Hero" layout (title+body placeholders) used by slide 1, and a "next" action button
+  (validator-clean).
+
+## Invariants — held (1.5.0)
+- Published binary == `dotnet run` envelopes; **18 verbs / 17 MCP tools**,
+  **surfaceVersion `1.0`** (unchanged), package version **1.5.0**.
+- All 1.5 changes are additive: nothing in CONTRACT §§1–7 removed or renamed; §7e
+  records the additions; op kinds unchanged; the frozen error/exit-code lists unchanged
+  (the two new codes are `meta.warnings`, not errors). The scalar-function evaluation is
+  backward-compatible — cells that used to carry `formula_not_evaluated` for XLOOKUP/IFS/
+  SWITCH/LET/TEXTJOIN now carry a cached value; the warning code is unchanged and still
+  fires for LAMBDA and the lambda-helpers.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- MCP tool surface ~3235 tokens, within the 3500 ceiling (TokenBudgetTests green).
+- Binary size 38,578,633 bytes (~36.8 MB).
+- No git commit/push, no tags (left for the human release engineer).

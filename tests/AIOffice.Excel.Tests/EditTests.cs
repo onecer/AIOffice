@@ -71,11 +71,12 @@ public sealed class EditTests : ExcelTestBase
     {
         var file = CreateWorkbook();
 
-        // XLOOKUP is a modern function ClosedXML's engine cannot evaluate and
-        // aioffice does not special-case; it rides the honest formula_not_evaluated
-        // path. (SEQUENCE and the other dynamic arrays are now EVALUATED — see the
+        // A stored LAMBDA passed to MAP cannot be evaluated by the built-in engine
+        // and aioffice does not special-case it; it rides the honest
+        // formula_not_evaluated path. (XLOOKUP/IFS/SWITCH/LET/MAXIFS/… and the
+        // dynamic arrays are now EVALUATED — see ScalarFunctionTests /
         // DynamicArrayTests — so they no longer warn.)
-        var envelope = EditOps(file, SetOp("/Sheet1/C1", ("value", "=XLOOKUP(1,A1:A3,B1:B3)")));
+        var envelope = EditOps(file, SetOp("/Sheet1/C1", ("value", "=MAP(A1:A3,LAMBDA(x,x*2))")));
 
         Assert.True(envelope.IsOk, envelope.ToJson()); // the edit itself succeeds
         var warning = Assert.Single(envelope.Meta.Warnings!);
@@ -86,7 +87,7 @@ public sealed class EditTests : ExcelTestBase
         // value is stripped so Excel recalculates the cell on open.
         var raw = RawCell(file, "Sheet1", "C1");
         Assert.NotNull(raw.Formula);
-        Assert.Contains("XLOOKUP", raw.Formula, StringComparison.Ordinal);
+        Assert.Contains("LAMBDA", raw.Formula, StringComparison.Ordinal);
         Assert.Null(raw.CachedValue);
         AssertValidatorClean(file);
     }
@@ -285,16 +286,20 @@ public sealed class EditTests : ExcelTestBase
             SetOp("/Sheet1/G6", ("value", "=MATCH(\"key2\",D1:D2,0)")),
             SetOp("/Sheet1/G7", ("value", "=TEXT(A1,\"0.00\")")),
             SetOp("/Sheet1/G8", ("value", "=DATE(2024,5,1)")),
-            SetOp("/Sheet1/G9", ("value", "=COUNTIF(A1:A3,\">15\")")));
+            SetOp("/Sheet1/G9", ("value", "=COUNTIF(A1:A3,\">15\")")),
+            // v1.5: XLOOKUP (and the other scalar functions) are now EVALUATED.
+            SetOp("/Sheet1/G10", ("value", "=XLOOKUP(\"key2\",D1:D2,E1:E2)")));
         Assert.True(supported.IsOk, supported.ToJson());
         Assert.Null(supported.Meta.Warnings);
         Assert.Equal("60", RawCell(file, "Sheet1", "G1").CachedValue);
         Assert.Equal("2", RawCell(file, "Sheet1", "G6").CachedValue);
         Assert.Equal("10.00", RawCell(file, "Sheet1", "G7").CachedValue);
         Assert.Equal("2", RawCell(file, "Sheet1", "G9").CachedValue);
+        Assert.Equal("200", RawCell(file, "Sheet1", "G10").CachedValue);
 
-        // Documented as NOT evaluated: warning raised, formula saved, no stale value.
-        var unsupported = EditOps(file, SetOp("/Sheet1/H1", ("value", "=XLOOKUP(\"key2\",D1:D2,E1:E2)")));
+        // Documented as NOT evaluated: a stored LAMBDA passed to MAP cannot be
+        // evaluated headlessly; warning raised, formula saved, no stale value.
+        var unsupported = EditOps(file, SetOp("/Sheet1/H1", ("value", "=MAP(A1:A3,LAMBDA(x,x*2))")));
         Assert.True(unsupported.IsOk, unsupported.ToJson());
         var warning = Assert.Single(unsupported.Meta.Warnings!);
         Assert.Equal(ErrorCodes.FormulaNotEvaluated, warning.Code);

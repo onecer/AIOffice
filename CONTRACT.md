@@ -404,6 +404,95 @@ carry a `formula_not_evaluated` warning for `FILTER`/`UNIQUE`/`SORT`/`RATE`/`IRR
 unevaluated formulas, so an agent that handled the warning continues to work — it
 simply stops seeing it for the now-evaluated functions.
 
+## 7e. 1.5.0 additions (additive within the frozen 1.0 line)
+
+Package **1.5.0** stays on **`surfaceVersion 1.0`** — every change below is purely
+**additive** (new evaluation behavior on the existing `set value` verb, new `add`
+type values, new `set` prop keys, new addressing forms, two new warning codes), so
+nothing in §§1–7 was removed or renamed. The op **kinds** in §5 are unchanged. The
+18 CLI verbs / 17 MCP tools are unchanged.
+
+### xlsx — scalar function evaluation, scenarios, goal seek
+
+- **Scalar function evaluation** (new behavior on `set value`): `XLOOKUP`, `IFS`,
+  `SWITCH`, `LET`, `MAXIFS`, `MINIFS` and `AVERAGEIFS` — which the base engine
+  returns `#NAME?` for — are now evaluated at write time and the cached scalar value
+  is written. `TEXTSPLIT` joins the spilled dynamic-array family. These no longer emit
+  `formula_not_evaluated`. (`TEXTJOIN`, `CONCAT`, `CONCATENATE`, `IFERROR`, `SUMIFS`,
+  `COUNTIFS` were already evaluated and are unchanged.)
+- **New `add` type** (§5, additive): `scenario` — a named what-if changing-cell set
+  (`{op:add, path:/Sheet1, type:scenario, props:{name, cells:{addr:value,…}, comment?}}`)
+  saved into the worksheet's scenarios part. `cells` values are constants.
+- **New `set` prop** (§4, additive): `applyScenario` on a sheet path
+  (`{op:set, path:/Sheet1, props:{applyScenario:"name"}}`) writes the stored values
+  into the changing cells and recalculates dependents.
+- **New `set` prop** (§4, additive): `goalSeek` on a cell path
+  (`{op:set, path:/Sheet1/B1, props:{goalSeek:{targetCell, targetValue}}}`) solves for
+  the changing cell's value that makes `targetCell` reach `targetValue` (Newton's
+  method + bisection fallback), SETs the cell to the found value, and recalculates.
+  The op result reports the found input and achieved target.
+- **New addressing form** (§4, additive): `/Sheet1/scenario[@name=…]` (selected by
+  name) — `get` reports `{name, comment, cells}`; `remove` drops it; `read
+  --view structure` lists each sheet's scenarios.
+- **New warning code** (§2): `goal_seek_no_solution` — goal seek did not converge;
+  the changing cell is left unchanged and the command still succeeds (the warning
+  rides `meta.warnings`).
+
+### docx — table-cell formulas, building blocks, line numbering
+
+- **New `set` prop** (§4, additive): `formula` on a table-cell path
+  (`{op:set, path:/body/table[1]/row[3]/cell[2], props:{formula:"=SUM(ABOVE)"}}`) —
+  directional aggregates (`SUM`/`AVERAGE`/`PRODUCT`/`COUNT`/`MIN`/`MAX` over
+  `ABOVE`/`BELOW`/`LEFT`/`RIGHT`) or cell-ref arithmetic (`=A1*B2`) over the table's
+  A1 grid. Computed headlessly and cached as a `w:fldSimple` formula-field result. An
+  optional `numberFormat` (preset or a raw `\#` picture, valid only alongside
+  `formula`) shapes the cached text.
+- **New warning code** (§2): `table_formula_cached` — a table-formula input is itself
+  a field; the cached value is still written but Word may refresh it on F9. Non-fatal.
+- **New `add` types** (§5, additive): `buildingBlock` (`{op:add,
+  path:/buildingBlocks, type:buildingBlock, props:{name, gallery:quickParts|autoText,
+  category?, content}}`) stores reusable AutoText / Quick Parts content in the
+  glossary part; `buildingBlockRef` (`{op:add, path:/body, type:buildingBlockRef,
+  props:{name, position?}}`) inserts a stored block's content into the body.
+- **New addressing form** (§4, additive): `/buildingBlock[@name=…]` — `get` reports
+  `{name, gallery, category, content}`; `remove` drops it; `read --view structure`
+  lists every stored block.
+- **New `set` prop** (§4, additive): `lineNumbers` on a `/section[i]` —
+  `{start, increment, restart:continuous|newPage|newSection, distance?}` (writes
+  `w:lnNumType`), or the string `"none"` to clear it. `get /section[i]` reports it.
+
+### pptx — embedded fonts, action buttons, custom layouts
+
+- **New `add` type** (§5, additive): `font` on `/fonts` (`{op:add, path:/fonts,
+  type:font, props:{src, name?, embedAll?, bold?, italic?, boldItalic?}}`) embeds a
+  sandbox-resolved `.ttf`/`.otf` file as a font part and registers a `p:embeddedFont`
+  in `p:embeddedFontLst` (regular slot by default; `embedAll` plus the per-style files
+  fill all four slots). `src` is required and is sandbox-resolved (an escaping `src`
+  → `sandbox_denied`, never read).
+- **New addressing form** (§4, additive): `/fonts` and `/fonts/font[@name=…]` —
+  `get /fonts` lists embedded fonts, `get /fonts/font[@name=…]` reports one, `remove`
+  drops the registration and its parts.
+- **New `add` type** (§5, additive): `actionButton` on a slide (`{op:add,
+  path:/slide[i], type:actionButton, props:{action, target?, x?, y?, w?, h?, label?,
+  fill?}}`; `action` ∈ `first|last|next|prev|home|end|slide|url`) — a navigation
+  button building on M8 shape hyperlinks. `get` on its shape path reports the resolved
+  action/target.
+- **New `add type:"layout"` prop** (additive on the M6 layout add): `placeholders` —
+  a list of `{type, x, y, w, h}` placeholder shapes that builds a fresh `slideLayout`
+  part on a master; a slide then binds to it by name
+  (`{op:add, path:/slide[i], type:slide, props:{layoutName:"Hero"}}`). `basedOn` (clone)
+  and `placeholders` (build fresh) are mutually exclusive.
+
+### behavior improvement (backward-compatible)
+
+The scalar-function evaluation above is a **behavior improvement** within the frozen
+contract, not a breaking change: cells that used to carry a `formula_not_evaluated`
+warning for `XLOOKUP`/`IFS`/`SWITCH`/`LET`/`TEXTJOIN` (etc.) now carry a **cached
+value** and the warning no longer fires for them. The `formula_not_evaluated` warning
+code is unchanged and still fires for `LAMBDA` and the lambda-helpers
+(`MAP`/`REDUCE`/`SCAN`/`BYROW`/`BYCOL`), which cannot be evaluated headlessly — so an
+agent that handled the warning keeps working.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

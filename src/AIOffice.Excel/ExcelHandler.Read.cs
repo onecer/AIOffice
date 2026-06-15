@@ -171,6 +171,7 @@ public sealed partial class ExcelHandler
         List<FormControlInfo> allFormControls;
         Dictionary<(string, string), (string?, string?)> pivotSources;
         Dictionary<(string, string), List<(string, string)>> pivotCalculatedFields;
+        ILookup<string, ExcelScenarios.Info> scenariosBySheet;
         using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
         {
             allCharts = ExcelCharts.Read(document);
@@ -179,6 +180,7 @@ public sealed partial class ExcelHandler
             allFormControls = ExcelFormControls.Read(document);
             pivotSources = ExcelPivots.ReadSources(document);
             pivotCalculatedFields = ExcelPivots.ReadCalculatedFields(document);
+            scenariosBySheet = ExcelScenarios.ReadAll(document);
         }
 
         var chartsBySheet = allCharts.ToLookup(c => c.SheetName, StringComparer.OrdinalIgnoreCase);
@@ -266,6 +268,10 @@ public sealed partial class ExcelHandler
                             max = f.Max,
                             increment = f.Increment,
                         })
+                        .ToList(),
+                    // v1.5: saved what-if scenarios (omitted/empty when none).
+                    scenarios = scenariosBySheet[ws.Name]
+                        .Select(s => ExcelScenarios.DescribeBrief(ws, s))
                         .ToList(),
                     notes = NoteList(ws),
                     mergedRanges = ws.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),

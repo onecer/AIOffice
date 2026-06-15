@@ -22,6 +22,9 @@ public sealed class NativeVerbs
         "chart-polish", "conditional-format", "themes", "3d-models", "form-fields", "animations",
         // v1.4 additive topics.
         "formulas", "data-tables", "mail-merge", "page-borders", "zoom", "table-styles",
+        // v1.5 additive topics.
+        "scenarios", "goal-seek", "table-formulas", "building-blocks", "embedded-fonts",
+        "action-buttons", "layouts", "line-numbers",
     ];
 
     private readonly Workspace _workspace;

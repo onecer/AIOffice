@@ -79,8 +79,16 @@ public static class HelpTopics
                 - 3d-models       embed a .glb/.gltf 3D model on a slide (1.3)
                 - form-fields     docx legacy text/checkbox/dropdown form fields (1.3)
                 - animations      pptx animations incl. motionPath (1.3) + triggerOn click triggers (1.4)
-                - formulas        xlsx dynamic-array spill (FILTER/UNIQUE/SORT/…) + financial functions, now EVALUATED (1.4)
+                - formulas        xlsx dynamic-array spill + financial + scalar (XLOOKUP/IFS/SWITCH/LET/…), now EVALUATED (1.4/1.5)
                 - data-tables     xlsx what-if data tables: add type "dataTable" (1.4)
+                - scenarios       xlsx what-if scenario manager: add type "scenario" + applyScenario (1.5)
+                - goal-seek       xlsx goal seek: set props.goalSeek to solve for an input (1.5)
+                - table-formulas  docx table-cell formula fields: cell formula =SUM(ABOVE)/=A1*B2 (1.5)
+                - building-blocks docx reusable AutoText/Quick Parts: add type "buildingBlock"/"buildingBlockRef" (1.5)
+                - embedded-fonts  pptx embedded .ttf/.otf font parts: add type "font" on /fonts (1.5)
+                - action-buttons  pptx navigation buttons: add type "actionButton" on a slide (1.5)
+                - layouts         pptx custom layouts with placeholders: add type "layout" on a master (M6/1.5)
+                - line-numbers    docx section line numbering: set props.lineNumbers on a section (1.5)
                 - mail-merge      office_template with an array data → one doc per record / a combined doc (1.4)
                 - page-borders    docx page borders + «IF» merge fields: add type "ifField" (1.4)
                 - zoom            pptx slide/section/summary zoom navigation: add type "zoom" (1.4)
@@ -865,15 +873,102 @@ public static class HelpTopics
 
             ["formulas"] = (
                 """
-                ## formulas (1.4) — dynamic-array spill + financial evaluation (xlsx); set a cell value=<formula>
-                Dynamic arrays (EVALUATED + SPILLED 1.4): =FILTER, =UNIQUE, =SORT, =SORTBY, =SEQUENCE, =RANDARRAY, =TRANSPOSE.
+                ## formulas (1.4/1.5) — write-time formula evaluation + dynamic-array spill (xlsx); set a cell value=<formula>
+                Dynamic arrays (EVALUATED + SPILLED): =FILTER, =UNIQUE, =SORT, =SORTBY, =SEQUENCE, =RANDARRAY, =TRANSPOSE, =TEXTSPLIT (1.5).
                   Anchor carries the array formula; every cell of the result rectangle carries its cached value; Excel re-spills on open.
                   {"op":"set","path":"/Sheet1/D1","props":{"value":"=UNIQUE(A1:A20)"}}  -> spills distinct values; get D1 shows the spill range.
+                  =TEXTSPLIT("a,b;c,d",",",";") spills a 2x2 grid; the text/delimiters may be cell refs.
                   spill_blocked (1.4 error): result rectangle would overwrite a non-empty cell -> nothing written; clear the named range first.
+                Scalar functions (EVALUATED 1.5): =XLOOKUP, =IFS, =SWITCH, =LET, =MAXIFS, =MINIFS, =AVERAGEIFS -> the cell carries a cached value.
+                  XLOOKUP does exact match (default) or approximate (match_mode -1/1) and returns if_not_found on a miss; LET binds names left-to-right then evaluates the calc.
+                  Already evaluated by the base engine (carry a cached value too): TEXTJOIN, CONCAT, CONCATENATE, IFERROR, SUMIFS, COUNTIFS, and the classic SUM/IF/VLOOKUP/INDEX/MATCH/TEXT/DATE set.
                 Financial (EVALUATED 1.4): RATE, IRR, XIRR, NPV, PV, FV, PMT, NPER -> the cell carries a cached numeric value (iterative ones converge).
-                Backward-compatible: these no longer raise formula_not_evaluated — cells that used to warn now carry a cached value; an agent that handled the warning still works.
+                Still NOT evaluated (honest formula_not_evaluated warning, never a wrong value): stored LAMBDA and the lambda-helpers MAP/REDUCE/SCAN/BYROW/BYCOL — Excel computes them on open.
+                Backward-compatible: the newly-evaluated functions no longer raise formula_not_evaluated — cells that used to warn now carry a cached value; an agent that handled the warning still works.
                 """,
-                ["xlsx/cell", "data-tables", "errors"]),
+                ["xlsx/cell", "data-tables", "scenarios", "goal-seek", "errors"]),
+
+            ["scenarios"] = (
+                """
+                ## scenarios (1.5) — what-if scenario manager (xlsx); add type "scenario" on a sheet
+                {"op":"add","path":"/Sheet1","type":"scenario","props":{"name":"Best Case","cells":{"B1":120,"B2":0.15},"comment":"optimistic"}}
+                  Saves a named set of changing cells + the constant values they take into the worksheet's scenarios part (validator-clean).
+                Apply: {"op":"set","path":"/Sheet1","props":{"applyScenario":"Best Case"}} -> writes the stored values into the cells and recalculates dependents (real cached values).
+                get /Sheet1/scenario[@name=Best Case] -> {name, comment, cells}. remove /Sheet1/scenario[@name=Best Case]. read {view:"structure"} lists each sheet's scenarios.
+                cells values are constants (numbers/text/booleans), not formulas; quote names with specials: scenario[@name='Q3 Plan'].
+                """,
+                ["formulas", "goal-seek", "xlsx/cell"]),
+
+            ["goal-seek"] = (
+                """
+                ## goal-seek (1.5) — solve for an input (xlsx); set a cell with props.goalSeek
+                {"op":"set","path":"/Sheet1/B1","props":{"goalSeek":{"targetCell":"B5","targetValue":1000}}}
+                  Solves for the value of the changing cell B1 that makes the formula cell B5 (which depends on B1) equal targetValue (Newton + bisection),
+                  then SETs B1 to the found value and recalculates. targetCell must hold a formula depending on the changing cell.
+                The op result reports {converged:true, input, achievedTarget}. No convergence -> a goal_seek_no_solution WARNING (not a hard error); B1 is left unchanged.
+                This is a compute action that persists the found input — additive behavior on the frozen 'set' verb, no new verb.
+                """,
+                ["formulas", "scenarios", "errors"]),
+
+            ["table-formulas"] = (
+                """
+                ## table-formulas (1.5) — table-cell formula field (docx); set props.formula on a table cell
+                {"op":"set","path":"/body/table[1]/row[3]/cell[2]","props":{"formula":"=SUM(ABOVE)"}}
+                  Computes the value headlessly NOW, caches it as the field result, and stores a w:fldSimple formula field — read --view text, get and Word (before F9) all show the same number.
+                Directional aggregates: =SUM/=AVERAGE/=PRODUCT/=COUNT/=MIN/=MAX over (ABOVE|BELOW|LEFT|RIGHT). Cell-ref arithmetic: =A1*B2, =(A1+A2)/2 using table A1 addressing (column letters across, 1-based rows down).
+                Optional numberFormat (only valid alongside formula): preset integer|number|percent|currency, or a raw Word "\\#" picture. numberFormat alone (no formula) -> invalid_args.
+                When an input cell is itself a field the value is still cached but a table_formula_cached WARNING flags that Word may refresh to a different number on F9.
+                """,
+                ["docx/table", "edit-ops", "formulas"]),
+
+            ["building-blocks"] = (
+                """
+                ## building-blocks (1.5) — reusable AutoText / Quick Parts (docx); glossary docPart entries
+                Store: {"op":"add","path":"/buildingBlocks","type":"buildingBlock","props":{"name":"Disclaimer","gallery":"quickParts","content":"…"}}
+                  gallery quickParts|autoText (default quickParts); optional category. content = plain text ("\\n" splits paragraphs) or a JSON array of paragraph strings. Re-adding the same name replaces it.
+                Insert: {"op":"add","path":"/body","type":"buildingBlockRef","props":{"name":"Disclaimer"}} -> clones the stored block's content paragraphs into the body (optional position before:/after:/1-based; default = end).
+                get /buildingBlock[@name=Disclaimer] reports {name,gallery,category,content}. remove /buildingBlock[@name=…] drops it. read --view structure lists every stored block. Validator-clean.
+                """,
+                ["docx/paragraph", "edit-ops", "structural-fields"]),
+
+            ["embedded-fonts"] = (
+                """
+                ## embedded-fonts (1.5) — embed a font file in a deck (pptx); add type "font" on /fonts
+                {"op":"add","path":"/fonts","type":"font","props":{"src":"MyFont.ttf","name":"My Font"}}
+                  Embeds the sandbox-resolved src (.ttf/.otf, media type sniffed) as a FontPart and registers a p:embeddedFont (regular slot) in p:embeddedFontLst. src is REQUIRED and must point inside the workspace — aioffice cannot pull a system font; an escaping src -> sandbox_denied (never read).
+                embedAll plus per-style files fills all four slots: {"props":{"src":"reg.ttf","embedAll":"true","bold":"b.ttf","italic":"i.ttf","boldItalic":"bi.ttf"}}.
+                get /fonts lists every embedded font; get /fonts/font[@name=…] reports one; remove /fonts/font[@name=…] drops the registration and its parts. Validator-clean.
+                """,
+                ["pptx/slide", "edit-ops"]),
+
+            ["action-buttons"] = (
+                """
+                ## action-buttons (1.5) — navigation buttons (pptx); add type "actionButton" on a slide
+                {"op":"add","path":"/slide[1]","type":"actionButton","props":{"action":"next","x":"2cm","y":"2cm"}}
+                  A p:sp with a preset action-button geometry + a ppaction:// click on its cNvPr (builds on M8 shape hyperlinks).
+                action first|last|next|prev|home|end (show-jump, no relationship); slide with target:"slide N" (slide-jump, a real relationship so PowerPoint navigates); url with target:"https://…" (external link).
+                Optional x/y/w/h (lengths), label (caption text), fill (hex), name. get on the button's shape path reports the resolved action+target; remove deletes it. The SVG render draws the button glyph. Validator-clean.
+                """,
+                ["pptx/shape", "edit-ops", "layouts"]),
+
+            ["layouts"] = (
+                """
+                ## layouts (M6/1.5) — custom slide layouts with placeholders (pptx); add type "layout" on a master
+                Clone (M6): {"op":"add","path":"/master[1]","type":"layout","props":{"basedOn":2,"name":"Hero"}} copies an existing layout (basedOn = a 1-based layout index).
+                With placeholders (1.5): {"op":"add","path":"/master[1]","type":"layout","props":{"name":"Hero","placeholders":[{"type":"title","x":"2cm","y":"1cm","w":"28cm","h":"3cm"},{"type":"body","x":"2cm","y":"5cm","w":"13cm","h":"10cm"}]}}
+                  placeholder type title|body|pic|chart|table|… each gets the correct ph type/idx. A new slideLayout part is created on the master.
+                Use it: {"op":"add","path":"/slide[2]","type":"slide","props":{"layoutName":"Hero"}} binds a slide to the layout by name (layout = a 1-based index). get /master[m]/layout[@name=Hero] reports its placeholders; remove drops it when unreferenced. Validator-clean.
+                """,
+                ["pptx/master", "pptx/slide", "edit-ops"]),
+
+            ["line-numbers"] = (
+                """
+                ## line-numbers (1.5) — section line numbering (docx); set props.lineNumbers on a section
+                {"op":"set","path":"/section[1]","props":{"lineNumbers":{"start":1,"increment":1,"restart":"continuous"}}}
+                  Writes w:lnNumType. start = first printed number (>= 0, default 1); increment = print every Nth line (>= 1, default 1); restart continuous|newPage|newSection (default continuous); optional distance (margin gap, a length).
+                Clear it: {"props":{"lineNumbers":"none"}}. get /section[i] reads it back. Validator-clean.
+                """,
+                ["docx/section", "edit-ops"]),
 
             ["data-tables"] = (
                 """

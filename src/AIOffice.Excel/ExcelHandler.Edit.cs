@@ -20,6 +20,8 @@ public sealed partial class ExcelHandler
         "allowFormatCells", "allowFormatColumns", "allowFormatRows", "allowInsertColumns", "allowInsertRows",
         "allowDeleteColumns", "allowDeleteRows", "allowSort", "allowAutoFilter", "allowPivotTables",
         "allowSelectLockedCells", "allowSelectUnlockedCells",
+        // v1.5 (additive): compute actions that persist their result on a cell/sheet.
+        "applyScenario", "goalSeek",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -30,6 +32,8 @@ public sealed partial class ExcelHandler
         "formControl",
         // v1.4 (additive): what-if data tables.
         "dataTable",
+        // v1.5 (additive): scenario manager.
+        "scenario",
     ];
 
     public Envelope Edit(CommandContext ctx, IReadOnlyList<EditOp> ops) => Run(ctx, sw =>
@@ -156,6 +160,21 @@ public sealed partial class ExcelHandler
             if (post.RemovedDataTables.Count > 0)
             {
                 ExcelDataTables.RemoveAfterSave(file, post.RemovedDataTables);
+            }
+
+            // (1.5) Scenario manager: scenarios are authored/removed raw in the
+            // worksheet's scenarios part (ClosedXML has no model). Applying a
+            // scenario writes its values into the live model during op application,
+            // so the normal save recomputes dependents — only the saved scenario
+            // definitions ride this raw pass.
+            if (post.Scenarios.Count > 0)
+            {
+                ExcelScenarios.ApplyAfterSave(file, post.Scenarios);
+            }
+
+            if (post.RemovedScenarios.Count > 0)
+            {
+                ExcelScenarios.RemoveAfterSave(file, post.RemovedScenarios);
             }
 
             if (!charts.IsEmpty)
@@ -434,6 +453,16 @@ public sealed partial class ExcelHandler
         /// <summary>(1.4) Data tables queued for raw removal post-save (sheet name + 1-based index).</summary>
         public List<(string Sheet, int Index)> RemovedDataTables { get; } = [];
 
+        /// <summary>
+        /// (1.5) Scenarios queued for the post-save raw pass: the changing cells and
+        /// the values they take, authored into the worksheet's scenarios part.
+        /// ClosedXML 0.105 has no scenario model.
+        /// </summary>
+        public List<ExcelScenarios.Pending> Scenarios { get; } = [];
+
+        /// <summary>(1.5) Scenarios queued for raw removal post-save (sheet name + scenario name).</summary>
+        public List<(string Sheet, string Name)> RemovedScenarios { get; } = [];
+
         /// <summary>True when any write-time formula evaluation must be authored after the save.</summary>
         public bool HasEvaluatedFormulas => Spills.Count > 0 || DataTables.Count > 0;
 
@@ -601,7 +630,7 @@ public sealed partial class ExcelHandler
         switch (op.Op)
         {
             case "set":
-                ApplySet(ctx, workbook, op, index, details, post);
+                ApplySet(ctx, workbook, op, index, details, post, warnings);
                 break;
             case "add":
                 ApplyAdd(ctx, workbook, op, index, details, charts, slicers, embeds, formControls, post);
@@ -669,7 +698,8 @@ public sealed partial class ExcelHandler
     // ----- set --------------------------------------------------------------
 
     private static void ApplySet(
-        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post)
+        CommandContext ctx, XLWorkbook workbook, EditOp op, int index, List<object> details, PostSaveWork post,
+        List<Warning> warnings)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -741,6 +771,24 @@ public sealed partial class ExcelHandler
         if (props.Any(p => ExcelProtection.SheetProps.Contains(p.Key, StringComparer.Ordinal)))
         {
             ApplySheetProtection(target, props, index, applied, post);
+        }
+
+        // (1.5) applyScenario writes a saved scenario's values into its changing
+        // cells (sheet target); goalSeek solves for a cell's value (cell target).
+        // Both are compute actions that persist their result — additive behavior on
+        // the frozen 'set' verb, no new verb.
+        if (props.TryGetPropertyValue("applyScenario", out var applyNode) && applyNode is not null)
+        {
+            ApplyScenarioSet(ctx, workbook, target, applyNode, index, applied, post);
+        }
+
+        // goalSeek is a dedicated compute action that owns the whole op (it SETs the
+        // changing cell to the solved value); it adds its own details entry and
+        // returns, so it never combines with other set props.
+        if (props.TryGetPropertyValue("goalSeek", out var goalSeekNode) && goalSeekNode is not null)
+        {
+            ApplyGoalSeek(workbook, target, goalSeekNode, index, details, warnings);
+            return;
         }
 
         if (props.TryGetPropertyValue("value", out var valueNode))
@@ -1035,6 +1083,193 @@ public sealed partial class ExcelHandler
             string.Equals(s.SheetName, target.Sheet.Name, StringComparison.OrdinalIgnoreCase));
         post.SheetProtections.Add(ExcelProtection.BuildSheetSpec(target, protect.Value, password, flags, index));
         applied.Add(protect.Value ? "protected" : "unprotected");
+    }
+
+    /// <summary>
+    /// (1.5) Handles {op:set, path:/Sheet1, props:{applyScenario:"Best Case"}} —
+    /// queues writing the named scenario's stored values into its changing cells
+    /// (and a recalc) for the post-save raw pass. The scenario must already exist
+    /// on the saved file (added in an earlier op of this batch, or previously).
+    /// </summary>
+    private static void ApplyScenarioSet(
+        CommandContext ctx, XLWorkbook workbook, ExcelTarget target, JsonNode applyNode, int index,
+        List<string> applied, PostSaveWork post)
+    {
+        if (target.Kind != ExcelTargetKind.Sheet)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: applyScenario targets a sheet path like /Sheet1.",
+                "Use {op:set, path:/Sheet1, props:{applyScenario:\"Best Case\"}} to apply a saved scenario.");
+        }
+
+        if (applyNode is not JsonValue value || value.GetValueKind() != JsonValueKind.String)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: applyScenario takes the scenario name as a string.",
+                "Use {op:set, path:/Sheet1, props:{applyScenario:\"Best Case\"}}.");
+        }
+
+        var name = value.GetValue<string>();
+
+        // Resolve the scenario's changing cells + values: a scenario added earlier in
+        // THIS batch (not yet on disk) is read from the pending queue; otherwise from
+        // the saved file. Apply the values into the LIVE ClosedXML model now, so the
+        // normal save recomputes every dependent formula's cached value (headless
+        // readers see the scenario's effect immediately — not just a recalc flag).
+        var pending = post.Scenarios
+            .Where(s => string.Equals(s.Sheet, target.Sheet.Name, StringComparison.OrdinalIgnoreCase))
+            .LastOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        IReadOnlyList<(string Cell, XLCellValue Value)> cells;
+        if (pending is not null)
+        {
+            cells = pending.Cells;
+        }
+        else
+        {
+            var info = ExcelScenarios.ReadOnSheet(ctx.File!, target.Sheet.Name)
+                .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?? throw NoSuchScenario(ctx.File!, target.Sheet, name, index);
+            cells = [.. info.Cells.Select(c => (c.Cell, ExcelScenarios.TypeStoredValue(c.Val)))];
+        }
+
+        foreach (var (cellRef, cellValue) in cells)
+        {
+            target.Sheet.Cell(cellRef).Value = cellValue;
+        }
+
+        // Recalculate so every formula that depends on a changing cell carries a
+        // fresh cached value through the normal save (setting .Value alone does not
+        // mark transitive dependents dirty in ClosedXML 0.105).
+        workbook.RecalculateAllFormulas();
+        applied.Add("applyScenario");
+    }
+
+    /// <summary>The invalid-args exception for an applyScenario that names a scenario that does not exist.</summary>
+    private static AiofficeException NoSuchScenario(string file, IXLWorksheet sheet, string name, int index)
+    {
+        var existing = ExcelScenarios.ReadOnSheet(file, sheet.Name);
+        return new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{index}]: no scenario named '{name}' on sheet '{sheet.Name}' ({existing.Count} scenario(s) exist).",
+            existing.Count > 0
+                ? "Pick one of the candidates, or add it first with {op:add, type:scenario, …}."
+                : "Add a scenario first with {op:add, type:scenario, path:" + ExcelPaths.SheetPath(sheet) +
+                  ", props:{name:\"" + name + "\", cells:{…}}}.",
+            candidates: existing.Count > 0
+                ? [.. existing.Select(s => ExcelScenarios.ScenarioPath(sheet, s.Name))]
+                : [ExcelPaths.SheetPath(sheet)]);
+    }
+
+    /// <summary>
+    /// (1.5) Handles {op:set, path:/Sheet1/B1, props:{goalSeek:{targetCell:"B5",
+    /// targetValue:1000}}} — solves for the value of the changing cell B1 that makes
+    /// the formula cell B5 equal targetValue (Newton + bisection), SETs B1 to the
+    /// found value and recalculates. No convergence leaves B1 unchanged and adds a
+    /// goal_seek_no_solution warning (soft outcome, never a hard error).
+    /// </summary>
+    private static void ApplyGoalSeek(
+        XLWorkbook workbook, ExcelTarget target, JsonNode goalSeekNode, int index,
+        List<object> details, List<Warning> warnings)
+    {
+        if (target.Kind != ExcelTargetKind.Cell)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek targets the changing cell (a single cell) like /Sheet1/B1.",
+                "Use {op:set, path:/Sheet1/B1, props:{goalSeek:{targetCell:\"B5\", targetValue:1000}}}.");
+        }
+
+        if (goalSeekNode is not JsonObject spec)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek takes an object {{targetCell, targetValue}}.",
+                "Use {op:set, path:/Sheet1/B1, props:{goalSeek:{targetCell:\"B5\", targetValue:1000}}}.");
+        }
+
+        var targetCellRef = spec.TryGetPropertyValue("targetCell", out var tcNode) && tcNode is JsonValue tcv &&
+                            tcv.GetValueKind() == JsonValueKind.String
+            ? tcv.GetValue<string>()
+            : throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek needs a targetCell (the formula cell to drive).",
+                "Use goalSeek:{targetCell:\"B5\", targetValue:1000}.");
+
+        if (!(spec.TryGetPropertyValue("targetValue", out var tvNode) && tvNode is JsonValue tvv &&
+              tvv.GetValueKind() == JsonValueKind.Number))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek needs a numeric targetValue.",
+                "Use goalSeek:{targetCell:\"B5\", targetValue:1000}.");
+        }
+
+        var targetValue = tvv.GetValue<double>();
+
+        IXLCell targetCell;
+        try
+        {
+            targetCell = target.Sheet.Cell(targetCellRef);
+        }
+        catch (Exception)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek targetCell '{targetCellRef}' is not a valid single-cell address.",
+                "Pass one cell that holds a formula depending on the changing cell, e.g. targetCell:\"B5\".");
+        }
+
+        if (!targetCell.HasFormula)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: goalSeek targetCell {targetCell.Address} must hold a formula that depends on " +
+                $"the changing cell {target.Cell!.Address}.",
+                "Set the target cell to a formula (e.g. =B1*2) before goal-seeking the input.");
+        }
+
+        var result = ExcelGoalSeek.Solve(workbook, target.Cell!, targetCell, targetValue);
+        var canonical = ExcelPaths.CellPath(target.Sheet, target.Cell!.Address);
+        if (!result.Converged)
+        {
+            // Leave the changing cell at its original value (Solve restored the
+            // model). A soft warning, not a hard error.
+            warnings.Add(new Warning(
+                WarningCodes.GoalSeekNoSolution,
+                $"Goal seek on {canonical} could not find an input that makes {targetCell.Address} equal " +
+                $"{ExcelGoalSeek.Format(targetValue)}; {target.Cell!.Address} was left unchanged."));
+            details.Add(new
+            {
+                op = "set",
+                path = canonical,
+                applied = new List<string> { "goalSeekNoSolution" },
+                goalSeek = new { targetCell = targetCell.Address.ToString(), targetValue, converged = false },
+            });
+            return;
+        }
+
+        // Persist the found input and recalc so the target cell reflects it.
+        target.Cell!.Value = result.Input;
+        workbook.RecalculateAllFormulas();
+        var achieved = targetCell.TryGetValue<double>(out var a) ? a : double.NaN;
+
+        details.Add(new
+        {
+            op = "set",
+            path = canonical,
+            applied = new List<string> { "goalSeek" },
+            goalSeek = new
+            {
+                targetCell = targetCell.Address.ToString(),
+                targetValue,
+                converged = true,
+                input = result.Input,
+                achievedTarget = achieved,
+            },
+        });
     }
 
     /// <summary>Handles {op:set, path:/, props:{protectStructure, protectWindows?, password?}}.</summary>
@@ -1544,6 +1779,9 @@ public sealed partial class ExcelHandler
             case "dataTable":
                 details.Add(ExcelDataTables.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index, post.DataTables));
                 break;
+            case "scenario":
+                details.Add(ExcelScenarios.Add(ExcelPaths.Resolve(workbook, op.Path), op, index, post.Scenarios));
+                break;
             case "equation":
                 // xlsx has no math-object model: Excel carries cell formulas, not
                 // OMML equations (docx and pptx do). This is N/A by design, not a gap.
@@ -1875,7 +2113,12 @@ public sealed partial class ExcelHandler
             }
         }
 
-        var canonical = DocPath.Parse(op.Path).ToCanonicalString();
+        // Scenario uses a scenario[@name=…] form the shared DocPath grammar cannot
+        // parse (like pivot[@name=…], which is peeled off earlier); build its
+        // canonical path directly instead of through DocPath.
+        var canonical = target.Kind == ExcelTargetKind.Scenario
+            ? ExcelScenarios.ScenarioPath(target.Sheet, target.ScenarioName!)
+            : DocPath.Parse(op.Path).ToCanonicalString();
         switch (target.Kind)
         {
             case ExcelTargetKind.Sheet:
@@ -1953,6 +2196,31 @@ public sealed partial class ExcelHandler
                 break;
             }
 
+            case ExcelTargetKind.Scenario:
+            {
+                // (1.5) Scenarios live in the raw scenarios part; validate the name
+                // against the on-disk file and queue the raw removal post-save.
+                var scenariosOnSheet = ExcelScenarios.ReadOnSheet(ctx.File!, target.Sheet.Name);
+                var wantedName = target.ScenarioName!;
+                if (scenariosOnSheet.All(s => !string.Equals(s.Name, wantedName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidPath,
+                        $"ops[{index}]: no scenario named '{wantedName}' on sheet '{target.Sheet.Name}' " +
+                        $"({scenariosOnSheet.Count} scenario(s) exist).",
+                        scenariosOnSheet.Count > 0
+                            ? "Pick one of the candidates; scenario names are case-insensitive."
+                            : "This sheet has no scenarios to remove.",
+                        candidates: scenariosOnSheet.Count > 0
+                            ? [.. scenariosOnSheet.Select(s => ExcelScenarios.ScenarioPath(target.Sheet, s.Name))]
+                            : [ExcelPaths.SheetPath(target.Sheet)]);
+                }
+
+                post.RemovedScenarios.Add((target.Sheet.Name, wantedName));
+                details.Add(new { op = "remove", path = canonical, removed = "scenario" });
+                break;
+            }
+
             case ExcelTargetKind.Cell:
                 target.Cell!.Clear(XLClearOptions.Contents);
                 details.Add(new { op = "remove", path = canonical, removed = "contents", note = "styles kept" });
@@ -1979,14 +2247,18 @@ public sealed partial class ExcelHandler
     {
         var unevaluated = new List<(string Sheet, string Address)>();
 
-        // (1.4) Financial iterative cells (RATE/IRR/XIRR) ClosedXML cannot evaluate
-        // are computed HERE and written back raw after the save, so they carry a
-        // real cached value instead of riding the formula_not_evaluated warning.
-        var financial = new List<(string Sheet, string Address, XLCellValue Value)>();
+        // (1.4) Financial iterative cells (RATE/IRR/XIRR) and (1.5) the scalar
+        // functions ClosedXML cannot evaluate (XLOOKUP/IFS/SWITCH/LET/MAXIFS/…) are
+        // computed HERE and written back raw after the save, so they carry a real
+        // cached value instead of riding the formula_not_evaluated warning.
+        var computed = new List<(string Sheet, string Address, XLCellValue Value)>();
 
         foreach (var sheet in workbook.Worksheets)
         {
-            foreach (var cell in sheet.CellsUsed().Where(c => c.HasFormula))
+            // Materialize the formula cells before iterating: the scalar evaluator
+            // (1.5) writes/clears a far-off scratch cell to delegate sub-expression
+            // arithmetic to ClosedXML, which mutates the model mid-scan.
+            foreach (var cell in sheet.CellsUsed().Where(c => c.HasFormula).ToList())
             {
                 XLCellValue value;
                 try
@@ -1995,7 +2267,8 @@ public sealed partial class ExcelHandler
                 }
                 catch (Exception)
                 {
-                    if (TryEvaluateFinancial(sheet, cell, financial) || IsSpilledArrayAnchor(cell))
+                    if (TryEvaluateFinancial(sheet, cell, computed) ||
+                        TryEvaluateScalar(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
                     {
                         continue;
                     }
@@ -2009,7 +2282,8 @@ public sealed partial class ExcelHandler
                     // A dynamic-array anchor (FILTER/UNIQUE/…) round-tripping through
                     // a later edit keeps the cached spill values aioffice wrote raw;
                     // never strip them or warn (the result is already on disk).
-                    if (TryEvaluateFinancial(sheet, cell, financial) || IsSpilledArrayAnchor(cell))
+                    if (TryEvaluateFinancial(sheet, cell, computed) ||
+                        TryEvaluateScalar(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
                     {
                         continue;
                     }
@@ -2043,7 +2317,7 @@ public sealed partial class ExcelHandler
         ExcelCoreProperties.NormalizeAfterSave(file);
 
         StripStaleCachedValues(file, unevaluated);
-        WriteFinancialCachedValues(file, financial);
+        WriteFinancialCachedValues(file, computed);
 
         if (unevaluated.Count == 0)
         {
@@ -2133,6 +2407,31 @@ public sealed partial class ExcelHandler
     }
 
     /// <summary>
+    /// (1.5) Computes one scalar formula (XLOOKUP/IFS/SWITCH/LET/MAXIFS/MINIFS/
+    /// AVERAGEIFS) ClosedXML returned #NAME? for and records its value for the raw
+    /// write-back. Returns false when the cell is not one of those functions, OR
+    /// when the evaluator could not evaluate it (a nested unevaluable function) —
+    /// in which case the cell honestly keeps the formula_not_evaluated warning.
+    /// </summary>
+    private static bool TryEvaluateScalar(
+        IXLWorksheet sheet, IXLCell cell, List<(string Sheet, string Address, XLCellValue Value)> sink)
+    {
+        if (!cell.HasFormula || !ExcelScalarFunctions.IsScalarFunction(cell.FormulaA1))
+        {
+            return false;
+        }
+
+        var value = ExcelScalarFunctions.Evaluate(sheet, cell.FormulaA1);
+        if (value.IsError && value.GetError() == XLError.NameNotRecognized)
+        {
+            return false; // honest fallback: a sub-expression used an unevaluable function
+        }
+
+        sink.Add((sheet.Name, cell.Address.ToString()!, value));
+        return true;
+    }
+
+    /// <summary>
     /// (1.4) True when the cell is a dynamic-array anchor whose spill aioffice
     /// already wrote raw (recognized by the array formula's multi-cell reference or
     /// the function name). Such a cell keeps its cached value across re-saves — it
@@ -2155,7 +2454,13 @@ public sealed partial class ExcelHandler
         return ExcelDynamicArrays.IsDynamicArrayFormula(cell.FormulaA1);
     }
 
-    /// <summary>Writes the computed financial cached values into the saved cells (formula text preserved).</summary>
+    /// <summary>
+    /// Writes the computed cached values (financial 1.4 + scalar 1.5) into the
+    /// saved cells, preserving each cell's formula text. Handles every value type —
+    /// numbers, text (interned in the shared-string table), booleans, dates and
+    /// error values — because the scalar evaluators (XLOOKUP/IFS/SWITCH/…) return
+    /// non-numeric results too.
+    /// </summary>
     private static void WriteFinancialCachedValues(
         string file, List<(string Sheet, string Address, XLCellValue Value)> cells)
     {
@@ -2189,18 +2494,7 @@ public sealed partial class ExcelHandler
             {
                 if (cell.CellReference?.Value is { } reference && byAddress.TryGetValue(reference, out var value))
                 {
-                    if (value.IsError)
-                    {
-                        cell.DataType = CellValues.Error;
-                        cell.CellValue = new CellValue(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        cell.DataType = CellValues.Number;
-                        cell.CellValue = new CellValue(
-                            value.GetNumber().ToString("R", System.Globalization.CultureInfo.InvariantCulture));
-                    }
-
+                    WriteCachedValue(cell, value);
                     dirty = true;
                 }
             }
@@ -2209,6 +2503,41 @@ public sealed partial class ExcelHandler
             {
                 worksheetRoot.Save();
             }
+        }
+    }
+
+    /// <summary>Writes one typed cached value onto a saved formula cell (formula text preserved).</summary>
+    private static void WriteCachedValue(Cell cell, XLCellValue value)
+    {
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        switch (value.Type)
+        {
+            case XLDataType.Number:
+                cell.DataType = CellValues.Number;
+                cell.CellValue = new CellValue(value.GetNumber().ToString("R", culture));
+                break;
+            case XLDataType.Boolean:
+                cell.DataType = CellValues.Boolean;
+                cell.CellValue = new CellValue(value.GetBoolean() ? "1" : "0");
+                break;
+            case XLDataType.DateTime:
+                cell.DataType = CellValues.Number;
+                cell.CellValue = new CellValue(value.GetDateTime().ToOADate().ToString("R", culture));
+                break;
+            case XLDataType.Error:
+                cell.DataType = CellValues.Error;
+                cell.CellValue = new CellValue(value.ToString(culture));
+                break;
+            case XLDataType.Blank:
+                cell.DataType = null;
+                cell.CellValue = null;
+                break;
+            default:
+                // A formula cell carrying a string result uses t="str" (an inline
+                // formula-string), not a shared string — the validator-clean form.
+                cell.DataType = CellValues.String;
+                cell.CellValue = new CellValue(value.GetText());
+                break;
         }
     }
 }

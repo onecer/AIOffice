@@ -308,6 +308,26 @@ internal static class PptxDoc
     public static string? LayoutName(SlideLayoutPart layoutPart) =>
         layoutPart.SlideLayout?.CommonSlideData?.Name?.Value;
 
+    /// <summary>The 1-based index of the master's layout with the given display name (case-insensitive), or throws invalid_path.</summary>
+    public static int ResolveLayoutIndexByName(SlideMasterPart masterPart, int masterIndex, string name, string raw)
+    {
+        var layouts = Layouts(masterPart);
+        foreach (var (index, layoutPart) in layouts)
+        {
+            if (string.Equals(LayoutName(layoutPart), name, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidPath,
+            $"No layout named '{name}' on master {masterIndex} in '{raw}'.",
+            "Run 'aioffice read <file> --view structure' to list the master's layouts and their names.",
+            candidates: [.. layouts.Select(l => LayoutName(l.Part)).Where(n => !string.IsNullOrEmpty(n)).Take(10)
+                .Select(n => Units.Inv($"/master[{masterIndex}]/layout[@name={n}]"))]);
+    }
+
     /// <summary>The layout's schema type token ("blank", "titleOnly", …), when set.</summary>
     public static string? LayoutType(SlideLayoutPart layoutPart) =>
         layoutPart.SlideLayout?.Type?.InnerText;
