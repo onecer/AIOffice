@@ -73,6 +73,7 @@ Every command prints **exactly one** JSON object to stdout:
   | `result_truncated` | a payload exceeded its byte cap; narrow scope or raise `--max-bytes` |
   | `diff_truncated` | a diff change list hit its cap and was trimmed |
   | `already_running` | a live preview server was already up; the existing one was reused |
+  | `bibliography_cached` | (1.1) a docx bibliography's entries came from cached values; Word rebuilds on field refresh |
   | `caption_numbers_cached` | caption/cross-ref numbers came from cached SEQ values |
   | `csv_empty` | a csv import/export produced no rows |
   | `md_block_skipped` · `md_html_skipped` · `md_image_skipped` · `md_link_skipped` | a markdown source had content with no neutral equivalent |
@@ -151,6 +152,11 @@ what `query` / `get` always return. `office_help {topic:"addressing"}` is the fu
 math; **docx + pptx**; xlsx returns `unsupported_feature` — Excel has cell formulas,
 not math objects). Use `office_help {topic:"<fmt>/<element>"}` for exact prop names.
 
+**1.1 added** `add` types (additive within the 1.0 contract line): `source`,
+`citation`, `bibliography` (**docx** — bibliography sources, CITATION fields, and a
+rendered bibliography; see `office_help {topic:"docx/citation"}`) and `media`
+(**pptx** — embedded audio/video; see `office_help {topic:"pptx/media"}`).
+
 ## 6. The view vocabulary
 
 `office_read --view` (the `view` field):
@@ -168,8 +174,8 @@ not math objects). Use `office_help {topic:"<fmt>/<element>"}` for exact prop na
 - Every read view echoes the view name as `data.view` (xlsx also carries
   `data.kind = "xlsx"` for historical reasons; prefer `data.view`).
 
-Format-specific views: docx adds `revisions`, `styles`, `fields`, `markdown`;
-xlsx adds `csv`, `styles`.
+Format-specific views: docx adds `revisions`, `styles`, `fields`, `markdown`, and
+(**1.1**) `sources` (the bibliography source store); xlsx adds `csv`, `styles`.
 
 Applying a view a format does not support is `invalid_args` (exit 2): the
 `error.suggestion` lists that format's valid views.
@@ -193,6 +199,28 @@ verbs 1:1, with two naming details to note rather than infer:
 
 The embedded-object and equation surfaces ride on `office_edit` / `office_read` /
 `office_get` — they **do not** add new tools; the count stays **17**.
+
+## 7a. 1.1.0 additions (additive within the frozen 1.0 line)
+
+Package **1.1.0** stays on **`surfaceVersion 1.0`** — every change below is purely
+**additive** (new enum/prop values, one new view, one new warning), so nothing in
+§§1–7 was removed or renamed. The 18 CLI verbs / 17 MCP tools are unchanged.
+
+- **New `add` types** (§5): `source`, `citation`, `bibliography` (docx) and `media`
+  (pptx).
+- **New `read --view`** (§6): `sources` (docx bibliography store).
+- **New `conditionalFormat` kind** (xlsx, prop-value enum): `iconSet`
+  (3/4/5-icon glyph sets, e.g. `3TrafficLights1`), alongside the existing
+  `cellIs` · `colorScale` · `dataBar` · `containsText`.
+- **New chart `kind` values** (xlsx **and** pptx, prop-value enums): `doughnut`,
+  `radar`, `bubble`, `stackedBar`, `percentStackedBar`, `stackedArea`, `combo` —
+  added to the existing `bar` · `line` · `pie` · `scatter` · `area`. An unsupported
+  kind still returns `unsupported_feature` listing the now-expanded supported set.
+- **New text/shape effect props** (docx run-level, pptx shape-level set):
+  `shadow`, `glow`, `reflection`, `outline`.
+- **New pptx transition kinds**: `split`, `reveal`, `cut`, `zoom`, added to the
+  existing `none` · `fade` · `push` · `wipe`.
+- **New warning** (§1): `bibliography_cached`.
 
 ## 8. What is experimental (NOT frozen)
 

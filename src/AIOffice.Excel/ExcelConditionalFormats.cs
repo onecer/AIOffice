@@ -11,9 +11,10 @@ using X14 = DocumentFormat.OpenXml.Office2010.Excel;
 namespace AIOffice.Excel;
 
 /// <summary>
-/// The xlsx conditional-formatting layer (ClosedXML native). Four kinds are
+/// The xlsx conditional-formatting layer (ClosedXML native). Five kinds are
 /// supported: <c>cellIs</c>, <c>colorScale</c>, <c>dataBar</c>,
-/// <c>containsText</c>; everything else is a typed <c>unsupported_feature</c>.
+/// <c>containsText</c>, <c>iconSet</c>; everything else is a typed
+/// <c>unsupported_feature</c>.
 ///
 /// Measured ClosedXML 0.105 quirks this slice corrects in a post-save pass
 /// (<see cref="FixUpAfterSave"/>):
@@ -32,7 +33,8 @@ namespace AIOffice.Excel;
 internal static partial class ExcelConditionalFormats
 {
     /// <summary>The conditional-format kinds aioffice can create.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["cellIs", "colorScale", "dataBar", "containsText"];
+    public static readonly IReadOnlyList<string> Kinds =
+        ["cellIs", "colorScale", "dataBar", "containsText", "iconSet"];
 
     private static readonly IReadOnlyList<string> Operators = [">", "<", ">=", "<=", "==", "!=", "between"];
 
@@ -44,6 +46,36 @@ internal static partial class ExcelConditionalFormats
     private static readonly IReadOnlyList<string> DataBarProps = ["kind", "color"];
 
     private static readonly IReadOnlyList<string> ContainsTextProps = ["kind", "text", "fill", "color", "bold"];
+
+    private static readonly IReadOnlyList<string> IconSetProps = ["kind", "set", "reverse", "showValue"];
+
+    /// <summary>
+    /// The icon-set names aioffice accepts, in OOXML spelling, mapped to the
+    /// ClosedXML style and the icon count (3/4/5). The wire name IS the OOXML
+    /// <c>iconSet</c> attribute value, so agents and the file speak the same set
+    /// vocabulary. Insertion order is the order the supported-set list reports.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, (XLIconSetStyle Style, int Count)> IconSets =
+        new Dictionary<string, (XLIconSetStyle, int)>(StringComparer.Ordinal)
+        {
+            ["3Arrows"] = (XLIconSetStyle.ThreeArrows, 3),
+            ["3ArrowsGray"] = (XLIconSetStyle.ThreeArrowsGray, 3),
+            ["3Flags"] = (XLIconSetStyle.ThreeFlags, 3),
+            ["3TrafficLights1"] = (XLIconSetStyle.ThreeTrafficLights1, 3),
+            ["3TrafficLights2"] = (XLIconSetStyle.ThreeTrafficLights2, 3),
+            ["3Signs"] = (XLIconSetStyle.ThreeSigns, 3),
+            ["3Symbols"] = (XLIconSetStyle.ThreeSymbols, 3),
+            ["3Symbols2"] = (XLIconSetStyle.ThreeSymbols2, 3),
+            ["4Arrows"] = (XLIconSetStyle.FourArrows, 4),
+            ["4ArrowsGray"] = (XLIconSetStyle.FourArrowsGray, 4),
+            ["4RedToBlack"] = (XLIconSetStyle.FourRedToBlack, 4),
+            ["4Rating"] = (XLIconSetStyle.FourRating, 4),
+            ["4TrafficLights"] = (XLIconSetStyle.FourTrafficLights, 4),
+            ["5Arrows"] = (XLIconSetStyle.FiveArrows, 5),
+            ["5ArrowsGray"] = (XLIconSetStyle.FiveArrowsGray, 5),
+            ["5Rating"] = (XLIconSetStyle.FiveRating, 5),
+            ["5Quarters"] = (XLIconSetStyle.FiveQuarters, 5),
+        };
 
     [GeneratedRegex("^#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")]
     private static partial Regex HexColor();
@@ -96,11 +128,14 @@ internal static partial class ExcelConditionalFormats
             case "containsText":
                 AddContainsText(range, props, opIndex);
                 break;
+            case "iconSet":
+                AddIconSet(range, props, opIndex);
+                break;
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
                     $"ops[{opIndex}]: conditionalFormat kind '{kind}' is not supported yet.",
-                    "Supported kinds: cellIs, colorScale, dataBar, containsText. For iconSet or " +
+                    "Supported kinds: cellIs, colorScale, dataBar, containsText, iconSet. For " +
                     "formula-based rules, a colorScale or cellIs rule is the usual stand-in.",
                     candidates: Kinds);
         }
@@ -207,6 +242,55 @@ internal static partial class ExcelConditionalFormats
         ApplyStyle(range.AddConditionalFormat().WhenContains(text), props, opIndex);
     }
 
+    /// <summary>
+    /// Adds an iconSet rule: each cell gets one of N icons (3, 4 or 5 depending
+    /// on the set) chosen by where its value falls against evenly-spaced percent
+    /// thresholds. The first threshold is always 0% (covers the lowest band);
+    /// the rest split the 0..100 range evenly (3 icons → 0/33/67, 4 → 0/25/50/75,
+    /// 5 → 0/20/40/60/80). <c>reverse</c> flips icon order; <c>showValue</c>
+    /// (default true) controls whether the cell value stays visible.
+    /// </summary>
+    private static void AddIconSet(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, IconSetProps, opIndex);
+        var setName = OptionalString(props, "set") ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{opIndex}]: iconSet needs a 'set'.",
+            "Supported sets: " + string.Join(", ", IconSets.Keys) + ".",
+            candidates: [.. IconSets.Keys]);
+
+        if (!IconSets.TryGetValue(setName, out var icon))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"ops[{opIndex}]: iconSet '{setName}' is not supported.",
+                "Supported sets: " + string.Join(", ", IconSets.Keys) +
+                ". The leading digit is the icon count (3, 4 or 5).",
+                candidates: [.. IconSets.Keys]);
+        }
+
+        var reverse = OptionalBool(props, "reverse") ?? false;
+        var showValue = OptionalBool(props, "showValue") ?? true;
+
+        var rule = range.AddConditionalFormat().IconSet(icon.Style, reverse, !showValue);
+        foreach (var threshold in EvenPercentThresholds(icon.Count))
+        {
+            rule.AddValue(
+                XLCFIconSetOperator.EqualOrGreaterThan,
+                threshold.ToString(CultureInfo.InvariantCulture),
+                XLCFContentType.Percent);
+        }
+    }
+
+    /// <summary>Evenly-spaced percent thresholds starting at 0 (one per icon).</summary>
+    private static IEnumerable<int> EvenPercentThresholds(int iconCount)
+    {
+        for (var i = 0; i < iconCount; i++)
+        {
+            yield return (int)Math.Round(i * 100.0 / iconCount, MidpointRounding.AwayFromZero);
+        }
+    }
+
     /// <summary>Applies fill/color/bold to a rule style; at least one is required.</summary>
     private static void ApplyStyle(IXLStyle style, JsonObject props, int opIndex)
     {
@@ -296,18 +380,42 @@ internal static partial class ExcelConditionalFormats
             maxColor = format.ConditionalFormatType == XLConditionalFormatType.ColorScale
                 ? ColorAt(format, format.Colors.Count)
                 : null,
+            set = format.ConditionalFormatType == XLConditionalFormatType.IconSet
+                ? IconSetName(format.IconSetStyle)
+                : null,
+            reverse = format.ConditionalFormatType == XLConditionalFormatType.IconSet && format.ReverseIconOrder
+                ? true
+                : (bool?)null,
+            showValue = format.ConditionalFormatType == XLConditionalFormatType.IconSet
+                ? !format.ShowIconOnly
+                : (bool?)null,
         };
     }
 
-    /// <summary>Wire name of a rule type (the four supported kinds keep their op-prop spelling).</summary>
+    /// <summary>Wire name of a rule type (the five supported kinds keep their op-prop spelling).</summary>
     public static string KindName(XLConditionalFormatType type) => type switch
     {
         XLConditionalFormatType.CellIs => "cellIs",
         XLConditionalFormatType.ColorScale => "colorScale",
         XLConditionalFormatType.DataBar => "dataBar",
         XLConditionalFormatType.ContainsText => "containsText",
+        XLConditionalFormatType.IconSet => "iconSet",
         _ => char.ToLowerInvariant(type.ToString()[0]) + type.ToString()[1..],
     };
+
+    /// <summary>Wire <c>set</c> name for a ClosedXML icon-set style (null for unmapped styles).</summary>
+    private static string? IconSetName(XLIconSetStyle style)
+    {
+        foreach (var (name, value) in IconSets)
+        {
+            if (value.Style == style)
+            {
+                return name;
+            }
+        }
+
+        return null;
+    }
 
     private static string? OperatorName(XLCFOperator op) => op switch
     {
@@ -546,5 +654,11 @@ internal static partial class ExcelConditionalFormats
         props.TryGetPropertyValue(key, out var node) && node is JsonValue value &&
         value.GetValueKind() == JsonValueKind.String
             ? value.GetValue<string>()
+            : null;
+
+    private static bool? OptionalBool(JsonObject props, string key) =>
+        props.TryGetPropertyValue(key, out var node) && node is JsonValue value &&
+        value.GetValueKind() is JsonValueKind.True or JsonValueKind.False
+            ? value.GetValue<bool>()
             : null;
 }

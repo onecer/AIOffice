@@ -1876,3 +1876,109 @@ canary file intact (never read/written)
 - Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
 - CONTRACT.md §§1–7 match the code exactly (verified by smoke + `SchemaConsistencyTests`).
 - No git commit/push, no tags (left for the human release engineer).
+
+---
+
+# 1.1.0 release — first post-1.0 feature release, additive only (osx-arm64) — PASS
+
+The 1.1.0 pass: `Version` bumped 1.0.0 → 1.1.0, **`surfaceVersion` stays `1.0`** (all
+changes are additive within the frozen 1.0 contract line — new chart kinds, an
+`iconSet` conditional-format kind, new `add` types `source`/`citation`/`bibliography`
+(docx) and `media` (pptx), text/shape effects, new transitions, a `sources` read
+view, and one new warning `bibliography_cached`). CONTRACT.md got an additive §7a; the
+CLI/MCP schema + `office_help` surface the new vocabulary; verified end-to-end against
+a freshly published single-file binary.
+
+## Build & tests — PASS (1692/1692 across 7 projects)
+
+`dotnet build AIOffice.sln -c Debug -warnaserror` → **0 warnings, 0 errors**.
+`dotnet test AIOffice.sln`:
+
+| project | tests |
+|---|---|
+| AIOffice.Core.Tests | 124 |
+| AIOffice.Word.Tests | 507 |
+| AIOffice.Excel.Tests | 430 |
+| AIOffice.Pptx.Tests | 489 |
+| AIOffice.Mcp.Tests | 87 |
+| AIOffice.Preview.Tests | 24 |
+| AIOffice.Render.Tests | 31 |
+| **total** | **1692** |
+
+0 failures, 0 skipped. The +102 over the 1.0.0 baseline (1590) are the new 1.1
+feature tests: Word +26 (`CitationTests`, `TextEffectTests`), Excel +30
+(`ExpandedChartKindsTests`, `IconSetConditionalFormatTests`), Pptx +46
+(`EffectTests`, `MediaTests`, expanded `ChartTests`/`TransitionTests`). The 1.0
+`SchemaConsistencyTests` / `TokenBudgetTests` still pass — the additive enum/prop
+growth stays inside the ≤3500-token MCP budget (the descriptions are mostly enum
+additions; the rich prose lives in `office_help`, not the always-resident surface).
+
+## Publish — PASS
+
+```
+$ dotnet publish src/AIOffice.Cli -r osx-arm64 -c Release -p:PublishSingleFile=true --self-contained -o dist/osx-arm64
+$ ls -l dist/osx-arm64/aioffice
+-rwxr-xr-x  38352937  dist/osx-arm64/aioffice   # 36.6 MB
+$ dist/osx-arm64/aioffice doctor
+... version 1.1.0 | surfaceVersion 1.0 | verbs 18 | mcpTools 17 ...
+```
+
+## End-to-end smoke (fresh temp workspaces, published binary) — PASS
+
+**xlsx** — sales sheet + four new charts + an icon-set conditional format:
+
+```
+add chart kind=doughnut     -> ok; validate valid=true issues=0
+add chart kind=stackedBar   -> ok; validate valid=true issues=0
+add chart kind=combo        -> ok (first series columns + rest a line, >=2 series)
+add chart kind=bubble       -> ok (X col + Y/size pair per series); validate issues=0
+add conditionalFormat iconSet set=3TrafficLights1 -> ok; validate issues=0
+add chart kind=funnel       -> unsupported_feature, candidates list the expanded set
+```
+
+**pptx** — radar + stacked-area charts, embedded media, an effect, a transition:
+
+```
+add chart kind=radar        -> ok; validate valid=true issues=0
+add chart kind=stackedArea  -> ok; validate valid=true issues=0
+add media src=clip.mp4      -> ok; media/mediadatamp4 part present
+add media src=tone.wav      -> ok; media/mediadatawav part present
+add media src=../../../etc/hosts -> sandbox_denied (escaping src refused before any read)
+set shape glow=FFAA00       -> ok (a:effectLst)
+set slide transition=zoom   -> ok; validate valid=true issues=0
+```
+
+**docx** — two sources, both cited, a bibliography, a shadow text effect:
+
+```
+add source Smith2020 + Jones2019 -> ok
+cite both in /body/p[1], /body/p[2] -> ok
+add bibliography style=APA  -> ok + bibliography_cached warning present
+read --view sources         -> count=2 (tags Smith2020, Jones2019)
+set run shadow=true         -> ok; w14:shadow present; validate valid=true issues=0
+```
+
+**doctor / schema / MCP**:
+
+```
+doctor: version 1.1.0 | surfaceVersion 1.0 | verbs 18 | mcpTools 17
+schema edit: type enum includes source/citation/bibliography/media
+tools/list over stdio: exactly 17 tools (file_snapshot included)
+SchemaConsistencyTests / TokenBudgetTests / SchemaHelpStatusTests: 14/14 PASS
+```
+
+## Manual-check fixtures (1.1) — added
+
+- `fixtures/manual-check/deck-1.1-media.pptx` — a slide with a **doughnut** chart, an
+  embedded **media** placeholder, and a **zoom** transition (validator-clean).
+- `fixtures/manual-check/doc-1.1-bibliography.docx` — two cited sources + an **APA
+  bibliography** + a **shadow** text effect (validator-clean).
+
+## Invariants — held (1.1.0)
+- Published binary == `dotnet run` envelopes; **17 MCP tools**, **surfaceVersion
+  `1.0`** (unchanged), package version **1.1.0**.
+- All 1.1 changes are additive: nothing in CONTRACT §§1–7 removed or renamed; §7a
+  records the additions; `bibliography_cached` added to the frozen warning list.
+- Every error carries a non-empty `suggestion`; exit-code map (0/2/3/4/5) unchanged.
+- Binary size 38,352,937 bytes (~36.6 MB).
+- No git commit/push, no tags (left for the human release engineer).

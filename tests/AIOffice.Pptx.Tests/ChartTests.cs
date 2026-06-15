@@ -279,10 +279,206 @@ public sealed class ChartTests : IDisposable
         Create();
         var envelope = _handler.Edit(
             _ws.Ctx("deck.pptx"),
-            [TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("scatter"))]);
+            [TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("waterfall"))]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Equal(["bar", "line", "pie"], error.Candidates!);
+        Assert.Equal(
+            ["bar", "line", "pie", "doughnut", "radar", "bubble", "stackedBar", "percentStackedBar", "stackedArea", "combo"],
+            error.Candidates!);
+    }
+
+    [Theory]
+    [InlineData("stackedBar", "barChart")]
+    [InlineData("percentStackedBar", "barChart")]
+    [InlineData("stackedArea", "areaChart")]
+    [InlineData("radar", "radarChart")]
+    public void AddExpandedKind_ReopensValidWithGroup(string kind, string groupLocalName)
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps(kind, seriesCount: 3)));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var chartPart = doc.PresentationPart!.SlideParts.Single().ChartParts.Single();
+            var plotArea = chartPart.ChartSpace!.Descendants<C.PlotArea>().Single();
+            var group = plotArea.ChildElements.Single(e => e.LocalName == groupLocalName);
+            Assert.Equal(3, group.ChildElements.Count(e => e.LocalName == "ser"));
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void StackedBar_UsesStackedGroupingAndOverlap()
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("stackedBar")));
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var barChart = doc.PresentationPart!.SlideParts.Single().ChartParts.Single().ChartSpace!.Descendants<C.BarChart>().Single();
+        Assert.Equal(C.BarGroupingValues.Stacked, barChart.GetFirstChild<C.BarGrouping>()!.Val!.Value);
+        Assert.Equal(100, barChart.GetFirstChild<C.Overlap>()!.Val!.Value);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void PercentStackedBar_UsesPercentGrouping()
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("percentStackedBar")));
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var barChart = doc.PresentationPart!.SlideParts.Single().ChartParts.Single().ChartSpace!.Descendants<C.BarChart>().Single();
+        Assert.Equal(C.BarGroupingValues.PercentStacked, barChart.GetFirstChild<C.BarGrouping>()!.Val!.Value);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Doughnut_WritesDoughnutChartWithHole()
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("doughnut", "Share", seriesCount: 1)));
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var chartSpace = doc.PresentationPart!.SlideParts.Single().ChartParts.Single().ChartSpace!;
+        var doughnut = chartSpace.Descendants<C.DoughnutChart>().Single();
+        Assert.Single(doughnut.Elements<C.PieChartSeries>());
+        Assert.Equal(50, doughnut.GetFirstChild<C.HoleSize>()!.Val!.Value);
+        Assert.Empty(chartSpace.Descendants<C.CategoryAxis>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Doughnut_WithTwoSeries_IsInvalidArgs()
+    {
+        Create();
+        var envelope = _handler.Edit(
+            _ws.Ctx("deck.pptx"),
+            [TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("doughnut", seriesCount: 2))]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void Combo_WritesColumnGroupPlusLineGroup()
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("combo", seriesCount: 3)));
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var chartSpace = doc.PresentationPart!.SlideParts.Single().ChartParts.Single().ChartSpace!;
+        var bar = chartSpace.Descendants<C.BarChart>().Single();
+        var line = chartSpace.Descendants<C.LineChart>().Single();
+        Assert.Single(bar.Elements<C.BarChartSeries>()); // first series as columns
+        Assert.Equal(2, line.Elements<C.LineChartSeries>().Count()); // the rest as a line
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Combo_WithOneSeries_IsInvalidArgs()
+    {
+        Create();
+        var envelope = _handler.Edit(
+            _ws.Ctx("deck.pptx"),
+            [TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("combo", seriesCount: 1))]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void Bubble_WritesXYSizeTriplePerSeries()
+    {
+        Create();
+        var props = TestEnv.Props(
+            ("kind", "bubble"),
+            ("categories", new JsonArray("A", "B", "C")),
+            ("series", new JsonArray(new JsonObject
+            {
+                ["name"] = "Deals",
+                ["values"] = new JsonArray(10, 20, 30),
+                ["x"] = new JsonArray(1, 2, 3),
+                ["size"] = new JsonArray(5, 8, 3),
+            })));
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: props));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var chartSpace = doc.PresentationPart!.SlideParts.Single().ChartParts.Single().ChartSpace!;
+            var bubble = chartSpace.Descendants<C.BubbleChart>().Single();
+            var series = bubble.Elements<C.BubbleChartSeries>().Single();
+            Assert.NotNull(series.GetFirstChild<C.XValues>());
+            Assert.NotNull(series.GetFirstChild<C.YValues>());
+            var size = series.GetFirstChild<C.BubbleSize>()!;
+            // The size cache carries the true sizes (5, 8, 3).
+            Assert.Equal("5", size.Descendants<C.NumericValue>().First().Text);
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Bubble_DefaultsXAndSizeWhenOmitted()
+    {
+        Create();
+        // Same {name, values} shape as the other kinds: x defaults to the index, size to 1.
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("bubble", seriesCount: 1)));
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Bubble_MismatchedSizeLength_IsInvalidArgs()
+    {
+        Create();
+        var props = TestEnv.Props(
+            ("kind", "bubble"),
+            ("categories", new JsonArray("A", "B")),
+            ("series", new JsonArray(new JsonObject
+            {
+                ["values"] = new JsonArray(10, 20),
+                ["size"] = new JsonArray(5), // one short
+            })));
+        var envelope = _handler.Edit(
+            _ws.Ctx("deck.pptx"),
+            [TestEnv.Op("add", "/slide[1]", type: "chart", props: props)]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Theory]
+    [InlineData("stackedBar")]
+    [InlineData("percentStackedBar")]
+    [InlineData("stackedArea")]
+    [InlineData("doughnut")]
+    [InlineData("combo")]
+    public void Svg_ExpandedKind_DrawsSomething(string kind)
+    {
+        Create();
+        var seriesCount = kind == "doughnut" ? 1 : 2;
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps(kind, seriesCount: seriesCount)));
+
+        var svg = RenderSlide1Svg();
+        // Each new kind draws a real mini-chart element (bar/area/slice/hole), not a bare placeholder.
+        var marker = kind switch
+        {
+            "doughnut" => "aio-chart-hole",
+            "stackedArea" => "aio-chart-area",
+            _ => "aio-chart-bar",
+        };
+        Assert.Contains(marker, svg, StringComparison.Ordinal);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Theory]
+    [InlineData("bubble")]
+    [InlineData("radar")]
+    public void Svg_BubbleAndRadar_RenderHonestPlaceholder(string kind)
+    {
+        Create();
+        Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps(kind, seriesCount: 1)));
+
+        var svg = RenderSlide1Svg();
+        Assert.Contains("[chart] " + kind, svg, StringComparison.Ordinal);
+        TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
     [Fact]

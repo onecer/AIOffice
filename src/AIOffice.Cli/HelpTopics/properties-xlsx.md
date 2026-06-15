@@ -44,12 +44,19 @@ returned and the envelope carries a `formula_not_evaluated` warning in
 `{op:"add", path:"/'New Sheet'", type:"sheet"}` creates a sheet. Sheet names
 with spaces are quoted in paths: `/'Q3 Data'/B2`.
 
-## chart (M1+M3, `/Sheet1/chart[1]`)
+## chart (M1+M3, 1.1 expanded, `/Sheet1/chart[1]`)
 
 `{op:"add", path:"/Sheet1", type:"chart", props:{kind:"bar|line|pie|scatter|area",
 dataRange:"A1:C6", anchor:"E3", title?}}`. scatter (M3) plots numbers against
 numbers: the first dataRange column is the numeric X axis, so every X cell
 must be a number (header row excepted).
+
+1.1 adds the kinds `doughnut`, `radar`, `bubble`, `stackedBar`,
+`percentStackedBar`, `stackedArea`, `combo`. `bubble` lays out dataRange as an
+X column then a Y+size column pair per series (e.g. `A1:C5` = one bubble
+series). `combo` draws the first series as columns and the rest as a line, so
+it needs at least two series. An unsupported `kind` returns
+`unsupported_feature` listing the full supported set.
 
 ## name (M3, `/name[@name=SalesData]`)
 
@@ -148,6 +155,11 @@ the op path is the range the rule covers.
 | colorScale   | minColor, maxColor, midColor?                                |
 | dataBar      | color                                                        |
 | containsText | text, fill?, color?, bold?                                   |
+| iconSet      | set (e.g. `3TrafficLights1`, `3Arrows`, `4Rating`, `5Quarters`), reverse?, showValue? (1.1) |
+
+`iconSet` (1.1) ranks each cell against the others in the range and paints a
+3/4/5-icon glyph; pick the icon family with `set` (3-icon families start with
+`3`, etc.), `reverse:true` flips the order, `showValue:false` hides the number.
 
 `get`/`remove` by `/Sheet1/conditionalFormat[i]` (later indices shift down
 after a remove).

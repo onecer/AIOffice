@@ -67,7 +67,7 @@ The path addresses the whole speaker-notes body (no `/p[j]` beneath it).
 `{op:"add", path:"/slide[1]", type:"image", props:{src:"logo.png", w:"6cm"}}` —
 the result path is `/slide[1]/shape[@id=N]`; `remove` it by that path.
 
-## chart (M3, `/slide[1]/chart[1]`)
+## chart (M3, 1.1 expanded, `/slide[1]/chart[1]`)
 
 `{op:"add", path:"/slide[1]", type:"chart", props:{kind:"bar|line|pie",
 categories:["Q1","Q2"], series:[{name:"Sales", values:[10,20]}],
@@ -79,11 +79,35 @@ row = series names, remaining columns = series values (quote sheet names with
 spaces: `book.xlsx!'Q3 Data'/A1:C5`). `set` on `/slide[i]/chart[k]` retitles;
 `remove` deletes frame + part.
 
-## transition (M3, slide-level set)
+1.1 adds the kinds `doughnut`, `radar`, `bubble`, `stackedBar`,
+`percentStackedBar`, `stackedArea`, `combo`. `doughnut` (like `pie`) needs
+exactly one series; `bubble` series carry `{name, values, x?, size?}` triples
+(one entry per category); `combo` draws the first series as columns plus the
+rest as a line, so it needs at least two series. An unsupported `kind` returns
+`unsupported_feature` listing the full supported set.
 
-`{op:"set", path:"/slide[2]", props:{transition:"fade|push|wipe|none",
-transitionDuration:"0.5s"}}` — `get /slide[2]` and the outline view read it
-back.
+## media (1.1, `/slide[1]` add type "media")
+
+`{op:"add", path:"/slide[1]", type:"media", props:{src:"clip.mp4", poster?,
+x?, y?, w?, h?, name?, autoplay?}}` embeds an audio/video file (mp4/mov/m4a/
+mp3/wav) as a `p:pic` with an `a:videoFile`/`a:audioFile`. `src` (and an
+optional `poster` image) is sandbox-resolved — a path outside the workspace is
+`sandbox_denied` before any byte is read. The op returns the canonical embed
+path; `read {view:"embeds"}` lists the media part.
+
+## text & shape effects (1.1, shape-level set)
+
+`{op:"set", path:"/slide[1]/shape[@id=5]", props:{shadow?, glow?,
+reflection?, outline?}}` writes into the shape's `a:effectLst`. Each effect
+takes `true` (default accent) or a hex/named color (`shadow`/`glow`/`outline`
+tint; `reflection` is colorless); `false` clears it. `outline` adds a line
+border.
+
+## transition (M3, 1.1 expanded, slide-level set)
+
+`{op:"set", path:"/slide[2]", props:{transition:"none|fade|push|wipe|split|
+reveal|cut|zoom", transitionDuration:"0.5s"}}` — `get /slide[2]` and the
+outline view read it back. 1.1 adds `split`, `reveal`, `cut`, `zoom`.
 
 ## geometry & z-order (M3)
 

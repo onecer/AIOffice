@@ -55,6 +55,9 @@ public static class WarningCodes
     /// <summary>A live preview server was already running for the file; the existing one is reused.</summary>
     public const string AlreadyRunning = "already_running";
 
+    /// <summary>A bibliography's entries/numbers were pre-rendered from the cached sources; Word finalizes format on open/refresh.</summary>
+    public const string BibliographyCached = "bibliography_cached";
+
     /// <summary>Caption/cross-reference numbers were served from the cached SEQ values (Word does not recompute fields headlessly).</summary>
     public const string CaptionNumbersCached = "caption_numbers_cached";
 
@@ -109,7 +112,7 @@ public static class WarningCodes
     /// <summary>The complete, closed set of warning codes, for the schema command.</summary>
     public static readonly IReadOnlyList<string> All =
     [
-        AlreadyRunning, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
+        AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
         EquationPartial, FindNoMatch, FormulaNotEvaluated, MdBlockSkipped, MdHtmlSkipped,
         MdImageSkipped, MdLinkSkipped, ResultTruncated, ScopeDefaulted, StreamFallback,
         TemplateUnresolved, TocPagesUnknown, TocRefreshed,

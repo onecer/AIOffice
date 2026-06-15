@@ -50,7 +50,8 @@ internal sealed partial record PptxAddress
         "pptx paths look like /slide[2], /slide[2]/notes, /slide[2]/shape[3], /slide[2]/shape[@id=7], " +
         "/slide[2]/shape[3]/p[1], /slide[2]/chart[1], /slide[2]/table[1], /slide[2]/table[1]/tr[2]/tc[3], " +
         "/slide[2]/smartart[1], /slide[2]/animation[1], /slide[2]/comment[@id=3], " +
-        "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/shape[@id=7]/omath[1], " +
+        "/slide[2]/embed[1], /slide[2]/embed[@id=7], /slide[2]/media[1], /slide[2]/media[@id=7], " +
+        "/slide[2]/shape[@id=7]/omath[1], " +
         "/master[1], /master[1]/layout[2], /master[1]/shape[1], " +
         "/section[1] (a slide section), /properties (document core + custom metadata) " +
         "or / (the presentation: slide size and sections); " +
@@ -97,6 +98,12 @@ internal sealed partial record PptxAddress
 
     [GeneratedRegex(@"^embed\[@id=([0-9]+)\]$")]
     private static partial Regex EmbedIdSegment();
+
+    [GeneratedRegex(@"^media\[([0-9]+)\]$")]
+    private static partial Regex MediaOrdinalSegment();
+
+    [GeneratedRegex(@"^media\[@id=([0-9]+)\]$")]
+    private static partial Regex MediaIdSegment();
 
     [GeneratedRegex(@"^shape\[@id=([0-9]+)\]$")]
     private static partial Regex ShapeIdSegment();
@@ -159,6 +166,12 @@ internal sealed partial record PptxAddress
     /// <summary>Stable embed id on the slide (/slide[i]/embed[@id=N], the host graphicFrame's shape id); null otherwise.</summary>
     public uint? EmbedId { get; init; }
 
+    /// <summary>1-based media index on the slide (/slide[i]/media[k]); null otherwise.</summary>
+    public int? MediaOrdinal { get; init; }
+
+    /// <summary>Stable media id on the slide (/slide[i]/media[@id=N], the host picture's shape id); null otherwise.</summary>
+    public uint? MediaId { get; init; }
+
     public int? ParagraphIndex { get; init; }
 
     public int? RunIndex { get; init; }
@@ -188,6 +201,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>True when the path addresses an embedded object (/slide[i]/embed[k] or /slide[i]/embed[@id=N]).</summary>
     public bool IsEmbed => EmbedOrdinal.HasValue || EmbedId.HasValue;
+
+    /// <summary>True when the path addresses a media object (/slide[i]/media[k] or /slide[i]/media[@id=N]).</summary>
+    public bool IsMedia => MediaOrdinal.HasValue || MediaId.HasValue;
 
     /// <summary>True when the path addresses an equation inside a shape (/slide[i]/shape[@id=N]/omath[k]).</summary>
     public bool IsOMath => OMathIndex.HasValue;
@@ -352,9 +368,29 @@ internal sealed partial record PptxAddress
             return address with { EmbedId = uint.Parse(embedIdMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
         }
 
+        if (MediaOrdinalSegment().Match(segments[1]) is { Success: true } mediaOrdinalMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow media[k].");
+            }
+
+            return address with { MediaOrdinal = ParseIndex(mediaOrdinalMatch.Groups[1].Value, raw) };
+        }
+
+        if (MediaIdSegment().Match(segments[1]) is { Success: true } mediaIdMatch)
+        {
+            if (segments.Length > 2)
+            {
+                throw Invalid(raw, "Nothing can follow media[@id=N].");
+            }
+
+            return address with { MediaId = uint.Parse(mediaIdMatch.Groups[1].Value, CultureInfo.InvariantCulture) };
+        }
+
         var shaped = WithShapeSegment(address, segments[1], raw,
             $"The second segment must be notes, chart[k], table[k], smartart[k], animation[k], comment[@id=N], " +
-            $"embed[k], embed[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
+            $"embed[k], embed[@id=N], media[k], media[@id=N], shape[j] or shape[@id=N]; got '{segments[1]}'.");
 
         if (segments.Length == 2)
         {
@@ -500,6 +536,9 @@ internal sealed partial record PptxAddress
 
     /// <summary>The canonical embed path (/slide[i]/embed[@id=N]) of the addressed embed, by its host graphicFrame id.</summary>
     public string CanonicalEmbedPath(uint id) => Units.Inv($"/slide[{SlideIndex}]/embed[@id={id}]");
+
+    /// <summary>The canonical media path (/slide[i]/media[@id=N]) of the addressed media, by its host picture id.</summary>
+    public string CanonicalMediaPath(uint id) => Units.Inv($"/slide[{SlideIndex}]/media[@id={id}]");
 
     /// <summary>The canonical equation path (/slide[i]/shape[@id=N]/omath[k]) for the host shape id and 1-based index.</summary>
     public string CanonicalOMathPath(uint shapeId, int index) =>

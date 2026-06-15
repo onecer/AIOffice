@@ -18,7 +18,10 @@ internal sealed record ChartSeriesSpec(
     string Name,
     string? NameRef,
     IReadOnlyList<double?> Values,
-    string ValuesRef);
+    string ValuesRef,
+    // Bubble sizes (bubble charts only): the per-point size column for this series.
+    IReadOnlyList<double?>? Sizes = null,
+    string? SizesRef = null);
 
 /// <summary>
 /// A fully validated chart-add, extracted from the in-memory workbook while the
@@ -39,7 +42,7 @@ internal sealed record ChartAddSpec(
     int AnchorRow,
     int WidthCells,
     int HeightCells,
-    // Numeric X values (scatter only): the first dataRange column parsed as numbers.
+    // Numeric X values (scatter and bubble): the first dataRange column parsed as numbers.
     IReadOnlyList<double?>? XValues = null);
 
 /// <summary>A validated chart removal (1-based per-sheet index at apply time).</summary>
@@ -133,7 +136,22 @@ internal sealed class ChartOpBatch
 internal static partial class ExcelCharts
 {
     /// <summary>The chart kinds aioffice can create. Everything else is unsupported_feature.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["bar", "line", "pie", "scatter", "area"];
+    public static readonly IReadOnlyList<string> Kinds =
+    [
+        "bar", "line", "pie", "scatter", "area",
+        "doughnut", "radar", "bubble",
+        "stackedBar", "percentStackedBar", "stackedArea", "combo",
+    ];
+
+    /// <summary>Kinds whose first dataRange column is categories (not numeric X / bubble triples).</summary>
+    private static readonly IReadOnlyList<string> CategoryKinds =
+        ["bar", "line", "pie", "area", "doughnut", "radar", "stackedBar", "percentStackedBar", "stackedArea", "combo"];
+
+    /// <summary>Single-series kinds: exactly one value column (categories + one series).</summary>
+    private static readonly IReadOnlyList<string> SingleSeriesKinds = ["pie"];
+
+    /// <summary>Kinds that plot value-against-value with two value axes (no category axis).</summary>
+    private static readonly IReadOnlyList<string> ValueAxisKinds = ["scatter", "bubble"];
 
     private static readonly IReadOnlyList<string> AddProps =
         ["kind", "dataRange", "anchor", "title", "widthCells", "heightCells"];
@@ -197,15 +215,30 @@ internal static partial class ExcelCharts
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"ops[{opIndex}]: chart kind '{kind}' is not supported.",
-                "Supported chart kinds: bar, line, pie, scatter, area. Bubble, radar and combo " +
-                "charts land later; a scatter chart is the usual stand-in for bubble data.",
+                "Supported chart kinds: " + string.Join(", ", Kinds) +
+                ". Surface charts and stock charts have no stand-in yet.",
                 candidates: Kinds);
         }
 
         var (firstColumn, firstRow, lastColumn, lastRow) =
             ParseDataRange(RequiredString(props, "dataRange", opIndex, "A1:B5"), opIndex);
         var columns = lastColumn - firstColumn + 1;
-        if (columns < 2)
+
+        // bubble reads x/y/size triples: each series is THREE columns past the
+        // first (the leading column is the shared X axis).
+        if (kind == "bubble")
+        {
+            if (columns < 3 || (columns - 1) % 2 != 0)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: a bubble chart needs an X column then y/size column pairs " +
+                    $"(3, 5, 7, … columns); dataRange has {columns}.",
+                    "Lay out dataRange as X, then a Y and a size column per bubble series, e.g. A1:C5 " +
+                    "(X, Y, size) or A1:E5 (X, Y1, size1, Y2, size2).");
+            }
+        }
+        else if (columns < 2)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -213,12 +246,21 @@ internal static partial class ExcelCharts
                 "Widen the range, e.g. A1:B5 — first column categories, later columns series values.");
         }
 
-        if (kind == "pie" && columns != 2)
+        if (SingleSeriesKinds.Contains(kind, StringComparer.Ordinal) && columns != 2)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                $"ops[{opIndex}]: a pie chart takes exactly one series (two columns); dataRange has {columns}.",
+                $"ops[{opIndex}]: a {kind} chart takes exactly one series (two columns); dataRange has {columns}.",
                 "Narrow dataRange to categories plus one value column, or use kind bar/line for multi-series data.");
+        }
+
+        // combo overlays a line on columns, so it needs at least two series.
+        if (kind == "combo" && columns < 3)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a combo chart needs at least two series (the first drawn as columns, the rest as a line); dataRange has {columns - 1}.",
+                "Widen dataRange to categories plus two or more value columns, e.g. A1:C5.");
         }
 
         var (anchorColumn, anchorRow) = ParseAnchor(RequiredString(props, "anchor", opIndex, "D2"), opIndex);
@@ -266,10 +308,11 @@ internal static partial class ExcelCharts
             categories.Add(ExcelValues.SafeFormatted(sheet.Cell(row, firstColumn)));
         }
 
-        // Scatter plots numbers against numbers: the first column is the X
-        // axis and must be numeric (categories stay text for bar/line/pie/area).
+        // Scatter and bubble plot numbers against numbers: the first column is
+        // the shared X axis and must be numeric (categories stay text for the
+        // category kinds).
         List<double?>? xValues = null;
-        if (kind == "scatter")
+        if (kind is "scatter" or "bubble")
         {
             xValues = new List<double?>(lastRow - dataFirstRow + 1);
             for (var row = dataFirstRow; row <= lastRow; row++)
@@ -284,7 +327,7 @@ internal static partial class ExcelCharts
                     XLDataType.TimeSpan => value.GetTimeSpan().TotalDays,
                     _ => throw new AiofficeException(
                         ErrorCodes.InvalidArgs,
-                        $"ops[{opIndex}]: a scatter chart needs numeric X values, but " +
+                        $"ops[{opIndex}]: a {kind} chart needs numeric X values, but " +
                         $"{ExcelPaths.CellPath(sheet, cell.Address)} is {ExcelValues.TypeName(value.Type)}.",
                         "Point the first dataRange column at numbers, or use kind \"line\" for category data."),
                 });
@@ -292,24 +335,9 @@ internal static partial class ExcelCharts
         }
 
         var categoriesRef = RangeRef(sheet.Name, firstColumn, dataFirstRow, firstColumn, lastRow);
-        var series = new List<ChartSeriesSpec>(columns - 1);
-        for (var column = firstColumn + 1; column <= lastColumn; column++)
-        {
-            var ordinal = column - firstColumn;
-            var values = new List<double?>(lastRow - dataFirstRow + 1);
-            for (var row = dataFirstRow; row <= lastRow; row++)
-            {
-                values.Add(NumericChartValue(sheet, sheet.Cell(row, column), opIndex));
-            }
-
-            series.Add(new ChartSeriesSpec(
-                Name: hasHeader
-                    ? ExcelValues.SafeFormatted(sheet.Cell(firstRow, column))
-                    : string.Create(CultureInfo.InvariantCulture, $"Series {ordinal}"),
-                NameRef: hasHeader ? CellRefText(sheet.Name, column, firstRow) : null,
-                Values: values,
-                ValuesRef: RangeRef(sheet.Name, column, dataFirstRow, column, lastRow)));
-        }
+        var series = kind == "bubble"
+            ? CaptureBubbleSeries(sheet, firstColumn, lastColumn, firstRow, dataFirstRow, lastRow, hasHeader, opIndex)
+            : CaptureCategorySeries(sheet, firstColumn, lastColumn, firstRow, dataFirstRow, lastRow, hasHeader, opIndex);
 
         return new ChartAddSpec(
             SheetName: sheet.Name,
@@ -327,6 +355,66 @@ internal static partial class ExcelCharts
             WidthCells: widthCells,
             HeightCells: heightCells,
             XValues: xValues);
+    }
+
+    /// <summary>One series per value column — the shared layout for every category kind and scatter.</summary>
+    private static List<ChartSeriesSpec> CaptureCategorySeries(
+        IXLWorksheet sheet, int firstColumn, int lastColumn, int firstRow, int dataFirstRow, int lastRow,
+        bool hasHeader, int opIndex)
+    {
+        var series = new List<ChartSeriesSpec>(lastColumn - firstColumn);
+        for (var column = firstColumn + 1; column <= lastColumn; column++)
+        {
+            var ordinal = column - firstColumn;
+            series.Add(new ChartSeriesSpec(
+                Name: hasHeader
+                    ? ExcelValues.SafeFormatted(sheet.Cell(firstRow, column))
+                    : string.Create(CultureInfo.InvariantCulture, $"Series {ordinal}"),
+                NameRef: hasHeader ? CellRefText(sheet.Name, column, firstRow) : null,
+                Values: ColumnValues(sheet, column, dataFirstRow, lastRow, opIndex),
+                ValuesRef: RangeRef(sheet.Name, column, dataFirstRow, column, lastRow)));
+        }
+
+        return series;
+    }
+
+    /// <summary>
+    /// Bubble series: after the shared X column, each (Y, size) column pair is
+    /// one series. The series name comes from the Y column's header cell.
+    /// </summary>
+    private static List<ChartSeriesSpec> CaptureBubbleSeries(
+        IXLWorksheet sheet, int firstColumn, int lastColumn, int firstRow, int dataFirstRow, int lastRow,
+        bool hasHeader, int opIndex)
+    {
+        var series = new List<ChartSeriesSpec>((lastColumn - firstColumn) / 2);
+        var ordinal = 0;
+        for (var yColumn = firstColumn + 1; yColumn + 1 <= lastColumn; yColumn += 2)
+        {
+            ordinal++;
+            var sizeColumn = yColumn + 1;
+            series.Add(new ChartSeriesSpec(
+                Name: hasHeader
+                    ? ExcelValues.SafeFormatted(sheet.Cell(firstRow, yColumn))
+                    : string.Create(CultureInfo.InvariantCulture, $"Series {ordinal}"),
+                NameRef: hasHeader ? CellRefText(sheet.Name, yColumn, firstRow) : null,
+                Values: ColumnValues(sheet, yColumn, dataFirstRow, lastRow, opIndex),
+                ValuesRef: RangeRef(sheet.Name, yColumn, dataFirstRow, yColumn, lastRow),
+                Sizes: ColumnValues(sheet, sizeColumn, dataFirstRow, lastRow, opIndex),
+                SizesRef: RangeRef(sheet.Name, sizeColumn, dataFirstRow, sizeColumn, lastRow)));
+        }
+
+        return series;
+    }
+
+    private static List<double?> ColumnValues(IXLWorksheet sheet, int column, int dataFirstRow, int lastRow, int opIndex)
+    {
+        var values = new List<double?>(lastRow - dataFirstRow + 1);
+        for (var row = dataFirstRow; row <= lastRow; row++)
+        {
+            values.Add(NumericChartValue(sheet, sheet.Cell(row, column), opIndex));
+        }
+
+        return values;
     }
 
     private static (int FirstColumn, int FirstRow, int LastColumn, int LastRow) ParseDataRange(
@@ -465,24 +553,65 @@ internal static partial class ExcelCharts
     {
         var chartSpace = chartPart.ChartSpace;
         var plotArea = chartSpace?.Descendants<C.PlotArea>().FirstOrDefault();
-        var group = plotArea?.ChildElements
-            .FirstOrDefault(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal));
+        var groups = plotArea?.ChildElements
+            .Where(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal))
+            .ToList() ?? [];
 
-        var series = group?.ChildElements.Count(e => e.LocalName == "ser") ?? 0;
+        // Series count and dataRange span every chart group (combo has two).
+        var series = groups.Sum(g => g.ChildElements.Count(e => e.LocalName == "ser"));
         return new ChartInfo(
             SheetName: sheetName,
             Index: index,
             Path: string.Create(
                 CultureInfo.InvariantCulture,
                 $"/{ExcelPaths.QuoteSheet(sheetName)}/chart[{index}]"),
-            Kind: KindName(group?.LocalName),
+            Kind: KindName(groups),
             Title: TitleText(chartSpace),
-            DataRange: DataRangeOf(group),
+            DataRange: DataRangeOf(groups),
             Anchor: AnchorRefOf(anchor),
             Series: series);
     }
 
-    private static string KindName(string? localName)
+    /// <summary>
+    /// The wire kind for a chart's plot-area groups. A column BarChart plus a
+    /// LineChart is a combo; a single group's stacking attribute distinguishes
+    /// the stacked / percent-stacked bar and stacked area variants.
+    /// </summary>
+    private static string KindName(IReadOnlyList<OpenXmlElement> groups)
+    {
+        if (groups.Count == 0)
+        {
+            return "unknown";
+        }
+
+        if (groups.Count > 1)
+        {
+            var names = groups.Select(g => g.LocalName).ToHashSet(StringComparer.Ordinal);
+            if (names.Contains("barChart") && names.Contains("lineChart"))
+            {
+                return "combo";
+            }
+
+            return BaseKindName(groups[0].LocalName);
+        }
+
+        var group = groups[0];
+        return group.LocalName switch
+        {
+            "barChart" => group.GetFirstChild<C.BarGrouping>()?.Val?.Value switch
+            {
+                C.BarGroupingValues s when s == C.BarGroupingValues.Stacked => "stackedBar",
+                C.BarGroupingValues s when s == C.BarGroupingValues.PercentStacked => "percentStackedBar",
+                _ => "bar",
+            },
+            "areaChart" => group.GetFirstChild<C.Grouping>()?.Val?.Value == C.GroupingValues.Stacked
+                ? "stackedArea"
+                : "area",
+            _ => BaseKindName(group.LocalName),
+        };
+    }
+
+    private static string BaseKindName(string? localName)
     {
         if (string.IsNullOrEmpty(localName))
         {
@@ -511,17 +640,17 @@ internal static partial class ExcelCharts
     }
 
     /// <summary>Reconstructs the original dataRange as the union of every series ref on the primary sheet.</summary>
-    private static string? DataRangeOf(OpenXmlElement? group)
+    private static string? DataRangeOf(IReadOnlyList<OpenXmlElement> groups)
     {
-        if (group is null)
+        if (groups.Count == 0)
         {
             return null;
         }
 
         string? primarySheet = null;
         int minColumn = int.MaxValue, minRow = int.MaxValue, maxColumn = 0, maxRow = 0;
-        foreach (var formula in group.ChildElements
-                     .Where(e => e.LocalName == "ser")
+        foreach (var formula in groups
+                     .SelectMany(g => g.ChildElements.Where(e => e.LocalName == "ser"))
                      .SelectMany(s => s.Descendants<C.Formula>()))
         {
             var match = FormulaRefPattern().Match(formula.Text);
@@ -680,10 +809,15 @@ internal static partial class ExcelCharts
     private static C.ChartSpace BuildChartSpace(ChartAddSpec spec)
     {
         var plotArea = new C.PlotArea(new C.Layout());
-        plotArea.Append(BuildChartGroup(spec));
-        if (spec.Kind is "bar" or "line" or "area")
+        foreach (var group in BuildChartGroups(spec))
         {
-            plotArea.Append(new C.CategoryAxis(
+            plotArea.Append(group);
+        }
+
+        if (ValueAxisKinds.Contains(spec.Kind, StringComparer.Ordinal))
+        {
+            // Scatter and bubble plot value-against-value: both axes are value axes.
+            plotArea.Append(new C.ValueAxis(
                 new C.AxisId { Val = CategoryAxisId },
                 new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
                 new C.Delete { Val = false },
@@ -696,10 +830,9 @@ internal static partial class ExcelCharts
                 new C.AxisPosition { Val = C.AxisPositionValues.Left },
                 new C.CrossingAxis { Val = CategoryAxisId }));
         }
-        else if (spec.Kind == "scatter")
+        else if (HasCategoryAxes(spec.Kind))
         {
-            // Scatter plots value-against-value: both axes are value axes.
-            plotArea.Append(new C.ValueAxis(
+            plotArea.Append(new C.CategoryAxis(
                 new C.AxisId { Val = CategoryAxisId },
                 new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
                 new C.Delete { Val = false },
@@ -736,60 +869,70 @@ internal static partial class ExcelCharts
         return chartSpace;
     }
 
-    private static OpenXmlCompositeElement BuildChartGroup(ChartAddSpec spec)
+    /// <summary>Kinds drawn against a category axis plus a value axis.</summary>
+    private static bool HasCategoryAxes(string kind) =>
+        kind is "bar" or "line" or "area" or "radar"
+            or "stackedBar" or "percentStackedBar" or "stackedArea" or "combo";
+
+    /// <summary>
+    /// The chart group(s) for a kind. Almost every kind is a single group; combo
+    /// is the exception — it emits a column BarChart for the first series and a
+    /// LineChart for the rest, both referencing the shared category/value axes.
+    /// </summary>
+    private static IEnumerable<OpenXmlCompositeElement> BuildChartGroups(ChartAddSpec spec)
     {
         switch (spec.Kind)
         {
             case "bar":
-            {
-                var group = new C.BarChart(
-                    new C.BarDirection { Val = C.BarDirectionValues.Column },
-                    new C.BarGrouping { Val = C.BarGroupingValues.Clustered },
-                    new C.VaryColors { Val = false });
-                for (var i = 0; i < spec.Series.Count; i++)
-                {
-                    var series = new C.BarChartSeries();
-                    AppendSeriesChildren(series, spec, i);
-                    group.Append(series);
-                }
+                yield return BuildBarGroup(spec, C.BarGroupingValues.Clustered, 0, range: Range(0, spec.Series.Count));
+                break;
 
-                group.Append(new C.AxisId { Val = CategoryAxisId });
-                group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
-            }
+            case "stackedBar":
+                yield return BuildBarGroup(spec, C.BarGroupingValues.Stacked, 100, range: Range(0, spec.Series.Count));
+                break;
+
+            case "percentStackedBar":
+                yield return BuildBarGroup(spec, C.BarGroupingValues.PercentStacked, 100, range: Range(0, spec.Series.Count));
+                break;
 
             case "line":
-            {
-                var group = new C.LineChart(
-                    new C.Grouping { Val = C.GroupingValues.Standard },
-                    new C.VaryColors { Val = false });
-                for (var i = 0; i < spec.Series.Count; i++)
-                {
-                    var series = new C.LineChartSeries();
-                    AppendSeriesChildren(series, spec, i);
-                    group.Append(series);
-                }
-
-                group.Append(new C.AxisId { Val = CategoryAxisId });
-                group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
-            }
+                yield return BuildLineGroup(spec, C.GroupingValues.Standard, Range(0, spec.Series.Count));
+                break;
 
             case "area":
+                yield return BuildAreaGroup(spec, C.GroupingValues.Standard);
+                break;
+
+            case "stackedArea":
+                yield return BuildAreaGroup(spec, C.GroupingValues.Stacked);
+                break;
+
+            case "radar":
             {
-                var group = new C.AreaChart(
-                    new C.Grouping { Val = C.GroupingValues.Standard },
+                var group = new C.RadarChart(
+                    new C.RadarStyle { Val = C.RadarStyleValues.Marker },
                     new C.VaryColors { Val = false });
                 for (var i = 0; i < spec.Series.Count; i++)
                 {
-                    var series = new C.AreaChartSeries();
+                    var series = new C.RadarChartSeries();
                     AppendSeriesChildren(series, spec, i);
                     group.Append(series);
                 }
 
                 group.Append(new C.AxisId { Val = CategoryAxisId });
                 group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
+                yield return group;
+                break;
+            }
+
+            case "combo":
+            {
+                // First series as clustered columns…
+                yield return BuildBarGroup(spec, C.BarGroupingValues.Clustered, 0, range: Range(0, 1));
+
+                // …remaining series as a line, on the same axes.
+                yield return BuildLineGroup(spec, C.GroupingValues.Standard, Range(1, spec.Series.Count - 1));
+                break;
             }
 
             case "scatter":
@@ -804,7 +947,38 @@ internal static partial class ExcelCharts
 
                 group.Append(new C.AxisId { Val = CategoryAxisId });
                 group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
+                yield return group;
+                break;
+            }
+
+            case "bubble":
+            {
+                var group = new C.BubbleChart(new C.VaryColors { Val = false });
+                for (var i = 0; i < spec.Series.Count; i++)
+                {
+                    group.Append(BuildBubbleSeries(spec, i));
+                }
+
+                group.Append(new C.AxisId { Val = CategoryAxisId });
+                group.Append(new C.AxisId { Val = ValueAxisId });
+                yield return group;
+                break;
+            }
+
+            case "doughnut":
+            {
+                var group = new C.DoughnutChart(new C.VaryColors { Val = true });
+                for (var i = 0; i < spec.Series.Count; i++)
+                {
+                    var series = new C.PieChartSeries();
+                    AppendSeriesChildren(series, spec, i);
+                    group.Append(series);
+                }
+
+                group.Append(new C.FirstSliceAngle { Val = 0 });
+                group.Append(new C.HoleSize { Val = 50 });
+                yield return group;
+                break;
             }
 
             default: // "pie" — ParseAdd rejected everything else
@@ -814,9 +988,92 @@ internal static partial class ExcelCharts
                 AppendSeriesChildren(series, spec, 0);
                 group.Append(series);
                 group.Append(new C.FirstSliceAngle { Val = 0 });
-                return group;
+                yield return group;
+                break;
             }
         }
+    }
+
+    private static IEnumerable<int> Range(int start, int count) => Enumerable.Range(start, count);
+
+    /// <summary>A column BarChart over a contiguous slice of the series list.</summary>
+    private static C.BarChart BuildBarGroup(
+        ChartAddSpec spec, C.BarGroupingValues grouping, sbyte overlap, IEnumerable<int> range)
+    {
+        var group = new C.BarChart(
+            new C.BarDirection { Val = C.BarDirectionValues.Column },
+            new C.BarGrouping { Val = grouping },
+            new C.VaryColors { Val = false });
+        foreach (var i in range)
+        {
+            var series = new C.BarChartSeries();
+            AppendSeriesChildren(series, spec, i);
+            group.Append(series);
+        }
+
+        // Stacked columns must overlap fully (100) to sit on top of each other.
+        if (overlap != 0)
+        {
+            group.Append(new C.Overlap { Val = overlap });
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    /// <summary>A LineChart over a contiguous slice of the series list.</summary>
+    private static C.LineChart BuildLineGroup(ChartAddSpec spec, C.GroupingValues grouping, IEnumerable<int> range)
+    {
+        var group = new C.LineChart(
+            new C.Grouping { Val = grouping },
+            new C.VaryColors { Val = false });
+        foreach (var i in range)
+        {
+            var series = new C.LineChartSeries();
+            AppendSeriesChildren(series, spec, i);
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    /// <summary>An AreaChart over every series with the given stacking.</summary>
+    private static C.AreaChart BuildAreaGroup(ChartAddSpec spec, C.GroupingValues grouping)
+    {
+        var group = new C.AreaChart(
+            new C.Grouping { Val = grouping },
+            new C.VaryColors { Val = false });
+        for (var i = 0; i < spec.Series.Count; i++)
+        {
+            var series = new C.AreaChartSeries();
+            AppendSeriesChildren(series, spec, i);
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    /// <summary>idx/order/tx/spPr/xVal/yVal/bubbleSize — bubble plots X,Y with a per-point size.</summary>
+    private static C.BubbleChartSeries BuildBubbleSeries(ChartAddSpec spec, int ordinal)
+    {
+        var data = spec.Series[ordinal];
+        var series = new C.BubbleChartSeries();
+        series.Append(new C.Index { Val = (uint)ordinal });
+        series.Append(new C.Order { Val = (uint)ordinal });
+        series.Append(SeriesText(data));
+        series.Append(new C.XValues(new C.NumberReference(
+            new C.Formula(spec.CategoriesRef), NumberCache(spec.XValues!))));
+        series.Append(new C.YValues(new C.NumberReference(
+            new C.Formula(data.ValuesRef), NumberCache(data.Values))));
+        series.Append(new C.BubbleSize(new C.NumberReference(
+            new C.Formula(data.SizesRef!), NumberCache(data.Sizes!))));
+        series.Append(new C.Bubble3D { Val = false });
+        return series;
     }
 
     /// <summary>idx/order/tx/spPr/xVal/yVal/smooth — scatter plots X numbers against Y numbers.</summary>

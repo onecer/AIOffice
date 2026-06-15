@@ -288,3 +288,52 @@ Caption and reference numbers are **cached** — Word recomputes them (and
 renumbers all captions) when it opens the file or on field refresh (`F9`); a
 `caption_numbers_cached` warning flags this. `get /caption[@label=Figure][1]`
 returns the caption; `read --view structure` lists captions.
+
+## citations & bibliography (1.1)
+
+A **source** (`type:source`, path `/sources`) is one entry in the document's
+bibliography store — the customXml part Word reads from. `tag` is the stable
+key citations reference; re-adding the same tag updates the source.
+
+| prop      | type   | meaning                                                       |
+|-----------|--------|---------------------------------------------------------------|
+| `tag`     | string | required: short unique citation key, e.g. `Smith2020`        |
+| `kind`    | string | `book` · `journalArticle` · `website` · `report`             |
+| `author`  | string | author, e.g. `Smith, John`                                   |
+| `title`   | string | source title                                                 |
+| `year`    | number | publication year                                             |
+
+    {op:"add", path:"/sources", type:"source",
+      props:{tag:"Smith2020", kind:"book", author:"Smith, John",
+             title:"On Widgets", year:2020}}
+
+A **citation** (`type:citation`) drops a `CITATION` field into a paragraph:
+
+| prop             | type    | meaning                                            |
+|------------------|---------|-----------------------------------------------------|
+| `source`         | string  | required: the `tag` of the source to cite          |
+| `pages`          | string  | page range shown in the cite                       |
+| `suppressAuthor` | boolean | hide the author (year-only cite)                   |
+
+    {op:"add", path:"/body/p[2]", type:"citation", props:{source:"Smith2020"}}
+
+A **bibliography** (`type:bibliography`, path `/body`) renders every *cited*
+source. `style` picks the format: `APA` (default) · `MLA` · `Chicago`. The
+entries are cached — Word rebuilds them on field refresh (`F9`), so a
+`bibliography_cached` warning is attached. `read --view sources` lists the
+sources in the store.
+
+    {op:"add", path:"/body", type:"bibliography", props:{style:"APA"}}
+
+## text effects (1.1, run-level set)
+
+`{op:"set", path:"/body/p[1]/run[1]", props:{shadow?, glow?, reflection?,
+outline?}}` emits the Word 2010 text effects (`w14:shadow`/`w14:glow`/
+`w14:reflection`/`w14:textOutline`). `outline` accepts the alias `textOutline`.
+
+| prop         | value                                                          |
+|--------------|----------------------------------------------------------------|
+| `shadow`     | `true` (soft default) or `{color}`; `false` clears             |
+| `glow`       | `true` or `{color, radius}` (radius in points, default 5)      |
+| `reflection` | `true` or `{transparency, size}` (0–100 percentages)           |
+| `outline`    | `true` or `{color, width}` (width in points, default 1)        |

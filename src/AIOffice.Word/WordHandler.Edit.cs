@@ -164,7 +164,14 @@ public sealed partial class WordHandler
             "add" when op.Type == "crossRef" => ApplyAddCrossRef(doc, op, session),
             "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
             "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
+            "add" when op.Type == "source" => ApplyAddSource(doc, op),
+            "add" when op.Type == "citation" && session.Track => throw TrackedStructureUnsupported("citation"),
+            "add" when op.Type == "citation" => ApplyAddCitation(doc, op),
+            "add" when op.Type == "bibliography" && session.Track => throw TrackedStructureUnsupported("bibliography"),
+            "add" when op.Type == "bibliography" => ApplyAddBibliography(doc, file, op, session),
             "add" => ApplyAdd(doc, op, session),
+            "remove" when rootName == "source" => ApplyRemoveSource(doc, op),
+            "remove" when rootName == "bibliography" => ApplyRemoveBibliography(doc, op),
             "remove" when rootName == "embed" => ApplyRemoveEmbed(doc, op),
             "remove" when rootName == "style" => ApplyRemoveStyle(doc, op),
             "remove" when rootName == "comment" => ApplyRemoveComment(doc, op),
@@ -215,6 +222,13 @@ public sealed partial class WordHandler
             return ApplySetImageAlt(node, props);
         }
 
+        // Text effects (shadow/glow/reflection/outline) are structured props that
+        // emit w14 run effects. Peel them out of props first so the stringly-typed
+        // loop below never sees them, but apply them AFTER the loop runs — a text
+        // prop in the same op rebuilds the runs, and effects must land on the final
+        // run text. They can be the whole op, or ride alongside plain formatting.
+        var effectProps = ExtractTextEffectProps(props);
+
         foreach (var (name, value) in OrderedProps(props))
         {
             switch (node.Element)
@@ -245,7 +259,10 @@ public sealed partial class WordHandler
             }
         }
 
-        return new { op = "set", path = node.CanonicalPath, type = node.Type };
+        var effects = effectProps is null ? [] : ApplyTextEffects(doc, node, effectProps);
+        return effects.Count > 0
+            ? (object)new { op = "set", path = node.CanonicalPath, type = node.Type, effects }
+            : new { op = "set", path = node.CanonicalPath, type = node.Type };
     }
 
     private static object ApplyAdd(WordprocessingDocument doc, EditOp op, EditSession session)
@@ -287,11 +304,13 @@ public sealed partial class WordHandler
                 "equation (props.latex, props.display), columnBreak, " +
                 "caption (props.label=Figure|Table|Equation, props.text), crossRef (props.to, props.show), " +
                 "embed (props.src — embeds any file as an OLE package object), " +
+                "source (props.tag/kind/title — adds a bibliography source at /sources), " +
+                "citation (props.source — cites a source by tag), bibliography (props.style), " +
                 "or header/footer targeting /header[1]|/header[firstPage]|/header[even]. " +
                 "For runs, set text on the paragraph instead.",
                 candidates: ["p", "tr", "table", "image", "link", "bookmark", "footnote", "endnote", "comment", "reply",
                     "style", "header", "footer", "toc", "watermark", "sectionBreak", "field", "equation", "columnBreak",
-                    "caption", "crossRef", "embed"]),
+                    "caption", "crossRef", "embed", "source", "citation", "bibliography"]),
         };
 
         // Default placement: containers receive children, blocks get siblings after them.
@@ -476,7 +495,9 @@ public sealed partial class WordHandler
     private static Paragraph BuildParagraph(WordprocessingDocument doc, JsonObject? props)
     {
         var paragraph = new Paragraph();
-        foreach (var (name, value) in OrderedProps(props ?? []))
+        var working = props ?? [];
+        var effectProps = ExtractTextEffectProps(working);
+        foreach (var (name, value) in OrderedProps(working))
         {
             if (name == "style")
             {
@@ -484,6 +505,11 @@ public sealed partial class WordHandler
             }
 
             WordFormatting.SetParagraphProp(paragraph, name, value);
+        }
+
+        if (effectProps is not null)
+        {
+            ApplyTextEffects(doc, new ResolvedNode(paragraph, "/body/p", "p"), effectProps);
         }
 
         return paragraph;

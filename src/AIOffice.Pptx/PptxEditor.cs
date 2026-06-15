@@ -27,10 +27,11 @@ internal sealed record PptxOpOutcome(
 internal static class PptxEditor
 {
     private static readonly IReadOnlyList<string> AddTypes =
-        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "equation"];
+        ["slide", "shape", "textbox", "image", "chart", "table", "row", "animation", "comment", "reply", "embed", "media", "equation"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
-        ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle"];
+        ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
+         "shadow", "glow", "reflection", "outline"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
     private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
@@ -75,7 +76,7 @@ internal static class PptxEditor
             case "add" when string.Equals(op.Type?.Trim(), "equation", StringComparison.OrdinalIgnoreCase):
                 return ApplyAddEquation(presentation, op);
             case "add":
-                return new PptxOpOutcome(ApplyAdd(presentation, op, workspace));
+                return new PptxOpOutcome(ApplyAdd(document, presentation, op, workspace));
             case "set":
                 return new PptxOpOutcome(ApplySet(presentation, op));
             case "remove":
@@ -96,7 +97,7 @@ internal static class PptxEditor
         }
     }
 
-    private static string ApplyAdd(PresentationPart presentation, EditOp op, Workspace workspace)
+    private static string ApplyAdd(PresentationDocument document, PresentationPart presentation, EditOp op, Workspace workspace)
     {
         var address = PptxAddress.Parse(op.Path);
         if (address.IsNotes)
@@ -165,6 +166,12 @@ internal static class PptxEditor
                 return PptxEmbeds.Add(slidePart, address.SlideIndex, op.Props, workspace);
             }
 
+            case "media":
+            {
+                var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "media");
+                return PptxMedia.Add(document, slidePart, address.SlideIndex, op.Props, workspace);
+            }
+
             case "table":
             {
                 var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "table");
@@ -231,8 +238,10 @@ internal static class PptxEditor
                     op.Type is null ? ErrorCodes.InvalidArgs : ErrorCodes.UnsupportedFeature,
                     op.Type is null ? "add requires a type." : $"Cannot add '{op.Type}' yet.",
                     "Addable types today: slide, shape (textbox or preset geometry), image (PNG/JPEG picture), " +
-                    "chart (bar/line/pie), table (with rows/cols), row (on a table path), " +
+                    "chart (bar/line/pie/doughnut/radar/bubble/stackedBar/percentStackedBar/stackedArea/combo), " +
+                    "table (with rows/cols), row (on a table path), " +
                     "animation (on a shape path), comment and reply (on a comment path), embed (a file as an OLE object), " +
+                    "media (an mp4/mov video or m4a/mp3/wav audio clip), " +
                     "equation (LaTeX -> OMML math in a text box).",
                     candidates: AddTypes);
         }
@@ -311,7 +320,7 @@ internal static class PptxEditor
 
     private static SlidePart ResolveAddTargetSlide(PresentationPart presentation, PptxAddress address, string path, string what)
     {
-        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment || address.IsEmbed)
+        if (address.HasShape || address.IsChart || address.IsTable || address.IsAnimation || address.IsComment || address.IsEmbed || address.IsMedia)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
@@ -533,6 +542,15 @@ internal static class PptxEditor
                 "or extract it ({\"op\":\"extract\",...}) to pull its bytes out.");
         }
 
+        if (address.IsMedia)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "Embedded media cannot be edited in place.",
+                "Remove the media ({\"op\":\"remove\",\"path\":\"" + op.Path + "\"}) and add it again with the new clip; " +
+                "position/size sets target its shape path (/slide[i]/shape[@id=N]).");
+        }
+
         if (!address.HasShape)
         {
             return SetSlideProps(presentation, address, op.Props);
@@ -748,6 +766,11 @@ internal static class PptxEditor
             return PptxEmbeds.Remove(presentation, address);
         }
 
+        if (address.IsMedia)
+        {
+            return PptxMedia.Remove(presentation, address);
+        }
+
         if (address.IsOMath)
         {
             return PptxEquations.Remove(presentation, address);
@@ -778,6 +801,11 @@ internal static class PptxEditor
 
         var canonical = view.CanonicalPath(address.SlideIndex);
         PptxCharts.DeletePartFor(slidePart, view.Element); // a chart frame must not orphan its part
+        if (view.Element is P.Picture mediaPicture) // a media picture must not orphan its data part / rels
+        {
+            PptxMedia.DeleteMediaPartsFor(slidePart, mediaPicture);
+        }
+
         view.Element.Remove();
         return canonical;
     }
@@ -833,6 +861,14 @@ internal static class PptxEditor
                 ErrorCodes.InvalidArgs,
                 $"'{op.Path}' cannot be moved.",
                 "Embedded objects are anchored by x/y; remove and re-add the embed to reposition it.");
+        }
+
+        if (address.IsMedia)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{op.Path}' cannot be moved by media path.",
+                "Reorder the host picture by its shape path (/slide[i]/shape[@id=N]) with a z-order position.");
         }
 
         if (address.IsPresentation || address.IsSection || address.IsMaster)
@@ -1337,12 +1373,24 @@ internal static class PptxEditor
                 case "altTitle":
                     SetAltTitle(view, value);
                     break;
+                case "shadow":
+                    PptxEffects.SetShadow(view, value);
+                    break;
+                case "glow":
+                    PptxEffects.SetGlow(view, value);
+                    break;
+                case "reflection":
+                    PptxEffects.SetReflection(view, value);
+                    break;
+                case "outline":
+                    PptxEffects.SetOutline(view, value);
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
                         $"Prop '{key}' does not apply to a '{view.Kind}'.",
-                        "Pictures, charts, lines and groups take x, y, w, h, name, altText and altTitle (lines " +
-                        "also fill for the stroke color); text and styling props target text shapes.");
+                        "Pictures, charts, lines and groups take x, y, w, h, name, altText, altTitle, shadow, glow, " +
+                        "reflection and outline (lines also fill for the stroke color); text and styling props target text shapes.");
             }
         }
 

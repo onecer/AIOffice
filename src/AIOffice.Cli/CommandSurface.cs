@@ -97,7 +97,7 @@ public static class CommandSurface
                 new("ops", "<json|@file>", "JSON array of operations: [{op:set|add|remove|move|replace|accept|reject|extract, path, type?, props?, position?}]. extract writes an embedded object's bytes to a sandbox destination (props.to) — a producing op that does not modify the source."),
                 new("set", "<path>", "Sugar: set properties (from trailing k=v pairs) on the node at <path>."),
                 new("add", "<path>", "Sugar: add a new node of --type at <path> (trailing k=v pairs become props)."),
-                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx)."),
+                new("type", "<element>", "Element type for --add, e.g. p, table, slide, shape, image, comment, reply, style, pivot, conditionalFormat, toc, watermark, endnote, sectionBreak, animation, note, row, col, field, dataValidation, sparkline, caption (docx), crossRef (docx), slicer (xlsx), source/citation/bibliography (docx), media (pptx audio/video)."),
                 new("remove", "<path>", "Sugar: remove the node at <path>.", Repeatable: true),
                 new("find", "<text>", "Sugar: document-wide find/replace (docx body+headers+footers, every sheet, every slide incl. notes); aggregate {replacements, locations} in the result."),
                 new("replace", "<text>", "Replacement text for --find (default: empty = delete matches); in --regex mode $1 etc. substitute groups."),

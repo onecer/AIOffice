@@ -108,6 +108,15 @@ internal static class PptxRenderer
             return;
         }
 
+        // Embedded media (video/audio) renders as a placeholder rect with a play
+        // glyph, never a rasterized frame — honest, and clickable via data-aio-path.
+        if (shape.Element is P.Picture mediaPicture && PptxMedia.MediaKindOf(mediaPicture) is { } mediaKind)
+        {
+            AppendMediaPlaceholder(svg, mediaKind, shape.Name, x, y, w, h);
+            svg.Append("  </g>\n");
+            return;
+        }
+
         AppendOutline(svg, shape, x, y, w, h, fill);
 
         if (shape.Kind == "picture")
@@ -149,6 +158,32 @@ internal static class PptxRenderer
         }
 
         svg.Append("  </g>\n");
+    }
+
+    /// <summary>
+    /// Draws an embedded-media placeholder: a dark rect with a centered play
+    /// triangle (video) or speaker glyph (audio) and a label. The bytes are never
+    /// decoded — this is an honest stand-in, not a rasterized frame.
+    /// </summary>
+    private static void AppendMediaPlaceholder(StringBuilder svg, string mediaKind, string name, double x, double y, double w, double h)
+    {
+        svg.Append(Units.Inv($"    <rect class=\"aio-media\" x=\"{x:0.#}\" y=\"{y:0.#}\" width=\"{w:0.#}\" height=\"{h:0.#}\" "));
+        svg.Append("fill=\"#1f2937\" stroke=\"#111111\"/>\n");
+
+        var cx = x + (w / 2);
+        var cy = y + (h / 2);
+        var glyph = Math.Min(w, h) * 0.18;
+        if (glyph < 6)
+        {
+            glyph = 6;
+        }
+
+        // A centered play triangle reads as "media" for both video and audio.
+        svg.Append(Units.Inv($"    <polygon class=\"aio-media-play\" points=\"{cx - (glyph * 0.6):0.#},{cy - glyph:0.#} "));
+        svg.Append(Units.Inv($"{cx + glyph:0.#},{cy:0.#} {cx - (glyph * 0.6):0.#},{cy + glyph:0.#}\" fill=\"#ffffff\"/>\n"));
+
+        svg.Append(Units.Inv($"    <text x=\"{cx:0.#}\" y=\"{y + h - 6:0.#}\" font-size=\"11\" "));
+        svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#e5e7eb\">[{Escape(mediaKind)}] {Escape(name)}</text>\n"));
     }
 
     /// <summary>Draws the shape's outline truthfully per its preset geometry.</summary>
@@ -328,15 +363,38 @@ internal static class PptxRenderer
                 AppendBars(svg, data, plotX, plotY, plotW, plotH);
                 AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
                 break;
+            case "stackedBar":
+            case "percentStackedBar":
+                AppendAxes(svg, data, plotX, plotY, plotW, plotH, percent: data.Kind == "percentStackedBar");
+                AppendStackedBars(svg, data, plotX, plotY, plotW, plotH, percent: data.Kind == "percentStackedBar");
+                AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
+                break;
             case "line":
                 AppendAxes(svg, data, plotX, plotY, plotW, plotH);
                 AppendLines(svg, data, plotX, plotY, plotW, plotH);
                 AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
                 break;
+            case "stackedArea":
+                AppendAxes(svg, data, plotX, plotY, plotW, plotH);
+                AppendStackedAreas(svg, data, plotX, plotY, plotW, plotH);
+                AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
+                break;
+            case "combo":
+                // First series as columns, the rest as a line — the same split the chart uses.
+                AppendAxes(svg, data, plotX, plotY, plotW, plotH);
+                AppendComboColumns(svg, data, plotX, plotY, plotW, plotH);
+                AppendComboLine(svg, data, plotX, plotY, plotW, plotH);
+                AppendCategoryLabels(svg, data, plotX, plotY + plotH, plotW);
+                break;
             case "pie":
                 AppendPie(svg, data, x, plotY, w, plotH + 20);
                 break;
+            case "doughnut":
+                AppendDoughnut(svg, data, x, plotY, w, plotH + 20);
+                break;
             default:
+                // bubble/radar render as an honest labeled placeholder: a real
+                // mini-redraw of these would mislead more than it informs.
                 svg.Append(Units.Inv($"    <text x=\"{x + (w / 2):0.#}\" y=\"{y + (h / 2):0.#}\" font-size=\"12\" "));
                 svg.Append(Units.Inv($"text-anchor=\"middle\" fill=\"#666666\">[chart] {Escape(data.Kind)}</text>\n"));
                 break;
@@ -360,14 +418,171 @@ internal static class PptxRenderer
         return max > 0 ? max : 1;
     }
 
-    private static void AppendAxes(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
+    private static void AppendAxes(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH, bool percent = false)
     {
         svg.Append(Units.Inv($"    <line x1=\"{plotX:0.#}\" y1=\"{plotY:0.#}\" x2=\"{plotX:0.#}\" y2=\"{plotY + plotH:0.#}\" stroke=\"#666666\"/>\n"));
         svg.Append(Units.Inv($"    <line x1=\"{plotX:0.#}\" y1=\"{plotY + plotH:0.#}\" x2=\"{plotX + plotW:0.#}\" y2=\"{plotY + plotH:0.#}\" stroke=\"#666666\"/>\n"));
 
-        var max = MaxValue(data);
-        svg.Append(Units.Inv($"    <text x=\"{plotX - 4:0.#}\" y=\"{plotY + 4:0.#}\" font-size=\"9\" text-anchor=\"end\" fill=\"#666666\">{max:0.##}</text>\n"));
+        var top = percent ? "100%" : Units.Inv($"{MaxValue(data):0.##}");
+        svg.Append(Units.Inv($"    <text x=\"{plotX - 4:0.#}\" y=\"{plotY + 4:0.#}\" font-size=\"9\" text-anchor=\"end\" fill=\"#666666\">{top}</text>\n"));
         svg.Append(Units.Inv($"    <text x=\"{plotX - 4:0.#}\" y=\"{plotY + plotH:0.#}\" font-size=\"9\" text-anchor=\"end\" fill=\"#666666\">0</text>\n"));
+    }
+
+    /// <summary>The largest per-category column total (used to scale stacked bars/areas).</summary>
+    private static double MaxStackTotal(PptxChartData data)
+    {
+        var max = 0.0;
+        for (var c = 0; c < data.Categories.Count; c++)
+        {
+            var total = 0.0;
+            foreach (var series in data.Series)
+            {
+                if (c < series.Values.Count && series.Values[c] is { } v && v > 0)
+                {
+                    total += v;
+                }
+            }
+
+            max = Math.Max(max, total);
+        }
+
+        return max > 0 ? max : 1;
+    }
+
+    /// <summary>Stacked columns: per category a single stack whose segments are the positive series values.</summary>
+    private static void AppendStackedBars(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH, bool percent)
+    {
+        var groups = Math.Max(data.Categories.Count, 1);
+        var groupW = plotW / groups;
+        var barW = groupW * 0.6;
+        var globalMax = MaxStackTotal(data);
+
+        for (var c = 0; c < data.Categories.Count; c++)
+        {
+            var columnTotal = 0.0;
+            for (var s = 0; s < data.Series.Count; s++)
+            {
+                if (c < data.Series[s].Values.Count && data.Series[s].Values[c] is { } v && v > 0)
+                {
+                    columnTotal += v;
+                }
+            }
+
+            var scale = percent ? (columnTotal > 0 ? columnTotal : 1) : globalMax;
+            var baseline = plotY + plotH;
+            for (var s = 0; s < data.Series.Count; s++)
+            {
+                if (c >= data.Series[s].Values.Count || data.Series[s].Values[c] is not { } value || value <= 0)
+                {
+                    continue;
+                }
+
+                var segH = plotH * value / scale;
+                var barX = plotX + (c * groupW) + ((groupW - barW) / 2);
+                var color = ChartPalette[s % ChartPalette.Length].ToLowerInvariant();
+                svg.Append(Units.Inv($"    <rect class=\"aio-chart-bar\" x=\"{barX:0.#}\" y=\"{baseline - segH:0.#}\" "));
+                svg.Append(Units.Inv($"width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"#{color}\"/>\n"));
+                baseline -= segH;
+            }
+        }
+    }
+
+    /// <summary>Stacked areas: each series is a band added on top of the running total below it.</summary>
+    private static void AppendStackedAreas(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
+    {
+        var groups = Math.Max(data.Categories.Count, 1);
+        var step = groups > 1 ? plotW / (groups - 1) : 0;
+        var max = MaxStackTotal(data);
+        var lower = new double[groups]; // running cumulative total per category
+
+        for (var s = 0; s < data.Series.Count; s++)
+        {
+            var color = ChartPalette[s % ChartPalette.Length].ToLowerInvariant();
+            var upperPoints = new List<string>();
+            var lowerPoints = new List<string>();
+            for (var c = 0; c < groups; c++)
+            {
+                var value = c < data.Series[s].Values.Count && data.Series[s].Values[c] is { } v && v > 0 ? v : 0;
+                var px = groups > 1 ? plotX + (c * step) : plotX + (plotW / 2);
+                var lowerY = plotY + plotH - (plotH * lower[c] / max);
+                lower[c] += value;
+                var upperY = plotY + plotH - (plotH * lower[c] / max);
+                upperPoints.Add(Units.Inv($"{px:0.#},{upperY:0.#}"));
+                lowerPoints.Insert(0, Units.Inv($"{px:0.#},{lowerY:0.#}"));
+            }
+
+            svg.Append(Units.Inv($"    <polygon class=\"aio-chart-area\" points=\"{string.Join(' ', upperPoints.Concat(lowerPoints))}\" "));
+            svg.Append(Units.Inv($"fill=\"#{color}\" fill-opacity=\"0.7\" stroke=\"#{color}\"/>\n"));
+        }
+    }
+
+    /// <summary>Combo columns: only the first series, drawn as clustered single columns.</summary>
+    private static void AppendComboColumns(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
+    {
+        if (data.Series.Count == 0)
+        {
+            return;
+        }
+
+        var max = MaxValue(data);
+        var groups = Math.Max(data.Categories.Count, 1);
+        var groupW = plotW / groups;
+        var barW = groupW * 0.5;
+        var color = ChartPalette[0].ToLowerInvariant();
+        for (var c = 0; c < data.Categories.Count; c++)
+        {
+            if (c >= data.Series[0].Values.Count || data.Series[0].Values[c] is not { } value || value <= 0)
+            {
+                continue;
+            }
+
+            var barH = plotH * Math.Min(value, max) / max;
+            var barX = plotX + (c * groupW) + ((groupW - barW) / 2);
+            svg.Append(Units.Inv($"    <rect class=\"aio-chart-bar\" x=\"{barX:0.#}\" y=\"{plotY + plotH - barH:0.#}\" "));
+            svg.Append(Units.Inv($"width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"#{color}\"/>\n"));
+        }
+    }
+
+    /// <summary>Combo line: the second and later series, each a polyline (matching the chart's split).</summary>
+    private static void AppendComboLine(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)
+    {
+        var max = MaxValue(data);
+        var groups = Math.Max(data.Categories.Count, 1);
+        var step = groups > 1 ? plotW / (groups - 1) : 0;
+
+        for (var s = 1; s < data.Series.Count; s++)
+        {
+            var color = ChartPalette[s % ChartPalette.Length].ToLowerInvariant();
+            var points = new List<string>();
+            for (var c = 0; c < data.Series[s].Values.Count && c < groups; c++)
+            {
+                if (data.Series[s].Values[c] is not { } value)
+                {
+                    continue;
+                }
+
+                var px = groups > 1 ? plotX + (c * step) : plotX + (plotW / 2);
+                var py = plotY + plotH - (plotH * Math.Clamp(value, 0, max) / max);
+                points.Add(Units.Inv($"{px:0.#},{py:0.#}"));
+            }
+
+            if (points.Count > 0)
+            {
+                svg.Append(Units.Inv($"    <polyline class=\"aio-chart-line\" points=\"{string.Join(' ', points)}\" "));
+                svg.Append(Units.Inv($"fill=\"none\" stroke=\"#{color}\" stroke-width=\"2\"/>\n"));
+            }
+        }
+    }
+
+    /// <summary>A doughnut: the pie wedges with a punched-out white center hole.</summary>
+    private static void AppendDoughnut(StringBuilder svg, PptxChartData data, double x, double top, double w, double h)
+    {
+        AppendPie(svg, data, x, top, w, h);
+
+        var cx = x + (w / 2);
+        var cy = top + (h / 2);
+        var radius = Math.Max(Math.Min(w, h) / 2 - 16, 8);
+        svg.Append(Units.Inv($"    <circle class=\"aio-chart-hole\" cx=\"{cx:0.#}\" cy=\"{cy:0.#}\" r=\"{radius * 0.5:0.#}\" fill=\"#ffffff\"/>\n"));
     }
 
     private static void AppendBars(StringBuilder svg, PptxChartData data, double plotX, double plotY, double plotW, double plotH)

@@ -38,6 +38,8 @@ public static class HelpTopics
                 - docx/style      style definitions: add/set/remove, apply
                 - docx/image      inline pictures: add type "image"
                 - docx/caption    Figure/Table/Equation captions + cross-references (M8)
+                - docx/citation   sources + CITATION fields + bibliography (1.1)
+                - docx/effect     run text effects: shadow/glow/reflection/outline (1.1)
                 - docx/list       numbered/bulleted/nested list items (M3)
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins + columns (M3/M6)
@@ -50,7 +52,7 @@ public static class HelpTopics
                 - xlsx/sparkline  line/column/winLoss sparklines (M5)
                 - xlsx/comment    threaded comments + replies (M5)
                 - xlsx/pivot      pivot tables: add type "pivot"
-                - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText
+                - xlsx/conditionalFormat  cellIs/colorScale/dataBar/containsText/iconSet
                 - xlsx/slicer     table-column / pivot-field slicers (M8)
                 - xlsx/image      anchored pictures: add type "image"
                 - xlsx/sheet      freeze/autoFilter/print setup, names, streaming read+write (M3/M6)
@@ -64,7 +66,9 @@ public static class HelpTopics
                 - pptx/slideSize  slide dimensions / aspect ratio (M6)
                 - pptx/notes      speaker notes: /slide[i]/notes
                 - pptx/image      pictures: add type "image"
-                - pptx/chart      native charts + cross-doc dataFrom (M3)
+                - pptx/chart      native charts + cross-doc dataFrom (M3, kinds expanded 1.1)
+                - pptx/media      embedded audio/video: add type "media" (1.1)
+                - pptx/effect     shape effects: shadow/glow/reflection/outline (1.1)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
@@ -429,10 +433,11 @@ public static class HelpTopics
 
             ["xlsx/conditionalFormat"] = (
                 """
-                ## xlsx conditional formatting (M2)
+                ## xlsx conditional formatting (M2, iconSet added 1.1)
                 Add (path = the range): {"op":"add","path":"/Sheet1/A1:C10","type":"conditionalFormat","props":{…}}
                 kinds: cellIs      {operator:"> >= < <= == != between", value, value2 (between only), fill?, color?, bold?}
                        colorScale  {minColor, maxColor, midColor?}   dataBar {color}   containsText {text, fill?, color?, bold?}
+                       iconSet     {set:"3TrafficLights1|3Arrows|4Rating|5Quarters|…", reverse?, showValue?}  (1.1: 3/4/5-icon glyph per cell)
                 Get: office_get {path:"/Sheet1/conditionalFormat[1]"}; remove by the same path (later indices shift down).
                 """,
                 ["xlsx/cell", "edit-ops"]),
@@ -665,8 +670,10 @@ public static class HelpTopics
 
             ["pptx/chart"] = (
                 """
-                ## pptx charts (M3) — add type "chart" on /slide[i]
-                kind        bar | line | pie (pie: exactly one series)
+                ## pptx charts (M3, kinds expanded 1.1) — add type "chart" on /slide[i]
+                kind        bar | line | pie (pie/doughnut: exactly one series)
+                1.1 kinds   doughnut | radar | bubble | stackedBar | percentStackedBar | stackedArea | combo
+                            bubble series carry {name,values,x?,size?} triples; combo = first series columns + rest a line (>=2 series)
                 categories  ["Q1","Q2",…]            series  [{"name":"Sales","values":[10,20]}] (null = gap)
                 title, x, y, w, h   optional
                 Data is cached literally (c:strLit/c:numLit, no embedded workbook): projections report dataEditable:false.
@@ -679,12 +686,51 @@ public static class HelpTopics
 
             ["pptx/transition"] = (
                 """
-                ## pptx slide transitions (M3) — slide-level set
-                {"op":"set","path":"/slide[2]","props":{"transition":"fade|push|wipe|none","transitionDuration":"0.5s"}}
-                Duration maps to p14:dur milliseconds (PowerPoint 2010+; older clients use the spd fallback).
+                ## pptx slide transitions (M3, kinds expanded 1.1) — slide-level set
+                {"op":"set","path":"/slide[2]","props":{"transition":"none|fade|push|wipe|split|reveal|cut|zoom","transitionDuration":"0.5s"}}
+                1.1 adds split, reveal, cut, zoom. Duration maps to p14:dur ms (PowerPoint 2010+; older clients use the spd fallback).
                 office_get /slide[2] and read {view:"outline"} report transition/transitionDuration.
                 """,
-                ["pptx/slide", "edit-ops"]),
+                ["pptx/slide", "edit-ops", "pptx/effect"]),
+
+            ["pptx/media"] = (
+                """
+                ## pptx media (1.1) — add type "media" on /slide[i]
+                {"op":"add","path":"/slide[1]","type":"media","props":{"src":"clip.mp4","poster"?,"x"?,"y"?,"w"?,"h"?,"name"?,"autoplay"?}}
+                Embeds audio/video (mp4/mov/m4a/mp3/wav) as a p:pic with an a:videoFile/a:audioFile. src (and the optional
+                poster image) is sandbox-resolved — a path outside the workspace is sandbox_denied before any byte is read.
+                Returns the canonical embed path; read {view:"embeds"} lists the media part.
+                """,
+                ["pptx/slide", "embeds", "edit-ops"]),
+
+            ["pptx/effect"] = (
+                """
+                ## pptx text & shape effects (1.1) — shape-level set
+                {"op":"set","path":"/slide[1]/shape[@id=5]","props":{"shadow"?,"glow"?,"reflection"?,"outline"?}}
+                Each effect takes true (default accent) or a hex/named color (shadow/glow/outline tint; reflection is colorless);
+                false clears it. Effects write into the shape's a:effectLst; outline adds a line border.
+                """,
+                ["pptx/shape", "edit-ops"]),
+
+            ["docx/citation"] = (
+                """
+                ## docx citations & bibliography (1.1)
+                source     {"op":"add","path":"/sources","type":"source","props":{"tag":"Smith2020","kind":"book|journalArticle|website|report","author"?,"title"?,"year"?}}
+                citation   {"op":"add","path":"/body/p[2]","type":"citation","props":{"source":"Smith2020","pages"?,"suppressAuthor"?}}  (drops a CITATION field)
+                bibliography {"op":"add","path":"/body","type":"bibliography","props":{"style":"APA|MLA|Chicago"?}}  renders every CITED source
+                The bibliography is cached (Word rebuilds on F9) -> bibliography_cached warning. read {view:"sources"} lists the store.
+                tag is the stable key citations reference; re-adding the same tag updates the source.
+                """,
+                ["docx/paragraph", "docx/field", "edit-ops"]),
+
+            ["docx/effect"] = (
+                """
+                ## docx text effects (1.1) — run-level set
+                {"op":"set","path":"/body/p[1]/run[1]","props":{"shadow"?,"glow"?,"reflection"?,"outline"?}}
+                Emits the Word 2010 text effects (w14:shadow/glow/reflection/textOutline; outline aliases textOutline).
+                Each takes true (default) or an object: shadow {color}, glow {color,radius-pt}, reflection {transparency,size 0-100}, outline {color,width-pt}. false clears.
+                """,
+                ["docx/paragraph", "edit-ops"]),
         };
 
     /// <summary>All topic names (index first, then alphabetical).</summary>

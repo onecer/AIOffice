@@ -603,7 +603,7 @@ public sealed record EmbeddedObject(string Path, string Name, string MediaType, 
 - ✅ docx 样式管理：`/styles` add、`/style[@id=X]` set/get/remove、`read --view styles`；套用即 `set p {style}`。
 - ✅ docx / xlsx / pptx 图片：PNG/JPEG，src 必经 workspace 沙箱（逃逸 → `sandbox_denied`），缺省尺寸守纵横比。
 - ✅ xlsx 数据透视表：rows/columns/filters + values（sum/average/count/min/max），targetSheet 自动建，`pivot[@name=X]` 寻址，refreshOnLoad（Excel 打开即重算）。
-- ✅ xlsx 条件格式：cellIs / colorScale / dataBar / containsText 四类，`/Sheet1/conditionalFormat[i]` 寻址。
+- ✅ xlsx 条件格式：cellIs / colorScale / dataBar / containsText 四类（1.1 增 iconSet：3/4/5 图标集，`set`/`reverse`/`showValue`），`/Sheet1/conditionalFormat[i]` 寻址。
 - ✅ pptx：真 `p:bg` 纯色背景、`/slide[i]/notes` 演讲者备注（set/add/remove/get）。
 - ✅ 大文件守卫：超过 50MB（`AIOFFICE_MAX_FILE_MB` 可调）拒绝打开 → `file_too_large` + 建议；`doctor` 报告 `limits.maxFileMb`。
 - ⏭ 大文件流式处理**没有**按 M2 交付：它需要一轮专门的基准驱动打磨（10 万行 xlsx / 千页 docx 实测），移入 M3；M2 以尺寸守卫诚实兜底。
@@ -616,7 +616,7 @@ public sealed record EmbeddedObject(string Path, string Name, string MediaType, 
 - ✅ `render --to pdf`：`AIOffice.Render` PdfRenderer 经系统 Chrome `--headless=new --print-to-pdf --no-pdf-header-footer` 出分页 PDF；docx/xlsx html → A4 分页；pptx 整副 deck 一个 PDF、`@page` 钉死片尺寸、一页一片（`--scope` 可缩到单页）。无浏览器 → `unsupported_feature` + 安装/替代建议。CLI 与 MCP `office_render` 同步增加 `pdf` 目标。
 - ✅ 跨文档 dataFrom（xlsx 数据 → pptx 图表）：命令层（CLI edit 与 MCP office_edit 共用 `CrossDocDataFrom`）把 `{"dataFrom":"metrics.xlsx!Sheet1/A1:B5"}` 展开为字面量 categories/series——首列 → 分类、表头行 → 系列名、其余列 → 系列值；工作簿必经沙箱解析，经 xlsx handler 读取；区域写错返回 candidates（表名/最近 usedRange）。
 - ✅ docx：列表（编号/项目符号/嵌套/重启，text 视图标记 + HTML 真 `<ol>/<ul>`）、超链接（url/anchor）、书签、脚注、节属性（`/section[1]` 纸张/方向/边距）、格式修订 accept/reject（w:rPrChange/w:pPrChange）、批注线程回复（w15 commentsExtended）。
-- ✅ xlsx：大工作簿流式读取（>20 MB 或 `stream:true` 走 SAX，stats/text/get 不加载 DOM）、scatter/area 图表、命名区域（`/name[@name=X]`，公式真求值）、冻结窗格、自动筛选、打印设置（方向/纸张/fitTo/printArea）。
+- ✅ xlsx：大工作簿流式读取（>20 MB 或 `stream:true` 走 SAX，stats/text/get 不加载 DOM）、scatter/area 图表（1.1 增 doughnut/radar/bubble/stackedBar/percentStackedBar/stackedArea/combo）、命名区域（`/name[@name=X]`，公式真求值）、冻结窗格、自动筛选、打印设置（方向/纸张/fitTo/printArea）。
 - ✅ pptx：原生图表（bar/line/pie，字面量缓存 + `dataEditable:false` 诚实告知）、切换动画（fade/push/wipe + 时长）、预设几何（ellipse/triangle/diamond/arrow/roundRect + line 连接线、翻转）、z 序（front/back/forward/backward）。
 - ⏭ 留给 M4 的种子：嵌入式图表工作簿（PowerPoint 内可编辑数据）、动画、尾注、docx 多节插入、大工作簿**写入**流式、跨 run find/replace、数据验证、连接线/组合。
 
@@ -682,6 +682,18 @@ public sealed record EmbeddedObject(string Path, string Name, string MediaType, 
 - CLI（`CommandSurface`）与 MCP（`SurfaceSchema`/`ToolCatalog`）自省面在共享词表（动词集、`read --view` 枚举、`edit` op 列表）上锁定一致，由 `SchemaConsistencyTests` 守卫；两面均暴露 `embeds` view 与 `extract` op。
 - xlsx 读视图回显 `data.view`；xlsx convert 经 `data.dropped` + `convert_lossy` 报告图表/透视/图片丢失（不再静默）。
 - 警告码集中到 `WarningCodes`（单一真源），经 `schema` 的 `data.warningCodes` 暴露并写入契约；寻址 help 补齐 M8–M10 的 `embed`/`omath` 形式。
+
+### 1.1.0 — 首个 1.0 之后功能版本（已交付，纯增量）
+
+`surfaceVersion` **保持 `1.0`**——以下全部在冻结的 1.0 契约线内只增不删（新枚举值 / 新 prop / 一个新 view / 一个新警告码），冻结的 Core 类型不动（仅加一个警告码常量 `BibliographyCached`）：
+
+- **图表扩展**：xlsx（`ExcelCharts.cs`）与 pptx（`PptxCharts.cs`）各自图表工厂新增 `doughnut`/`radar`/`bubble`/`stackedBar`/`percentStackedBar`/`stackedArea`/`combo`（bubble = x/y/size 三元组；combo = 首系列柱 + 其余线 ≥2 系列）；未支持类型仍 `unsupported_feature` 列出扩展集。
+- **iconSet 条件格式**：xlsx `conditionalFormat` 新增 `iconSet` 类型（3/4/5 图标集，`set`/`reverse`/`showValue`）。
+- **引用与参考文献**：docx 新增 `add type:source`/`citation`/`bibliography`（customXml `b:Sources` + `CITATION`/`BIBLIOGRAPHY` 复杂域，`WordHandler.Citations.cs`）、`read --view sources` 新视图、`bibliography_cached` 新警告码。
+- **嵌入媒体**：pptx 新增 `add type:media`（`PptxMedia.cs`，音视频嵌为 `p:pic` + `a:videoFile`/`a:audioFile`，`src`/`poster` 经沙箱）。
+- **文字/外观效果**：docx run（`WordHandler.TextEffects.cs`，`w14:`）与 pptx 形状（`PptxEffects.cs`，`a:effectLst`）`set` 新增 `shadow`/`glow`/`reflection`/`outline`。
+- **新切换**：pptx 新增 `split`/`reveal`/`cut`/`zoom`。
+- 全部经真实 CLI/MCP 网关，并由 `SchemaConsistencyTests` 守卫两面一致；18 动词 / 17 MCP 工具不变；1692 测试 7 项目全绿。
 - **1.0 之后（候选，未承诺）**：插件机制、更高 convert 保真、xlsx/pptx 打磨。
 
 ---

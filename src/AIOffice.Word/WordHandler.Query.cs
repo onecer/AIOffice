@@ -153,6 +153,14 @@ public sealed partial class WordHandler
                         meta);
                 }
 
+                case "source":
+                {
+                    var (sourcePath, properties) = GetSourceProperties(doc, docPath);
+                    return Envelope.Ok(
+                        new { path = sourcePath, type = "source", properties },
+                        meta);
+                }
+
                 case "watermark":
                 {
                     var properties = GetWatermarkProperties(doc, docPath);
@@ -309,7 +317,7 @@ public sealed partial class WordHandler
         Paragraph ip when ip.Descendants<Drawing>().Any() => ImageProperties(ip),
         Run ir when ir.Descendants<Drawing>().Any() => ImageProperties(ir),
         Paragraph p => ParagraphPropertiesShape(doc, p),
-        Run r => WordFormatting.ReadRunProps(r),
+        Run r => WithTextEffects(WordFormatting.ReadRunProps(r), r.RunProperties),
         Hyperlink => LinkProperties(doc, node),
         Table t => TableGetShape(t),
         TableRow row => new Dictionary<string, object?>
@@ -343,7 +351,19 @@ public sealed partial class WordHandler
             properties["fields"] = fields;
         }
 
+        WithTextEffects(properties, p.ChildElements.OfType<Run>().FirstOrDefault()?.RunProperties);
         return properties;
+    }
+
+    /// <summary>Attaches the run's w14 text effects to a get shape under "effects" when present (omitted otherwise).</summary>
+    private static Dictionary<string, object?> WithTextEffects(Dictionary<string, object?> shape, RunProperties? rPr)
+    {
+        if (ReadTextEffects(rPr) is { } effects)
+        {
+            shape["effects"] = effects;
+        }
+
+        return shape;
     }
 
     private static string Snippet(string text) =>

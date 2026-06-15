@@ -226,8 +226,10 @@ public sealed class ChartTests : ExcelTestBase
     {
         var file = CreateDataWorkbook();
 
+        // bubble joined the supported set in v1.1; a genuinely unsupported kind
+        // still names the (now expanded) supported set.
         var envelope = EditOps(file, AddOp("/Sheet1", "chart",
-            ("kind", "bubble"), ("dataRange", "A1:B5"), ("anchor", "E2")));
+            ("kind", "surface"), ("dataRange", "A1:B5"), ("anchor", "E2")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
@@ -236,7 +238,11 @@ public sealed class ChartTests : ExcelTestBase
         Assert.Contains("pie", envelope.Error.Suggestion, StringComparison.Ordinal);
         Assert.Contains("scatter", envelope.Error.Suggestion, StringComparison.Ordinal);
         Assert.Contains("area", envelope.Error.Suggestion, StringComparison.Ordinal);
-        Assert.Equal(["bar", "line", "pie", "scatter", "area"], envelope.Error.Candidates!);
+        Assert.Equal(
+            ["bar", "line", "pie", "scatter", "area",
+             "doughnut", "radar", "bubble",
+             "stackedBar", "percentStackedBar", "stackedArea", "combo"],
+            envelope.Error.Candidates!);
     }
 
     [Fact]

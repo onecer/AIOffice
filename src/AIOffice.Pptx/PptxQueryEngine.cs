@@ -615,6 +615,10 @@ internal static class PptxQueryEngine
             Hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
             Chart = PptxCharts.Summary(slidePart, view.Element),
+            Effects = PptxEffects.Read(view.Element),
+            Media = view.Element is P.Picture picture && PptxMedia.MediaKindOf(picture) is { } mediaKind
+                ? new { Kind = mediaKind, Path = Units.Inv($"{address.CanonicalSlidePath}/media[@id={view.Id}]") }
+                : null,
         };
     }
 

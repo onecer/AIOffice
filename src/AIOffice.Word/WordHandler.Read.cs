@@ -3,13 +3,14 @@ using System.Text.RegularExpressions;
 using AIOffice.Core;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
+using B = DocumentFormat.OpenXml.Bibliography;
 
 namespace AIOffice.Word;
 
 public sealed partial class WordHandler
 {
     private static readonly string[] ReadViews =
-        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown", "properties", "fields", "embeds"];
+        ["text", "outline", "stats", "structure", "revisions", "comments", "styles", "markdown", "properties", "fields", "embeds", "sources"];
 
     public Envelope Read(CommandContext ctx)
     {
@@ -20,7 +21,7 @@ public sealed partial class WordHandler
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Unknown view '{view}'.",
-                "Use --view text, outline, stats, structure, revisions, comments, styles, markdown, properties, fields or embeds.",
+                "Use --view text, outline, stats, structure, revisions, comments, styles, markdown, properties, fields, embeds or sources.",
                 candidates: ReadViews);
         }
 
@@ -43,6 +44,7 @@ public sealed partial class WordHandler
                 "properties" => new { view = "properties", properties = PropertiesShape(doc) },
                 "fields" => FieldsView(doc),
                 "embeds" => EmbedsView(doc),
+                "sources" => SourcesView(doc),
                 _ => StructureView(doc, body, IntArg(ctx.Args, "depth") ?? 3),
             };
 
@@ -254,6 +256,14 @@ public sealed partial class WordHandler
             })
             .ToList();
 
+        var sources = (ReadSourcesRoot(doc)?.Elements<B.Source>() ?? [])
+            .Select(s => new { path = SourcePath(TagOf(s) ?? string.Empty), tag = TagOf(s) })
+            .ToList();
+
+        var bibliographies = EnumerateBibliographies(doc)
+            .Select((_, i) => new { path = $"/bibliography[{i + 1}]" })
+            .ToList();
+
         return new
         {
             view = "structure",
@@ -264,6 +274,8 @@ public sealed partial class WordHandler
             tocs = tocs.Count > 0 ? tocs : null,
             captions = captions.Count > 0 ? captions : null,
             embeds = embeds.Count > 0 ? embeds : null,
+            sources = sources.Count > 0 ? sources : null,
+            bibliographies = bibliographies.Count > 0 ? bibliographies : null,
             sections = SectionsStructure(body),
         };
 

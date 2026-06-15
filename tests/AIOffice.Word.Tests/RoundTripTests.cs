@@ -258,6 +258,47 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the v1.1.0 surface: w14 text effects (shadow /
+    /// glow / reflection / outline) on a run, plus the bibliography store
+    /// (a customXml Sources part), a CITATION field and a BIBLIOGRAPHY block,
+    /// must survive a no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_v110_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "v1.1.0 round trip");
+        Edit(file, """
+            [
+              {"op":"set","path":"/body/p[1]","props":{"text":"Effected lead","shadow":true,"glow":{"color":"4F81BD","radius":5},"reflection":true,"outline":{"color":"000000","width":1}}},
+              {"op":"add","path":"/sources","type":"source","props":{"tag":"Smith2020","kind":"book","author":"Smith, John","title":"A Great Book","year":2020,"publisher":"Acme Press"}},
+              {"op":"add","path":"/body","type":"p","props":{"text":"As shown."}},
+              {"op":"add","path":"/body/p[2]","type":"citation","props":{"source":"Smith2020","pages":"42"}},
+              {"op":"add","path":"/body","type":"bibliography","props":{"style":"APA"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads the w14 effect + field DOM
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+            foreach (var customXml in doc.MainDocumentPart.CustomXmlParts)
+            {
+                using var reader = new StreamReader(customXml.GetStream());
+                _ = reader.ReadToEnd(); // touches the bibliography Sources store
+            }
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);

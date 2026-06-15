@@ -96,8 +96,46 @@ public sealed class TransitionTests : IDisposable
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
+    [Theory]
+    [InlineData("split", typeof(P.SplitTransition))]
+    [InlineData("cut", typeof(P.CutTransition))]
+    [InlineData("zoom", typeof(P.ZoomTransition))]
+    public void SetExpandedKind_ReopenVerify(string kind, Type effectType)
+    {
+        Create();
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("transition", kind))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var transition = doc.PresentationPart!.SlideParts.Single().Slide!.Transition!;
+            Assert.IsType(effectType, transition.ChildElements.Single());
+        }
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]"))));
+        Assert.Equal(kind, detail["transition"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
     [Fact]
-    public void UnknownKind_IsTypedUnsupportedWithCandidates()
+    public void SetReveal_PersistsP14EffectAndReflects()
+    {
+        Create();
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("transition", "reveal"), ("transitionDuration", "0.75s"))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var transition = doc.PresentationPart!.SlideParts.Single().Slide!.Transition!;
+            Assert.IsType<DocumentFormat.OpenXml.Office2010.PowerPoint.RevealTransition>(transition.ChildElements.Single());
+        }
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]"))));
+        Assert.Equal("reveal", detail["transition"]!.GetValue<string>());
+        Assert.Equal("0.75s", detail["transitionDuration"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Morph_IsTypedUnsupportedWithCandidates()
     {
         Create();
         var envelope = _handler.Edit(
@@ -105,7 +143,19 @@ public sealed class TransitionTests : IDisposable
             [TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("transition", "morph")))]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Equal(["none", "fade", "push", "wipe"], error.Candidates!);
+        Assert.Equal(["none", "fade", "push", "wipe", "split", "reveal", "cut", "zoom"], error.Candidates!);
+    }
+
+    [Fact]
+    public void UnknownKind_IsTypedUnsupportedWithCandidates()
+    {
+        Create();
+        var envelope = _handler.Edit(
+            _ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("transition", "dissolve")))]);
+
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
+        Assert.Equal(["none", "fade", "push", "wipe", "split", "reveal", "cut", "zoom"], error.Candidates!);
     }
 
     [Fact]

@@ -9,8 +9,17 @@ using P = DocumentFormat.OpenXml.Presentation;
 
 namespace AIOffice.Pptx;
 
-/// <summary>One chart series: display name plus literal-cached values (null = gap).</summary>
-internal sealed record PptxChartSeries(string Name, IReadOnlyList<double?> Values);
+/// <summary>
+/// One chart series: display name plus literal-cached values (null = gap). For a
+/// bubble chart the parallel <see cref="XValues"/>/<see cref="Sizes"/> carry the
+/// x/y/size triple per point (<see cref="Values"/> holds the y values); they are
+/// empty for every other chart kind.
+/// </summary>
+internal sealed record PptxChartSeries(
+    string Name,
+    IReadOnlyList<double?> Values,
+    IReadOnlyList<double?>? XValues = null,
+    IReadOnlyList<double?>? Sizes = null);
 
 /// <summary>A slide chart's data, as written into (or read back from) its ChartPart.</summary>
 internal sealed record PptxChartData(
@@ -31,7 +40,16 @@ internal sealed record PptxChartData(
 internal static class PptxCharts
 {
     /// <summary>The chart kinds aioffice can create. Everything else is unsupported_feature.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["bar", "line", "pie"];
+    public static readonly IReadOnlyList<string> Kinds =
+    [
+        "bar", "line", "pie",
+        "doughnut", "radar", "bubble",
+        "stackedBar", "percentStackedBar", "stackedArea", "combo",
+    ];
+
+    /// <summary>Kinds that draw on a category + value axis pair (so the plot area carries both axes).</summary>
+    private static readonly IReadOnlyList<string> CategoryValueAxisKinds =
+        ["bar", "line", "stackedBar", "percentStackedBar", "stackedArea", "combo"];
 
     private static readonly IReadOnlyList<string> AddProps =
         ["kind", "categories", "series", "title", "x", "y", "w", "h"];
@@ -96,32 +114,150 @@ internal static class PptxCharts
         }
 
         var kind = props.TryGetPropertyValue("kind", out var kindNode) && kindNode is not null
-            ? J.ScalarText(kindNode).Trim().ToLowerInvariant()
+            ? NormalizeKind(J.ScalarText(kindNode).Trim())
             : throw MissingProp("kind", "\"bar\"");
         if (!Kinds.Contains(kind, StringComparer.Ordinal))
         {
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"Chart kind '{kind}' is not supported.",
-                "Supported chart kinds: bar, line, pie. A line chart is the usual stand-in for scatter/area data.",
+                "Supported chart kinds: " + string.Join(", ", Kinds) +
+                ". A line chart is the usual stand-in for scatter/area data; bubble needs an x/y/size triple per point.",
                 candidates: Kinds);
         }
 
         var categories = ParseCategories(props);
+
+        // Bubble plots an x/y/size triple per point, so its series carry three
+        // value arrays rather than the single value-per-category shape.
+        if (kind == "bubble")
+        {
+            var bubbleSeries = ParseBubbleSeries(props, categories.Count);
+            return new PptxChartData(kind, ReadTitle(props), categories, bubbleSeries);
+        }
+
         var series = ParseSeries(props, categories.Count);
-        if (kind == "pie" && series.Count != 1)
+        if (kind is "pie" or "doughnut" && series.Count != 1)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                $"A pie chart takes exactly one series; props.series has {series.Count}.",
+                $"A {kind} chart takes exactly one series; props.series has {series.Count}.",
                 "Pass a single series, or use kind bar/line for multi-series data.");
         }
 
-        var title = props.TryGetPropertyValue("title", out var titleNode) && titleNode is not null
+        if (kind == "combo" && series.Count < 2)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"A combo chart needs at least two series (column(s) plus a line); props.series has {series.Count}.",
+                "Give it two or more series — the first becomes columns, the rest a line — or use kind bar/line.");
+        }
+
+        return new PptxChartData(kind, ReadTitle(props), categories, series);
+    }
+
+    /// <summary>Reads the optional chart title; null when no title prop is present.</summary>
+    private static string? ReadTitle(JsonObject props) =>
+        props.TryGetPropertyValue("title", out var titleNode) && titleNode is not null
             ? J.ScalarText(titleNode)
             : null;
 
-        return new PptxChartData(kind, title, categories, series);
+    /// <summary>
+    /// Canonicalizes the kind token: lower-cases the simple kinds but keeps the
+    /// camelCase compound kinds (stackedBar, percentStackedBar, stackedArea) as
+    /// the contract spells them, accepting any case the caller sends.
+    /// </summary>
+    private static string NormalizeKind(string raw)
+    {
+        foreach (var kind in Kinds)
+        {
+            if (string.Equals(kind, raw, StringComparison.OrdinalIgnoreCase))
+            {
+                return kind;
+            }
+        }
+
+        return raw.ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Parses a bubble chart's series: each point is an {x, y, size} triple (or
+    /// the bare [y] arrays for x/size, matching the categories count). x defaults
+    /// to the 1-based point index and size to 1 when omitted, so a caller can pass
+    /// the same {name, values} shape as the other kinds and still get a valid chart.
+    /// </summary>
+    private static List<PptxChartSeries> ParseBubbleSeries(JsonObject props, int categoryCount)
+    {
+        if (!props.TryGetPropertyValue("series", out var node) || node is not JsonArray array || array.Count == 0)
+        {
+            throw MissingProp("series", "[{\"name\":\"Deals\",\"values\":[10,20,30],\"x\":[1,2,3],\"size\":[5,8,3]}]");
+        }
+
+        var series = new List<PptxChartSeries>(array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject item)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"props.series[{i}] is not an object."),
+                    "Each bubble series looks like {\"name\":\"Deals\",\"values\":[10,20],\"x\":[1,2],\"size\":[5,8]}.");
+            }
+
+            var yValues = ParseValueArray(item, "values", i, categoryCount, required: true)!;
+            var xValues = ParseValueArray(item, "x", i, categoryCount, required: false)
+                ?? [.. Enumerable.Range(1, yValues.Count).Select(n => (double?)n)];
+            var sizes = ParseValueArray(item, "size", i, categoryCount, required: false)
+                ?? [.. Enumerable.Repeat((double?)1, yValues.Count)];
+
+            var name = item.TryGetPropertyValue("name", out var nameNode) && nameNode is not null
+                ? J.ScalarText(nameNode)
+                : Units.Inv($"Series {i + 1}");
+            series.Add(new PptxChartSeries(name, yValues, xValues, sizes));
+        }
+
+        return series;
+    }
+
+    /// <summary>Parses one numeric array prop of a bubble series (length must match the category count).</summary>
+    private static List<double?>? ParseValueArray(JsonObject item, string key, int seriesIndex, int categoryCount, bool required)
+    {
+        if (!item.TryGetPropertyValue(key, out var node) || node is null)
+        {
+            if (!required)
+            {
+                return null;
+            }
+
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"props.series[{seriesIndex}] has no '{key}' array."),
+                "A bubble series needs at least 'values' (the y values); x and size are optional.");
+        }
+
+        if (node is not JsonArray values)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"props.series[{seriesIndex}].{key} is not an array."),
+                "Pass numbers (or null for a gap), e.g. {\"" + key + "\":[10,20,30]}.");
+        }
+
+        if (values.Count != categoryCount)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                Units.Inv($"props.series[{seriesIndex}].{key} has {values.Count} value(s) but there are {categoryCount} categories."),
+                "Every bubble value array (values, x, size) must hold exactly one entry per category.");
+        }
+
+        var numbers = new List<double?>(values.Count);
+        for (var v = 0; v < values.Count; v++)
+        {
+            numbers.Add(NumericValue(values[v], seriesIndex, v));
+        }
+
+        return numbers;
     }
 
     private static List<string> ParseCategories(JsonObject props)
@@ -346,8 +482,12 @@ internal static class PptxCharts
     private static C.ChartSpace BuildChartSpace(PptxChartData data, string externalDataRelId)
     {
         var plotArea = new C.PlotArea(new C.Layout());
-        plotArea.Append(BuildChartGroup(data));
-        if (data.Kind is "bar" or "line")
+        foreach (var group in BuildChartGroups(data))
+        {
+            plotArea.Append(group);
+        }
+
+        if (CategoryValueAxisKinds.Contains(data.Kind, StringComparer.Ordinal))
         {
             plotArea.Append(new C.CategoryAxis(
                 new C.AxisId { Val = CategoryAxisId },
@@ -355,6 +495,30 @@ internal static class PptxCharts
                 new C.Delete { Val = false },
                 new C.AxisPosition { Val = C.AxisPositionValues.Bottom },
                 new C.CrossingAxis { Val = ValueAxisId }));
+            plotArea.Append(new C.ValueAxis(
+                new C.AxisId { Val = ValueAxisId },
+                new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                new C.Delete { Val = false },
+                new C.AxisPosition { Val = C.AxisPositionValues.Left },
+                new C.CrossingAxis { Val = CategoryAxisId }));
+        }
+        else if (data.Kind is "radar" or "bubble")
+        {
+            // Radar plots categories around the rim against a value axis; bubble
+            // plots value-against-value (both axes are value axes).
+            plotArea.Append(data.Kind == "radar"
+                ? new C.CategoryAxis(
+                    new C.AxisId { Val = CategoryAxisId },
+                    new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                    new C.Delete { Val = false },
+                    new C.AxisPosition { Val = C.AxisPositionValues.Bottom },
+                    new C.CrossingAxis { Val = ValueAxisId })
+                : new C.ValueAxis(
+                    new C.AxisId { Val = CategoryAxisId },
+                    new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                    new C.Delete { Val = false },
+                    new C.AxisPosition { Val = C.AxisPositionValues.Bottom },
+                    new C.CrossingAxis { Val = ValueAxisId }));
             plotArea.Append(new C.ValueAxis(
                 new C.AxisId { Val = ValueAxisId },
                 new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
@@ -387,55 +551,182 @@ internal static class PptxCharts
         return chartSpace;
     }
 
-    private static OpenXmlCompositeElement BuildChartGroup(PptxChartData data)
+    /// <summary>
+    /// The plot-area chart group(s) for the kind. Every kind yields one group
+    /// except combo, which yields a column group (the first series) followed by a
+    /// line group (the rest) sharing the same axis pair.
+    /// </summary>
+    private static IEnumerable<OpenXmlCompositeElement> BuildChartGroups(PptxChartData data)
     {
         switch (data.Kind)
         {
             case "bar":
-            {
-                var group = new C.BarChart(
-                    new C.BarDirection { Val = C.BarDirectionValues.Column },
-                    new C.BarGrouping { Val = C.BarGroupingValues.Clustered },
-                    new C.VaryColors { Val = false });
-                for (var i = 0; i < data.Series.Count; i++)
-                {
-                    var series = new C.BarChartSeries();
-                    AppendSeriesChildren(series, data, i);
-                    group.Append(series);
-                }
+                yield return BuildBarGroup(data, C.BarGroupingValues.Clustered, Enumerable.Range(0, data.Series.Count));
+                break;
 
-                group.Append(new C.AxisId { Val = CategoryAxisId });
-                group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
-            }
+            case "stackedBar":
+                yield return BuildBarGroup(data, C.BarGroupingValues.Stacked, Enumerable.Range(0, data.Series.Count));
+                break;
+
+            case "percentStackedBar":
+                yield return BuildBarGroup(data, C.BarGroupingValues.PercentStacked, Enumerable.Range(0, data.Series.Count));
+                break;
 
             case "line":
-            {
-                var group = new C.LineChart(
-                    new C.Grouping { Val = C.GroupingValues.Standard },
-                    new C.VaryColors { Val = false });
-                for (var i = 0; i < data.Series.Count; i++)
-                {
-                    var series = new C.LineChartSeries();
-                    AppendSeriesChildren(series, data, i);
-                    group.Append(series);
-                }
+                yield return BuildLineGroup(data, Enumerable.Range(0, data.Series.Count));
+                break;
 
-                group.Append(new C.AxisId { Val = CategoryAxisId });
-                group.Append(new C.AxisId { Val = ValueAxisId });
-                return group;
-            }
+            case "stackedArea":
+                yield return BuildAreaGroup(data, C.GroupingValues.Stacked, Enumerable.Range(0, data.Series.Count));
+                break;
 
-            default: // "pie" — ParseAdd rejected everything else
+            case "radar":
+                yield return BuildRadarGroup(data);
+                break;
+
+            case "bubble":
+                yield return BuildBubbleGroup(data);
+                break;
+
+            case "doughnut":
+                yield return BuildDoughnutGroup(data);
+                break;
+
+            case "combo":
+                // First series as columns, the remaining series as a line — both
+                // groups reference the shared category/value axis pair.
+                yield return BuildBarGroup(data, C.BarGroupingValues.Clustered, [0]);
+                yield return BuildLineGroup(data, Enumerable.Range(1, data.Series.Count - 1));
+                break;
+
+            default: // "pie" — ParseAdd rejected everything ParseAdd does not handle here
             {
                 var group = new C.PieChart(new C.VaryColors { Val = true });
                 var series = new C.PieChartSeries();
                 AppendSeriesChildren(series, data, 0);
                 group.Append(series);
                 group.Append(new C.FirstSliceAngle { Val = 0 });
-                return group;
+                yield return group;
             }
+
+            break;
         }
+    }
+
+    private static C.BarChart BuildBarGroup(PptxChartData data, C.BarGroupingValues grouping, IEnumerable<int> ordinals)
+    {
+        var group = new C.BarChart(
+            new C.BarDirection { Val = C.BarDirectionValues.Column },
+            new C.BarGrouping { Val = grouping },
+            new C.VaryColors { Val = false });
+        foreach (var i in ordinals)
+        {
+            var series = new C.BarChartSeries();
+            AppendSeriesChildren(series, data, i);
+            group.Append(series);
+        }
+
+        // Stacked bars overlap fully (overlap 100); clustered keep the default.
+        if (grouping != C.BarGroupingValues.Clustered)
+        {
+            group.Append(new C.Overlap { Val = 100 });
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    private static C.LineChart BuildLineGroup(PptxChartData data, IEnumerable<int> ordinals)
+    {
+        var group = new C.LineChart(
+            new C.Grouping { Val = C.GroupingValues.Standard },
+            new C.VaryColors { Val = false });
+        foreach (var i in ordinals)
+        {
+            var series = new C.LineChartSeries();
+            AppendSeriesChildren(series, data, i);
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    private static C.AreaChart BuildAreaGroup(PptxChartData data, C.GroupingValues grouping, IEnumerable<int> ordinals)
+    {
+        var group = new C.AreaChart(
+            new C.Grouping { Val = grouping },
+            new C.VaryColors { Val = false });
+        foreach (var i in ordinals)
+        {
+            var series = new C.AreaChartSeries();
+            AppendSeriesChildren(series, data, i);
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    private static C.RadarChart BuildRadarGroup(PptxChartData data)
+    {
+        var group = new C.RadarChart(
+            new C.RadarStyle { Val = C.RadarStyleValues.Marker },
+            new C.VaryColors { Val = false });
+        for (var i = 0; i < data.Series.Count; i++)
+        {
+            var series = new C.RadarChartSeries();
+            AppendSeriesChildren(series, data, i);
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
+    }
+
+    /// <summary>A doughnut is a pie variant: a single PieChartSeries plus a holeSize.</summary>
+    private static C.DoughnutChart BuildDoughnutGroup(PptxChartData data)
+    {
+        var group = new C.DoughnutChart(new C.VaryColors { Val = true });
+        var series = new C.PieChartSeries();
+        AppendSeriesChildren(series, data, 0);
+        group.Append(series);
+        group.Append(new C.FirstSliceAngle { Val = 0 });
+        group.Append(new C.HoleSize { Val = 50 });
+        return group;
+    }
+
+    /// <summary>idx/order/tx/xVal/yVal/bubbleSize per series — value-against-value with a size channel.</summary>
+    private static C.BubbleChart BuildBubbleGroup(PptxChartData data)
+    {
+        var group = new C.BubbleChart(new C.VaryColors { Val = false });
+        for (var i = 0; i < data.Series.Count; i++)
+        {
+            var spec = data.Series[i];
+            var series = new C.BubbleChartSeries(
+                new C.Index { Val = (uint)i },
+                new C.Order { Val = (uint)i },
+                BuildSeriesText(spec.Name, i));
+            series.Append(new C.XValues(new C.NumberReference(
+                new C.Formula(PptxChartWorkbook.CategoriesRange(data.Categories.Count)),
+                BuildNumberCache(spec.XValues ?? spec.Values))));
+            series.Append(new C.YValues(new C.NumberReference(
+                new C.Formula(PptxChartWorkbook.ValuesRange(i, spec.Values.Count)),
+                BuildNumberCache(spec.Values))));
+            series.Append(new C.BubbleSize(new C.NumberReference(
+                new C.Formula(PptxChartWorkbook.ValuesRange(i, spec.Values.Count)),
+                BuildNumberCache(spec.Sizes ?? spec.Values))));
+            series.Append(new C.Bubble3D { Val = false });
+            group.Append(series);
+        }
+
+        group.Append(new C.AxisId { Val = CategoryAxisId });
+        group.Append(new C.AxisId { Val = ValueAxisId });
+        return group;
     }
 
     /// <summary>idx/order/tx/cat/val with reference caches pointing at the embedded Sheet1.</summary>
@@ -476,7 +767,13 @@ internal static class PptxCharts
     }
 
     /// <summary>c:val as a number reference (with cache) into the series' column of the embedded sheet.</summary>
-    private static C.Values BuildValues(IReadOnlyList<double?> values, int ordinal)
+    private static C.Values BuildValues(IReadOnlyList<double?> values, int ordinal) =>
+        new(new C.NumberReference(
+            new C.Formula(PptxChartWorkbook.ValuesRange(ordinal, values.Count)),
+            BuildNumberCache(values)));
+
+    /// <summary>A c:numCache of the values (null entries are dropped, matching the embedded sheet's gaps).</summary>
+    private static C.NumberingCache BuildNumberCache(IReadOnlyList<double?> values)
     {
         var cache = new C.NumberingCache(
             new C.FormatCode("General"),
@@ -493,9 +790,7 @@ internal static class PptxCharts
             }
         }
 
-        return new C.Values(new C.NumberReference(
-            new C.Formula(PptxChartWorkbook.ValuesRange(ordinal, values.Count)),
-            cache));
+        return cache;
     }
 
     // ----- enumerate / resolve -------------------------------------------------
@@ -560,18 +855,23 @@ internal static class PptxCharts
     {
         var chartSpace = part.ChartSpace;
         var plotArea = chartSpace?.Descendants<C.PlotArea>().FirstOrDefault();
-        var group = plotArea?.ChildElements
-            .FirstOrDefault(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal));
+        var groups = plotArea?.ChildElements
+            .Where(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal))
+            .ToList() ?? [];
 
-        var kind = KindName(group?.LocalName);
+        var kind = ResolveKind(groups);
         var title = TitleText(chartSpace);
-        var serElements = group?.ChildElements.Where(e => e.LocalName == "ser").ToList() ?? [];
+
+        // Every series across every group (combo has a bar group + a line group).
+        var serElements = groups.SelectMany(g => g.ChildElements.Where(e => e.LocalName == "ser")).ToList();
 
         var categories = new List<string>();
-        if (serElements.Count > 0 &&
-            serElements[0].ChildElements.FirstOrDefault(e => e.LocalName == "cat") is { } cat)
+        var firstCat = serElements
+            .Select(ser => ser.ChildElements.FirstOrDefault(e => e.LocalName == "cat"))
+            .FirstOrDefault(c => c is not null);
+        if (firstCat is not null)
         {
-            categories = ReadStringPoints(cat);
+            categories = ReadStringPoints(firstCat);
         }
 
         var series = new List<PptxChartSeries>(serElements.Count);
@@ -579,11 +879,54 @@ internal static class PptxCharts
         {
             var name = ser.ChildElements.FirstOrDefault(e => e.LocalName == "tx")?
                 .Descendants<C.NumericValue>().FirstOrDefault()?.Text ?? string.Empty;
-            var val = ser.ChildElements.FirstOrDefault(e => e.LocalName == "val");
+            // bubble carries yVal; bar/line/area/pie/radar carry val.
+            var val = ser.ChildElements.FirstOrDefault(e => e.LocalName is "val" or "yVal");
             series.Add(new PptxChartSeries(name, val is null ? [] : ReadNumericPoints(val)));
         }
 
         return new PptxChartData(kind, title, categories, series);
+    }
+
+    /// <summary>
+    /// The aioffice kind token of a chart's plot-area groups: two groups (bar +
+    /// line) is combo; a single group maps by its element and grouping (stacked /
+    /// percentStacked variants are distinguished by the c:grouping attribute).
+    /// </summary>
+    private static string ResolveKind(IReadOnlyList<OpenXmlElement> groups)
+    {
+        if (groups.Count == 0)
+        {
+            return "unknown";
+        }
+
+        if (groups.Count > 1 &&
+            groups.Any(g => g.LocalName == "barChart") && groups.Any(g => g.LocalName == "lineChart"))
+        {
+            return "combo";
+        }
+
+        var group = groups[0];
+        var grouping = group.ChildElements
+            .FirstOrDefault(e => e.LocalName is "grouping" or "barGrouping")?
+            .GetAttribute("val", string.Empty).Value;
+
+        return group.LocalName switch
+        {
+            "barChart" => grouping switch
+            {
+                "stacked" => "stackedBar",
+                "percentStacked" => "percentStackedBar",
+                _ => "bar",
+            },
+            "areaChart" => grouping == "stacked" ? "stackedArea" : "area",
+            "lineChart" => "line",
+            "pieChart" => "pie",
+            "doughnutChart" => "doughnut",
+            "radarChart" => "radar",
+            "bubbleChart" => "bubble",
+            "scatterChart" => "scatter",
+            _ => KindName(group.LocalName),
+        };
     }
 
     private static string KindName(string? localName)

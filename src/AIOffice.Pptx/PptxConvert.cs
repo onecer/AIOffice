@@ -111,7 +111,9 @@ public sealed partial class PptxHandler : INeutralConvertible
                     ExportTextShape(textShape, blocks);
                     break;
 
-                case P.Picture picture:
+                // A media-hosting picture is not an image: it is dropped as media
+                // (reported separately), never as an Image block with a clip name.
+                case P.Picture picture when PptxMedia.MediaKindOf(picture) is null:
                     blocks.Add(new NeutralBlock(
                         NeutralBlockKind.Image,
                         Source: NullIfBlank(picture.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value),
@@ -152,6 +154,11 @@ public sealed partial class PptxHandler : INeutralConvertible
         if (PptxEmbeds.SlideEmbedCount(slidePart) > 0)
         {
             dropped.Add("embedded objects (OLE/package attachments have no neutral equivalent; the embed is not converted)");
+        }
+
+        if (PptxMedia.SlideMediaCount(slidePart) > 0)
+        {
+            dropped.Add("embedded media (video/audio clips have no neutral equivalent; the media is not converted)");
         }
 
         // Speaker notes ride along as a tagged paragraph so they survive the trip.
