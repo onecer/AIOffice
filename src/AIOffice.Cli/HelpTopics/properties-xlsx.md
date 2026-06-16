@@ -11,6 +11,7 @@
 | italic      | bool                 |                                                |
 | color       | string               | font color, hex RGB                            |
 | fill        | string               | background color, hex RGB                      |
+| gradientFill| object               | 1.8: gradient fill, see **gradient fill** below|
 | hyperlink   | string               | M5: `https://…` external, `#Sheet!A1` internal |
 | hyperlinkTooltip | string          | M5: hover text for the hyperlink               |
 
@@ -62,6 +63,21 @@ it needs at least two series. An unsupported `kind` returns
 /Sheet1/chart[i]`: `dataLabels`, `legend`, `axisTitles`, `trendline`,
 `errorBars`, `gridlines`, `secondaryAxis`. `get` reports them. Full grammar +
 examples: `aioffice help chart-polish`.
+
+1.8 adds **`seriesColors`** — a brand palette accepted on both `add` and `set
+/Sheet1/chart[i]`. Pass an array of 6-hex RGB strings (a leading `#` is
+optional), one per series in dataRange order; a short list cycles across the
+series:
+
+      {op:"add", path:"/Sheet1", type:"chart",
+       props:{kind:"bar", dataRange:"A1:C5", anchor:"E2",
+              seriesColors:["2E5AAC", "#E8743B"]}}
+
+Bar/area series get a solid fill in the color; line/scatter series get a tinted
+line; a single pie/doughnut series colors each *slice* (the palette cycles across
+the data points). `get` on the chart reports the applied colors back under
+`polish.seriesColors`. Because chart colors live in the chart part (which
+ClosedXML preserves byte-identical), they survive later edits.
 
 ## name (M3, `/name[@name=SalesData]`)
 
@@ -370,6 +386,34 @@ resolves to its code; any non-preset string is preserved verbatim. Full table:
 `aioffice help number-formats`.
 
       {op:"set", path:"/Sheet1/B2", props:{numberFormat:"accounting-usd"}}
+
+1.8 adds scaled-money / scaled-number presets (`usd-millions`, `usd-thousands`,
+`millions`, `thousands-k`), `accounting-eur` / `accounting-gbp`, and explicit
+`percent-0` / `percent-1` / `percent-2`.
+
+## gradient fill (1.8, cell / range)
+
+The `gradientFill` prop fills a cell or range with a color gradient — for KPI
+bands, header strips, and brand surfaces. It is an object:
+
+      {op:"set", path:"/Sheet1/A1", props:{gradientFill:{
+        type:"linear", angle:90,
+        stops:[{color:"#2E5AAC", pos:0}, {color:"#E8743B", pos:1}]}}}
+
+- `type` (optional, default `linear`): `linear`, `radial`, or `path`. `radial`
+  and `path` author a centered gradient and take no `angle`.
+- `angle` (linear only): degrees — `0` runs left→right, `90` top→bottom.
+- `stops` (required, ≥ 2): each `{color, pos}` — `color` is a 6-hex RGB (a
+  leading `#` is optional), `pos` is the fractional position in `0..1`.
+
+`get` on the cell reports the gradient back under `gradientFill`. The cell also
+keeps a solid fill of the first stop's color as a fallback, so its number
+format / font / borders are preserved and a brand color always shows.
+
+Round-trip caveat (honest): a gradient survives the edit that authors it, but a
+*later* edit that re-saves the workbook through ClosedXML drops the cell back to
+that solid fallback color (ClosedXML cannot re-emit a gradient it does not
+model). Re-apply the gradient in the same batch as any later change to keep it.
 
 ## Form controls (v1.2)
 

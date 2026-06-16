@@ -33,7 +33,7 @@ internal static class ExcelChartPolish
 {
     /// <summary>The polish prop keys, accepted at chart create and on a chart set.</summary>
     public static readonly IReadOnlyList<string> Props =
-        ["dataLabels", "legend", "axisTitles", "trendline", "errorBars", "gridlines", "secondaryAxis"];
+        ["dataLabels", "legend", "axisTitles", "trendline", "errorBars", "gridlines", "secondaryAxis", "seriesColors"];
 
     private static readonly IReadOnlyList<string> LegendPositions = ["none", "right", "left", "top", "bottom"];
 
@@ -62,12 +62,15 @@ internal static class ExcelChartPolish
         string? Trendline,
         string? ErrorBars,
         GridlineSetting? Gridlines,
-        IReadOnlyList<string>? SecondaryAxisSeries)
+        IReadOnlyList<string>? SecondaryAxisSeries,
+        // (1.8) Brand palette: one 6-hex RGB per series in dataRange order; a short
+        // list cycles. Null when not supplied (Excel's default palette is kept).
+        IReadOnlyList<string>? SeriesColors = null)
     {
         /// <summary>True when no polish prop was supplied (nothing to apply).</summary>
         public bool IsEmpty =>
             DataLabels is null && Legend is null && AxisTitles is null && Trendline is null &&
-            ErrorBars is null && Gridlines is null && SecondaryAxisSeries is null;
+            ErrorBars is null && Gridlines is null && SecondaryAxisSeries is null && SeriesColors is null;
     }
 
     internal sealed record DataLabelSetting(bool Show, string? What, string? Position);
@@ -97,7 +100,8 @@ internal static class ExcelChartPolish
             ParseTrendline(props, opIndex),
             ParseErrorBars(props, opIndex),
             ParseGridlines(props, opIndex),
-            ParseSecondaryAxis(props, opIndex));
+            ParseSecondaryAxis(props, opIndex),
+            ParseSeriesColors(props, opIndex));
     }
 
     private static DataLabelSetting? ParseDataLabels(JsonObject props, int opIndex)
@@ -315,6 +319,74 @@ internal static class ExcelChartPolish
         return names;
     }
 
+    /// <summary>
+    /// Parses the (1.8) <c>seriesColors</c> brand-palette prop: an array of 6-hex
+    /// RGB strings (e.g. <c>["2E5AAC","E8743B"]</c> or <c>["#2E5AAC"]</c>), one per
+    /// series in dataRange order; a shorter list cycles across the series. Each
+    /// entry is normalized to upper-case six hex digits (a leading <c>#</c> is
+    /// optional). An empty array is rejected — there would be nothing to apply.
+    /// </summary>
+    private static IReadOnlyList<string>? ParseSeriesColors(JsonObject props, int opIndex)
+    {
+        if (!props.TryGetPropertyValue("seriesColors", out var node) || node is null)
+        {
+            return null;
+        }
+
+        if (node is not JsonArray array)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'seriesColors' must be an array of 6-hex RGB strings like [\"2E5AAC\",\"E8743B\"].",
+                "One color per series in dataRange order; a short list cycles. Use 6-hex RGB (a leading # is optional).");
+        }
+
+        var colors = new List<string>(array.Count);
+        foreach (var entry in array)
+        {
+            if (entry is not JsonValue value || value.GetValueKind() != JsonValueKind.String ||
+                value.GetValue<string>() is not { } raw)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: seriesColors entries must be 6-hex RGB strings.",
+                    "Pass e.g. seriesColors:[\"2E5AAC\",\"#E8743B\"].");
+            }
+
+            colors.Add(NormalizeHex(raw, opIndex));
+        }
+
+        if (colors.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: seriesColors is empty.",
+                "List at least one color, e.g. seriesColors:[\"2E5AAC\"].");
+        }
+
+        return colors;
+    }
+
+    /// <summary>Normalizes a hex color to upper-case six hex digits (drops an optional leading #).</summary>
+    private static string NormalizeHex(string raw, int opIndex)
+    {
+        var hex = raw.Trim();
+        if (hex.StartsWith('#'))
+        {
+            hex = hex[1..];
+        }
+
+        if (hex.Length != 6 || !hex.All(Uri.IsHexDigit))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: '{raw}' is not a 6-hex RGB color.",
+                "Use six hex digits like 2E5AAC or #2E5AAC (no alpha, no shorthand).");
+        }
+
+        return hex.ToUpperInvariant();
+    }
+
     // ----- apply (shared by create + edit) -----------------------------------
 
     /// <summary>
@@ -339,6 +411,11 @@ internal static class ExcelChartPolish
         if (settings.DataLabels is { } dataLabels)
         {
             ApplyDataLabels(plotArea, dataLabels);
+        }
+
+        if (settings.SeriesColors is { } seriesColors)
+        {
+            ApplySeriesColors(plotArea, seriesColors);
         }
 
         if (settings.Trendline is { } trendline)
@@ -396,6 +473,121 @@ internal static class ExcelChartPolish
             InsertSeriesChild(series, dLbls);
         }
     }
+
+    /// <summary>
+    /// Applies the (1.8) brand palette: one color per series in plot order, cycling
+    /// a short list. For fill-based kinds (bar / area / pie / doughnut) the color is
+    /// a <c>solidFill</c> on the series shape properties; for stroke kinds
+    /// (line / scatter) it tints the series line. A single pie/doughnut series holds
+    /// every slice, so its points are colored individually (the palette cycles across
+    /// the data points) — that is the only way to brand a pie's wedges.
+    /// </summary>
+    private static void ApplySeriesColors(C.PlotArea plotArea, IReadOnlyList<string> colors)
+    {
+        var seriesList = SeriesOf(plotArea).ToList();
+        var singlePieSeries = seriesList.Count == 1 && seriesList[0].Parent is { } parent &&
+            parent.LocalName is "pieChart" or "doughnutChart" or "pie3DChart" or "ofPieChart";
+
+        if (singlePieSeries)
+        {
+            ApplyPieSliceColors(seriesList[0], colors);
+            return;
+        }
+
+        for (var i = 0; i < seriesList.Count; i++)
+        {
+            var series = seriesList[i];
+            var hex = colors[i % colors.Count];
+            var isStroke = series.Parent is { } group &&
+                group.LocalName is "lineChart" or "line3DChart" or "scatterChart" or "radarChart";
+            SetSeriesShapeColor(series, hex, isStroke);
+        }
+    }
+
+    /// <summary>Colors each wedge of a single pie/doughnut series via per-point <c>c:dPt</c> fills.</summary>
+    private static void ApplyPieSliceColors(OpenXmlCompositeElement series, IReadOnlyList<string> colors)
+    {
+        // Rebuild the data points from scratch so a re-apply overrides cleanly.
+        series.RemoveAllChildren<C.DataPoint>();
+
+        var count = SeriesPointCount(series);
+        if (count == 0)
+        {
+            // No cached points to color (unusual) — fall back to a series-level fill.
+            SetSeriesShapeColor(series, colors[0], stroke: false);
+            return;
+        }
+
+        // c:dPt elements sit after spPr/marker and before c:dLbls/c:cat in schema
+        // order; insert each before the first data ref so the ordering stays valid.
+        var anchor = series.ChildElements.FirstOrDefault(e =>
+            e.LocalName is "dLbls" or "cat" or "xVal" or "yVal" or "val");
+        for (var i = 0; i < count; i++)
+        {
+            var point = new C.DataPoint(
+                new C.Index { Val = (uint)i },
+                new C.Bubble3D { Val = false },
+                ShapeWithSolidFill(colors[i % colors.Count]));
+            if (anchor is null)
+            {
+                series.Append(point);
+            }
+            else
+            {
+                series.InsertBefore(point, anchor);
+            }
+        }
+    }
+
+    /// <summary>The number of cached category points on a series (drives pie slice count).</summary>
+    private static int SeriesPointCount(OpenXmlCompositeElement series)
+    {
+        var cat = series.ChildElements.FirstOrDefault(e => e.LocalName == "cat");
+        var fromCat = cat?.Descendants<C.PointCount>().FirstOrDefault()?.Val?.Value;
+        if (fromCat is { } catCount && catCount > 0)
+        {
+            return (int)catCount;
+        }
+
+        var val = series.ChildElements.FirstOrDefault(e => e.LocalName == "val");
+        var fromVal = val?.Descendants<C.PointCount>().FirstOrDefault()?.Val?.Value;
+        return fromVal is { } valCount ? (int)valCount : 0;
+    }
+
+    /// <summary>
+    /// Sets (or replaces) the <c>c:spPr</c> on a series so it renders in the given
+    /// hex color: a solid fill for area/bar wedges, or a colored line for
+    /// line/scatter series. The spPr lands in its schema slot right after
+    /// <c>c:tx</c> (falling back to after <c>c:order</c>).
+    /// </summary>
+    private static void SetSeriesShapeColor(OpenXmlCompositeElement series, string hex, bool stroke)
+    {
+        series.RemoveAllChildren<C.ChartShapeProperties>();
+        var spPr = stroke ? ShapeWithLineColor(hex) : ShapeWithSolidFill(hex);
+
+        var tx = series.ChildElements.FirstOrDefault(e => e.LocalName == "tx");
+        var order = series.ChildElements.FirstOrDefault(e => e.LocalName == "order");
+        if (tx is not null)
+        {
+            series.InsertAfter(spPr, tx);
+        }
+        else if (order is not null)
+        {
+            series.InsertAfter(spPr, order);
+        }
+        else
+        {
+            series.InsertAt(spPr, 0);
+        }
+    }
+
+    /// <summary>A <c>c:spPr</c> whose shape is filled with the given solid RGB.</summary>
+    private static C.ChartShapeProperties ShapeWithSolidFill(string hex) =>
+        new(new A.SolidFill(new A.RgbColorModelHex { Val = hex }));
+
+    /// <summary>A <c>c:spPr</c> whose outline (the plotted line) is the given solid RGB.</summary>
+    private static C.ChartShapeProperties ShapeWithLineColor(string hex) =>
+        new(new A.Outline(new A.SolidFill(new A.RgbColorModelHex { Val = hex })));
 
     private static C.DataLabels BuildDataLabels(DataLabelSetting setting)
     {
@@ -888,7 +1080,67 @@ internal static class ExcelChartPolish
             errorBars = DescribeErrorBars(firstSeries),
             gridlines = DescribeGridlines(plotArea),
             secondaryAxis = DescribeSecondaryAxis(plotArea),
+            seriesColors = DescribeSeriesColors(plotArea),
         };
+    }
+
+    /// <summary>
+    /// Reads the (1.8) brand palette back: the per-series fill/line RGB in plot
+    /// order, or — for a single pie/doughnut series — the per-point wedge colors.
+    /// Null when no series carries an explicit RGB (Excel's default palette).
+    /// </summary>
+    private static IReadOnlyList<string>? DescribeSeriesColors(C.PlotArea? plotArea)
+    {
+        if (plotArea is null)
+        {
+            return null;
+        }
+
+        var seriesList = SeriesOf(plotArea).ToList();
+        var singlePieSeries = seriesList.Count == 1 && seriesList[0].Parent is { } parent &&
+            parent.LocalName is "pieChart" or "doughnutChart" or "pie3DChart" or "ofPieChart";
+
+        var colors = new List<string>();
+        if (singlePieSeries)
+        {
+            foreach (var point in seriesList[0].ChildElements.Where(e => e.LocalName == "dPt").Cast<OpenXmlCompositeElement>())
+            {
+                if (ShapeColor(point.GetFirstChild<C.ChartShapeProperties>()) is { } hex)
+                {
+                    colors.Add(hex);
+                }
+            }
+        }
+        else
+        {
+            foreach (var series in seriesList)
+            {
+                if (ShapeColor(series.GetFirstChild<C.ChartShapeProperties>()) is { } hex)
+                {
+                    colors.Add(hex);
+                }
+            }
+        }
+
+        return colors.Count > 0 ? colors : null;
+    }
+
+    /// <summary>The RGB hex on a shape's solid fill or line, or null when none is set.</summary>
+    private static string? ShapeColor(C.ChartShapeProperties? spPr)
+    {
+        if (spPr is null)
+        {
+            return null;
+        }
+
+        var fill = spPr.GetFirstChild<A.SolidFill>()?.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value;
+        if (fill is not null)
+        {
+            return fill;
+        }
+
+        return spPr.GetFirstChild<A.Outline>()?.GetFirstChild<A.SolidFill>()
+            ?.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value;
     }
 
     private static object? DescribeDataLabels(OpenXmlCompositeElement? series)

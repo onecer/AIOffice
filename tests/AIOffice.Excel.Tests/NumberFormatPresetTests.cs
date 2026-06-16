@@ -78,6 +78,68 @@ public sealed class NumberFormatPresetTests : ExcelTestBase
         AssertValidatorClean(file);
     }
 
+    // ----- (1.8) additive presets --------------------------------------------
+
+    [Theory]
+    [InlineData("usd-millions", "\"$\"#,##0.0,,\"M\"")]
+    [InlineData("usd-thousands", "\"$\"#,##0,\"K\"")]
+    [InlineData("millions", "#,##0.0,,\"M\"")]
+    [InlineData("thousands-k", "#,##0,\"K\"")]
+    [InlineData("percent-0", "0%")]
+    [InlineData("percent-1", "0.0%")]
+    [InlineData("percent-2", "0.00%")]
+    public void V18_preset_resolves_to_its_ooxml_code(string preset, string expectedCode)
+    {
+        var file = CreateWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/B2", ("value", 1234567), ("numberFormat", preset)));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+
+        Assert.Equal(expectedCode, RawNumberFormat(file, "Sheet1", "B2"));
+        AssertValidatorClean(file);
+    }
+
+    [Theory]
+    [InlineData("usd-millions", 1234567, "$1.2M")]
+    [InlineData("usd-thousands", 1234567, "$1,235K")]
+    [InlineData("millions", 1234567, "1.2M")]
+    [InlineData("thousands-k", 1234567, "1,235K")]
+    [InlineData("percent-0", 0.1234, "12%")]
+    [InlineData("percent-1", 0.1234, "12.3%")]
+    [InlineData("percent-2", 0.1234, "12.34%")]
+    public void V18_preset_renders_its_display_value(string preset, double value, string expectedText)
+    {
+        var file = CreateWorkbook();
+
+        EditOps(file, SetOp("/Sheet1/B2", ("value", value), ("numberFormat", preset)));
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/B2"))));
+
+        Assert.Equal(expectedText, data["text"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("accounting-eur", "€")]
+    [InlineData("accounting-gbp", "£")]
+    public void V18_accounting_preset_mirrors_usd_with_its_symbol(string preset, string symbol)
+    {
+        var file = CreateWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/B2", ("value", -1234.5), ("numberFormat", preset)));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+
+        var code = RawNumberFormat(file, "Sheet1", "B2");
+        Assert.NotNull(code);
+        Assert.Contains(symbol, code);
+        Assert.Contains("(", code); // parenthesized negatives — the accounting hallmark
+
+        // The negative value renders parenthesized with the right symbol.
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/B2"))));
+        var text = data["text"]!.GetValue<string>();
+        Assert.Contains(symbol, text);
+        Assert.Contains("(", text);
+        AssertValidatorClean(file);
+    }
+
     [Fact]
     public void Literal_custom_format_string_passes_through_unchanged()
     {

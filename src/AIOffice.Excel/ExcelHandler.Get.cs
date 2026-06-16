@@ -83,7 +83,7 @@ public sealed partial class ExcelHandler
         {
             ExcelTargetKind.Sheet => Envelope.Ok(SheetInfo(target.Sheet, file), MetaFor(file, sw)),
             ExcelTargetKind.Cell => Envelope.Ok(
-                CellInfo(target.Sheet, target.Cell!, CommentInfoFor(file, target)), MetaFor(file, sw)),
+                CellInfo(target.Sheet, target.Cell!, CommentInfoFor(file, target), file), MetaFor(file, sw)),
             ExcelTargetKind.Row => Envelope.Ok(RowInfo(target.Sheet, target.RowNumber!.Value), MetaFor(file, sw)),
             ExcelTargetKind.Column => Envelope.Ok(
                 ColumnInfo(target.Sheet, target.ColumnNumber!.Value), MetaFor(file, sw)),
@@ -401,7 +401,7 @@ public sealed partial class ExcelHandler
     }
 
     /// <summary>One cell with its typed value and the properties an agent needs to edit it.</summary>
-    private static object CellInfo(IXLWorksheet sheet, IXLCell cell, object? comment = null)
+    private static object CellInfo(IXLWorksheet sheet, IXLCell cell, object? comment = null, string? file = null)
     {
         XLCellValue value;
         try
@@ -445,6 +445,11 @@ public sealed partial class ExcelHandler
                     : "#" + hyperlink.InternalAddress,
             hyperlinkTooltip = string.IsNullOrEmpty(hyperlink?.Tooltip) ? null : hyperlink.Tooltip,
             note = NoteInfo(cell),
+            // (1.8) The cell's gradient fill, read raw from the styles part
+            // (ClosedXML cannot surface it). Null when the cell has none.
+            gradientFill = file is null
+                ? null
+                : ExcelGradientFill.Describe(file, sheet.Name, cell.Address.ToString()!),
             comment,
         };
     }

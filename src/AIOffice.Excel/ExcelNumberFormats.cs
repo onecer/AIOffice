@@ -38,14 +38,27 @@ internal static class ExcelNumberFormats
         {
             // Money — accounting aligns the symbol and parenthesizes negatives.
             ["accounting-usd"] = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)",
+            ["accounting-eur"] = "_(\"€\"* #,##0.00_);_(\"€\"* \\(#,##0.00\\);_(\"€\"* \"-\"??_);_(@_)",
+            ["accounting-gbp"] = "_(\"£\"* #,##0.00_);_(\"£\"* \\(#,##0.00\\);_(\"£\"* \"-\"??_);_(@_)",
             ["currency-usd"] = "\"$\"#,##0.00",
             ["currency-eur"] = "\"€\"#,##0.00",
             ["currency-gbp"] = "\"£\"#,##0.00",
             ["currency-jpy"] = "\"¥\"#,##0",
 
+            // (1.8) Scaled money & numbers — show a value in millions/thousands with
+            // a unit suffix (the trailing commas divide by 1,000 each).
+            ["usd-millions"] = "\"$\"#,##0.0,,\"M\"",
+            ["usd-thousands"] = "\"$\"#,##0,\"K\"",
+            ["millions"] = "#,##0.0,,\"M\"",
+            ["thousands-k"] = "#,##0,\"K\"",
+
             // Percentages.
             ["percent"] = "0%",
             ["percent2"] = "0.00%",
+            // (1.8) Explicit decimal-precision percent aliases.
+            ["percent-0"] = "0%",
+            ["percent-1"] = "0.0%",
+            ["percent-2"] = "0.00%",
 
             // Scientific / fraction.
             ["scientific"] = "0.00E+00",

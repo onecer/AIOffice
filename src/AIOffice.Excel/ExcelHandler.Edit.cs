@@ -15,6 +15,8 @@ public sealed partial class ExcelHandler
         "value", "valueType", "values", "numberFormat", "bold", "italic", "fill", "color", "merge", "name",
         "freezeRows", "freezeCols", "autoFilter", "orientation", "paperSize", "fitToWidth", "printArea",
         "height", "width", "hidden", "hyperlink", "hyperlinkTooltip", "cellStyle",
+        // v1.8 (additive): gradient fill on a cell/range (raw post-save; ClosedXML has no model).
+        "gradientFill",
         // v1.2 (additive): per-cell lock + sheet/workbook protection.
         "locked", "protected", "password", "protectStructure", "protectWindows",
         "allowFormatCells", "allowFormatColumns", "allowFormatRows", "allowInsertColumns", "allowInsertRows",
@@ -292,6 +294,14 @@ public sealed partial class ExcelHandler
                 ExcelChartPolish.ApplyEdits(file, post.ChartPolishEdits);
             }
 
+            // (1.8) Gradient fills: author the gradientFill on the styles part and
+            // rebind the target cells (ClosedXML has no gradient-fill model). Runs
+            // after the other style-part passes so it appends cleanly.
+            if (post.GradientFills.Count > 0)
+            {
+                ExcelGradientFill.ApplyAfterSave(file, post.GradientFills);
+            }
+
             // Correct ClosedXML's data-bar GUID/orphan defects on the saved
             // bytes (no-op scan when there is nothing to fix).
             ExcelConditionalFormats.FixUpAfterSave(file);
@@ -510,6 +520,13 @@ public sealed partial class ExcelHandler
         /// <c>_xlnm.Print_Titles</c> defined name.
         /// </summary>
         public List<ExcelPrintTitles.ClearSpec> PrintTitleClears { get; } = [];
+
+        /// <summary>
+        /// (1.8) Gradient fills queued for the post-save raw pass: ClosedXML 0.105's
+        /// fill model is a single pattern color, so a <c>&lt;gradientFill&gt;</c> is
+        /// authored directly on the saved styles part and the target cells rebound.
+        /// </summary>
+        public List<ExcelGradientFill.Spec> GradientFills { get; } = [];
 
         /// <summary>True when any write-time formula evaluation must be authored after the save.</summary>
         public bool HasEvaluatedFormulas => Spills.Count > 0 || DataTables.Count > 0;
@@ -875,6 +892,13 @@ public sealed partial class ExcelHandler
         {
             StyleOf(target).Fill.BackgroundColor = ParseColor(fillNode.GetValue<string>());
             applied.Add("fill");
+        }
+
+        if (props.TryGetPropertyValue("gradientFill", out var gradientNode) && gradientNode is not null)
+        {
+            // (1.8) ClosedXML has no gradient-fill model; capture the target cells
+            // and author the gradient raw after the save.
+            ApplyGradientFill(target, gradientNode, op, index, applied, post);
         }
 
         if (props.TryGetPropertyValue("color", out var colorNode) && colorNode is not null)
@@ -1825,6 +1849,54 @@ public sealed partial class ExcelHandler
                 "Use hex like #FFEE00 (or #AARRGGBB for alpha).",
                 innerException: exception);
         }
+    }
+
+    /// <summary>
+    /// (1.8) Queues a gradient fill for the target cell/range: parses+validates the
+    /// definition now (so a bad gradient aborts the batch atomically) and records
+    /// the concrete cell addresses to rebind in the post-save raw pass. ClosedXML
+    /// has no gradient model, so nothing is written to the in-memory style here.
+    /// </summary>
+    private static void ApplyGradientFill(
+        ExcelTarget target, JsonNode gradientNode, EditOp op, int index, List<string> applied, PostSaveWork post)
+    {
+        var gradient = ExcelGradientFill.Parse(gradientNode, index);
+
+        var cells = target.Kind switch
+        {
+            ExcelTargetKind.Cell => [target.Cell!.Address.ToString()!],
+            ExcelTargetKind.Range => target.Range!.Cells().Select(c => c.Address.ToString()!).ToList(),
+            ExcelTargetKind.Row => target.Sheet.Row(target.RowNumber!.Value).CellsUsed()
+                .Select(c => c.Address.ToString()!).ToList(),
+            ExcelTargetKind.Column => target.Sheet.Column(target.ColumnNumber!.Value).CellsUsed()
+                .Select(c => c.Address.ToString()!).ToList(),
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: gradientFill targets a cell or range, not {target.Kind.ToString().ToLowerInvariant()} '{op.Path}'.",
+                "Address a cell like /Sheet1/A1 or a range like /Sheet1/A1:C3."),
+        };
+
+        if (cells.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: gradientFill found no cells to fill on '{op.Path}'.",
+                "Target a concrete cell or range, or write values into the row/col first.");
+        }
+
+        // Materialize the target cells in the ClosedXML model with a solid fill of
+        // the first stop's color: this forces ClosedXML to write a <c> element for
+        // each (so the post-save pass can find and rebind it) and leaves a sensible
+        // solid fallback. The post-save pass then swaps that solid xf for the
+        // gradient. Cell/Range targets only (row/col already filter to CellsUsed).
+        var firstStop = "#" + gradient.Stops[0].Color;
+        if (target.Kind is ExcelTargetKind.Cell or ExcelTargetKind.Range)
+        {
+            StyleOf(target).Fill.BackgroundColor = ParseColor(firstStop);
+        }
+
+        post.GradientFills.Add(new ExcelGradientFill.Spec(target.Sheet.Name, cells, gradient));
+        applied.Add("gradientFill");
     }
 
     private static void RenameSheet(IXLWorksheet sheet, string newName)
