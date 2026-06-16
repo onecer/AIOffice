@@ -4,12 +4,11 @@
 # and real cached formula values (incl. =XLOOKUP). Every command below was run
 # against the published binary, in order, to produce the delivered files.
 #
-# Note on the PNG: aioffice's xlsx renderer rasterizes the cell-value grid
-# (text, bold, number-formatted display values, alignment). Fills, font colors and
-# chart graphics are written into the real .xlsx (valid, Excel-openable) but are not
-# painted by the headless renderer — so dashboard.png is the faithful grid output,
-# scoped to the KPI band + table (B5:I18). Open dashboard.xlsx in Excel to see the
-# light navy theme, the bar + line charts, the data-bar and color-scale rules.
+# Note on the PNG: dashboard.png is dashboard.xlsx opened and printed by LibreOffice
+# (one page: the KPI band, the 8-region table, and BOTH native charts). The navy
+# theme, zebra banding, the bar + line charts, and the data-bar / color-scale rules
+# you see are all written into the real .xlsx by aioffice; LibreOffice only took the
+# screenshot. The file is valid OOXML — open it in Excel and you get the same thing.
 AIO=/Users/apple/app/tonoapp/Aioffice/dist/osx-arm64/aioffice
 WS=/Users/apple/app/tonoapp/Aioffice/assets/showcase
 
@@ -197,12 +196,20 @@ $AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
     "gridlines":{"major":true,"minor":false}}}
 ]'
 
-# 11) Workbook metadata (gives the file a document Title, clears the audit check).
+# 11) Workbook metadata + page setup: a document Title (clears the audit check) and a
+#     print area that fits the dashboard to one page wide — so both charts and the
+#     table render together (and the K:L chart-helper columns are left out).
 $AIO edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
-  {"op":"set","path":"/properties","props":{"title":"Northwind Cloud FY2025 Revenue Dashboard","author":"AIOffice"}}
+  {"op":"set","path":"/properties","props":{"title":"Northwind Cloud FY2025 Revenue Dashboard","author":"AIOffice"}},
+  {"op":"set","path":"/Dashboard","props":{"printArea":"B2:J54","fitToPage":{"fitToWidth":1}}}
 ]'
 
-# 12) Prove the file is sound, then render the KPI band + table to PNG (scope B5:I18).
+# 12) Prove the file is sound, then render the committed PNG with LibreOffice
+#     (real-Office fidelity: themed fills, both charts, conditional formatting).
 $AIO validate "$WS/dashboard.xlsx" --workspace "$WS"
 $AIO audit    "$WS/dashboard.xlsx" --workspace "$WS"
-$AIO render   "$WS/dashboard.xlsx" --workspace "$WS" --to png --scope "/Dashboard/B5:I18" -o "$WS/dashboard.png"
+soffice --headless --convert-to pdf --outdir "$WS" "$WS/dashboard.xlsx"
+pdftoppm -png -scale-to-x 1400 -scale-to-y -1 -f 1 -l 1 "$WS/dashboard.pdf" "$WS/dashboard"
+mv "$WS/dashboard-1.png" "$WS/dashboard.png"
+# (aioffice render "$WS/dashboard.xlsx" --to png --scope "/Dashboard/B5:I18" is the fast
+#  built-in self-check; the committed gallery PNG uses LibreOffice for full fidelity.)

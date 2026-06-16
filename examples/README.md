@@ -22,8 +22,11 @@ AIO=/path/to/aioffice ./examples/tour.sh   # …or point at a specific binary
 **Requirements**
 
 - `aioffice` on your PATH — or set `AIO=/path/to/aioffice`.
-- Chrome / Chromium installed — only needed for the `render --to png` steps;
-  the build (`create` / `edit` / `validate`) works without it.
+- LibreOffice (`soffice`) + `pdftoppm` — used to render the high-fidelity gallery
+  PNGs (the same images committed under `assets/showcase/`).
+- Chrome / Chromium — optional fallback the script uses for `aioffice render --to png`
+  when LibreOffice/poppler aren't installed; the build itself
+  (`create` / `edit` / `validate`) needs neither.
 
 **What it produces** (in the build directory it prints at the end):
 

@@ -430,9 +430,11 @@ run "$AIO" edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
     "gridlines":{"major":true,"minor":false}}}
 ]'
 
-# workbook metadata (gives the file a document Title, clears the audit check)
+# workbook metadata + page setup: a document Title (clears the audit check) plus a
+# print area that fits the whole dashboard to one page wide (both charts + table)
 run "$AIO" edit "$WS/dashboard.xlsx" --workspace "$WS" --ops '[
-  {"op":"set","path":"/properties","props":{"title":"Northwind Cloud FY2025 Revenue Dashboard","author":"AIOffice"}}
+  {"op":"set","path":"/properties","props":{"title":"Northwind Cloud FY2025 Revenue Dashboard","author":"AIOffice"}},
+  {"op":"set","path":"/Dashboard","props":{"printArea":"B2:J54","fitToPage":{"fitToWidth":1}}}
 ]'
 
 # prove the file is sound, then render page 1 (KPI band + table + bar chart).
