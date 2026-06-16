@@ -58,6 +58,56 @@ public sealed class StyleTests : WordTestBase
     }
 
     [Fact]
+    public void Style_font_and_next_round_trip()
+    {
+        var file = CreateDoc(title: "Typed styles");
+
+        // Two styles so `next` can point at a real id.
+        Edit(file, """[{"op":"add","path":"/styles","type":"style","props":{"id":"Body","font":"Georgia"}}]""");
+        Edit(file, """
+            [{"op":"add","path":"/styles","type":"style","props":
+              {"id":"Lead","kind":"paragraph","font":"Cambria","next":"Body"}}]
+            """);
+
+        var lead = GetStyle(file, "Lead");
+        Assert.Equal("Cambria", lead["font"]!.GetValue<string>());
+        Assert.Equal("Body", lead["next"]!.GetValue<string>());
+
+        var body = GetStyle(file, "Body");
+        Assert.Equal("Georgia", body["font"]!.GetValue<string>());
+        Assert.Null(body["next"]?.GetValue<string?>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Style_set_updates_font_and_next()
+    {
+        var file = CreateDoc(title: "Retune");
+        Edit(file, """[{"op":"add","path":"/styles","type":"style","props":{"id":"Body"}}]""");
+        Edit(file, """[{"op":"add","path":"/styles","type":"style","props":{"id":"Lead"}}]""");
+
+        Edit(file, """[{"op":"set","path":"/style[@id=Lead]","props":{"font":"Arial","next":"Body"}}]""");
+
+        var lead = GetStyle(file, "Lead");
+        Assert.Equal("Arial", lead["font"]!.GetValue<string>());
+        Assert.Equal("Body", lead["next"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Style_next_pointing_at_a_ghost_is_invalid_args_with_candidates()
+    {
+        var file = CreateDoc(title: "Bad next");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/styles","type":"style","props":{"id":"X","next":"NoSuchStyle"}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.NotNull(ex.Candidates);
+        Assert.Contains("Normal", ex.Candidates!);
+    }
+
+    [Fact]
     public void Set_modifies_an_existing_style_definition()
     {
         var file = CreateDoc(title: "Tunable");

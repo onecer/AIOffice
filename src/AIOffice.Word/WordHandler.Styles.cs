@@ -19,7 +19,7 @@ public sealed partial class WordHandler
     ];
 
     private static readonly string[] StyleEditableProps =
-        ["name", "basedOn", "bold", "italic", "underline", "color", "fontSize",
+        ["name", "basedOn", "next", "bold", "italic", "underline", "color", "font", "fontSize",
          "alignment", "spacingBefore", "spacingAfter"];
 
     private static bool IsBuiltinStyleId(string id) =>
@@ -101,12 +101,14 @@ public sealed partial class WordHandler
             ["name"] = style.StyleName?.Val?.Value ?? style.StyleId?.Value,
             ["kind"] = style.Type is { } t && t.Value == StyleValues.Character ? "character" : "paragraph",
             ["basedOn"] = style.BasedOn?.Val?.Value,
+            ["next"] = style.NextParagraphStyle?.Val?.Value,
             ["builtin"] = IsBuiltinStyleId(style.StyleId?.Value ?? string.Empty),
             ["inUse"] = inUse.Contains(style.StyleId?.Value ?? string.Empty),
             ["bold"] = WordFormatting.IsOn(rPr?.Bold),
             ["italic"] = WordFormatting.IsOn(rPr?.Italic),
             ["underline"] = rPr?.Underline is { } u ? (u.Val?.Value ?? UnderlineValues.Single) != UnderlineValues.None : null,
             ["color"] = rPr?.Color?.Val?.Value,
+            ["font"] = rPr?.RunFonts?.Ascii?.Value,
             ["fontSize"] = rPr?.FontSize?.Val?.Value is { } hp &&
                 double.TryParse(hp, NumberStyles.Float, CultureInfo.InvariantCulture, out var halfPoints)
                     ? halfPoints / 2.0
@@ -262,6 +264,21 @@ public sealed partial class WordHandler
                     style.BasedOn = new BasedOn { Val = value };
                     break;
 
+                case "next":
+                    var nextStyles = EnsureStylesRoot(doc);
+                    if (FindStyle(nextStyles, value) is null && HeadingLevel(value) is null && value != "Normal")
+                    {
+                        throw new AiofficeException(
+                            ErrorCodes.InvalidArgs,
+                            $"next style '{value}' does not exist.",
+                            "Point next at an existing style id (the style applied to the paragraph after this one); " +
+                            "run 'aioffice read <file> --view styles' to list them.",
+                            candidates: [.. nextStyles.Elements<Style>().Select(s => s.StyleId?.Value ?? string.Empty).Where(s => s.Length > 0).Take(8)]);
+                    }
+
+                    style.NextParagraphStyle = new NextParagraphStyle { Val = value };
+                    break;
+
                 case "bold":
                     EnsureStyleRunProperties(style).Bold = new Bold { Val = OnOffValue.FromBoolean(WordFormatting.ParseBool(key, value)) };
                     break;
@@ -279,6 +296,15 @@ public sealed partial class WordHandler
 
                 case "color":
                     EnsureStyleRunProperties(style).Color = new Color { Val = WordFormatting.ParseHexColor(value) };
+                    break;
+
+                case "font":
+                    EnsureStyleRunProperties(style).RunFonts = new RunFonts
+                    {
+                        Ascii = value,
+                        HighAnsi = value,
+                        ComplexScript = value,
+                    };
                     break;
 
                 case "fontSize":

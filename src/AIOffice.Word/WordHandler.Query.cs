@@ -440,6 +440,13 @@ public sealed partial class WordHandler
             properties["dropCap"] = dropCap;
         }
 
+        // 1.8 paragraph border box (w:pBdr) reads back as a structured object so a
+        // set -> get round-trips the style/color/width/sides.
+        if (ParagraphBorderShape(p.ParagraphProperties) is { } border)
+        {
+            properties["border"] = border;
+        }
+
         WithTextEffects(properties, p.ChildElements.OfType<Run>().FirstOrDefault()?.RunProperties);
         return properties;
     }

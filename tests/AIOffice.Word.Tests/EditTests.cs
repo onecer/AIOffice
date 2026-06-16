@@ -184,8 +184,9 @@ public sealed class EditTests : WordTestBase
     {
         var file = CreateDoc(title: "Prop");
 
+        // "fontSiz" is a typo of a real prop; the suggestion points at the nearest supported name.
         var ex = Assert.Throws<AiofficeException>(() =>
-            Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"font":"Arial"}}]"""));
+            Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"fontSiz":"12"}}]"""));
 
         Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
         Assert.Contains("fontSize", ex.Suggestion, StringComparison.Ordinal);

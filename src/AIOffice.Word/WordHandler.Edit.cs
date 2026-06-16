@@ -272,6 +272,19 @@ public sealed partial class WordHandler
                 "Target a paragraph path, e.g. {\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"dropCap\":\"drop\"}}.");
         }
 
+        // (1.8) Structured paragraph-visual props (shading fill, border box) take an
+        // object value, so peel them out of the stringly-typed loop; the scalar
+        // companions (spacingBefore/After, indentLeft/Right) flow through as usual.
+        var paragraphVisualProps = ExtractParagraphVisualProps(props);
+        if (paragraphVisualProps is not null && node.Element is not Paragraph)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"shading/border apply to a paragraph, not '{node.Type}'.",
+                "Target a paragraph path, e.g. {\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"shading\":\"FEF9C3\"}}. " +
+                "For a table cell use the cell's own shading prop.");
+        }
+
         foreach (var (name, value) in OrderedProps(props))
         {
             switch (node.Element)
@@ -304,10 +317,19 @@ public sealed partial class WordHandler
 
         var effects = effectProps is null ? [] : ApplyTextEffects(doc, node, effectProps);
 
+        var visuals = paragraphVisualProps is not null && node.Element is Paragraph visualParagraph
+            ? ApplyParagraphVisuals(visualParagraph, paragraphVisualProps)
+            : [];
+
         if (dropCapProps is not null && node.Element is Paragraph dropCapParagraph)
         {
             var dropCap = ApplyDropCap(dropCapParagraph, dropCapProps);
             return new { op = "set", path = node.CanonicalPath, type = node.Type, dropCap };
+        }
+
+        if (visuals.Count > 0)
+        {
+            return new { op = "set", path = node.CanonicalPath, type = node.Type, visuals };
         }
 
         return effects.Count > 0

@@ -14,30 +14,56 @@ namespace AIOffice.Word;
 internal static class WordFormatting
 {
     public static readonly IReadOnlyList<string> ParagraphProps =
-        ["text", "style", "bold", "italic", "underline", "color", "alignment", "fontSize", "rtl"];
+        ["text", "style", "bold", "italic", "underline", "color", "font", "alignment", "fontSize", "rtl",
+         "shading", "border", "spacingBefore", "spacingAfter", "indentLeft", "indentRight"];
 
     public static readonly IReadOnlyList<string> RunProps =
-        ["text", "style", "bold", "italic", "underline", "color", "fontSize", "rtl"];
+        ["text", "style", "bold", "italic", "underline", "color", "font", "fontSize", "rtl"];
 
     // ----------------------------------------------------------------- read
 
     public static Dictionary<string, object?> ReadParagraphProps(Paragraph p)
     {
         var firstRun = p.ChildElements.OfType<Run>().FirstOrDefault();
+        var pPr = p.ParagraphProperties;
+        var spacing = pPr?.SpacingBetweenLines;
+        var indentation = pPr?.Indentation;
         return new Dictionary<string, object?>
         {
             ["text"] = p.InnerText,
-            ["style"] = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value,
-            ["alignment"] = AlignmentName(p.ParagraphProperties?.Justification),
+            ["style"] = pPr?.ParagraphStyleId?.Val?.Value,
+            ["alignment"] = AlignmentName(pPr?.Justification),
             ["bold"] = firstRun is null ? null : IsOn(firstRun.RunProperties?.Bold),
             ["italic"] = firstRun is null ? null : IsOn(firstRun.RunProperties?.Italic),
             ["underline"] = firstRun is null ? null : IsUnderlined(firstRun.RunProperties),
             ["fontSize"] = firstRun is null ? null : FontSizePoints(firstRun.RunProperties),
             ["color"] = firstRun?.RunProperties?.Color?.Val?.Value,
+            ["font"] = firstRun?.RunProperties?.RunFonts?.Ascii?.Value,
             ["rtl"] = IsParagraphRtl(p),
+            // 1.8 paragraph-level visuals: shading fill (w:shd), spacing (pt) and
+            // indentation (cm). The border box (w:pBdr) reports as a structured object.
+            ["shading"] = pPr?.Shading?.Fill?.Value,
+            ["spacingBefore"] = TwentiethsToPointsValue(spacing?.Before?.Value),
+            ["spacingAfter"] = TwentiethsToPointsValue(spacing?.After?.Value),
+            ["indentLeft"] = TwipsToCentimeters(indentation?.Left?.Value),
+            ["indentRight"] = TwipsToCentimeters(indentation?.Right?.Value),
             ["runs"] = p.ChildElements.OfType<Run>().Count(),
         };
     }
+
+    /// <summary>w:spacing before/after are twentieths of a point; null stays null.</summary>
+    internal static double? TwentiethsToPointsValue(string? twentieths) =>
+        twentieths is not null &&
+        double.TryParse(twentieths, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v / 20.0
+            : null;
+
+    /// <summary>w:ind left/right are twips; report them in centimeters (2dp), null stays null.</summary>
+    internal static double? TwipsToCentimeters(string? twips) =>
+        twips is not null &&
+        double.TryParse(twips, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? Math.Round(v / (1440.0 / 2.54), 2)
+            : null;
 
     public static Dictionary<string, object?> ReadRunProps(Run run) => new()
     {
@@ -48,6 +74,7 @@ internal static class WordFormatting
         ["underline"] = IsUnderlined(run.RunProperties),
         ["fontSize"] = FontSizePoints(run.RunProperties),
         ["color"] = run.RunProperties?.Color?.Val?.Value,
+        ["font"] = run.RunProperties?.RunFonts?.Ascii?.Value,
         ["rtl"] = IsOn(run.RunProperties?.RightToLeftText) ?? false,
     };
 
@@ -112,7 +139,23 @@ internal static class WordFormatting
                 SetParagraphRtl(p, ParseBool(name, value));
                 break;
 
-            case "bold" or "italic" or "underline" or "color" or "fontSize":
+            case "spacingBefore":
+                EnsureSpacing(p).Before = ParseSpacingTwentieths(name, value);
+                break;
+
+            case "spacingAfter":
+                EnsureSpacing(p).After = ParseSpacingTwentieths(name, value);
+                break;
+
+            case "indentLeft":
+                EnsureIndentation(p).Left = ParseIndentTwips(name, value);
+                break;
+
+            case "indentRight":
+                EnsureIndentation(p).Right = ParseIndentTwips(name, value);
+                break;
+
+            case "bold" or "italic" or "underline" or "color" or "fontSize" or "font":
                 foreach (var run in EnsureRun(p))
                 {
                     SetRunProp(run, name, value);
@@ -123,6 +166,46 @@ internal static class WordFormatting
             default:
                 throw UnsupportedProp(name, "p", ParagraphProps);
         }
+    }
+
+    private static SpacingBetweenLines EnsureSpacing(Paragraph p)
+    {
+        var pPr = EnsurePPr(p);
+        return pPr.SpacingBetweenLines ??= new SpacingBetweenLines();
+    }
+
+    private static Indentation EnsureIndentation(Paragraph p)
+    {
+        var pPr = EnsurePPr(p);
+        return pPr.Indentation ??= new Indentation();
+    }
+
+    /// <summary>Spacing in points -> w:spacing twentieths-of-a-point string.</summary>
+    private static string ParseSpacingTwentieths(string name, string value)
+    {
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var points) && points is >= 0 and <= 1584)
+        {
+            return ((int)Math.Round(points * 20)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"'{name}' must be spacing in points (0–1584), got '{value}'.",
+            $"Pass points, e.g. {name}=6 for 6pt.");
+    }
+
+    /// <summary>Indentation in centimeters -> w:ind twips string (negative pulls into the margin).</summary>
+    private static string ParseIndentTwips(string name, string value)
+    {
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var cm) && cm is >= -10 and <= 30)
+        {
+            return ((int)Math.Round(cm * (1440.0 / 2.54))).ToString(CultureInfo.InvariantCulture);
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"'{name}' must be an indentation in centimeters (-10–30), got '{value}'.",
+            $"Pass centimeters, e.g. {name}=1.5 for a 1.5cm indent.");
     }
 
     public static void SetRunProp(Run run, string name, string value)
@@ -161,6 +244,15 @@ internal static class WordFormatting
 
             case "fontSize":
                 EnsureRPr(run).FontSize = new FontSize { Val = ParseFontSizeHalfPoints(value) };
+                break;
+
+            case "font":
+                EnsureRPr(run).RunFonts = new RunFonts
+                {
+                    Ascii = value,
+                    HighAnsi = value,
+                    ComplexScript = value,
+                };
                 break;
 
             case "rtl":
@@ -306,7 +398,8 @@ internal static class WordFormatting
         var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["size"] = "fontSize",
-            ["font"] = "fontSize",
+            ["fontFamily"] = "font",
+            ["typeface"] = "font",
             ["font-size"] = "fontSize",
             ["align"] = "alignment",
             ["justify"] = "alignment",

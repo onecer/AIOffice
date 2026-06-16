@@ -12,8 +12,22 @@ listing the supported set; capabilities not built yet answer
 | text      | string | plain text; replaces all runs on `set`           |
 | style     | string | named paragraph style, e.g. Heading1, Normal     |
 | align     | string | left · center · right · justify                  |
+| font      | string | **1.8**: font family applied to every run of the paragraph (`w:rPr/w:rFonts`); `get` echoes the first run's font |
 | rtl       | bool   | M6: right-to-left flow (`w:bidi`); turning it on also right-aligns the paragraph. `get` reports `rtl` |
 | dropCap   | string | **1.7**: `drop` (dropped inside the text column) · `margin` (in the margin) · `none`/`false` (remove). The first letter moves to a framed paragraph (`w:framePr w:dropCap`). Pair with `dropCapLines` (height in lines, default 3) and `dropCapFont` (font for the dropped letter) |
+
+**1.8** paragraph-level visual props (also valid on header/footer paragraphs):
+
+| prop          | type            | notes                                                                |
+|---------------|-----------------|----------------------------------------------------------------------|
+| shading       | string          | hex RGB fill (`w:pPr/w:shd` clear-pattern) or `"none"` to remove. `get` reports the fill |
+| border        | object/string   | a box around the paragraph (`w:pPr/w:pBdr`), or `"none"` to remove. Object is `{style, color?, widthPt?, sides?}` (same grammar as the section page border): `style` = single·double·thick·dashed·dotted·wave; `color` = RRGGBB; `widthPt` = width in points (default 0.5); `sides` = all·top·bottom·left·right (default all). `get` reports the border object |
+| spacingBefore | number          | space above the paragraph in points (`w:spacing/@before`)            |
+| spacingAfter  | number          | space below the paragraph in points (`w:spacing/@after`)             |
+| indentLeft    | number          | left indent in centimeters (`w:ind/@left`); negative pulls into the margin |
+| indentRight   | number          | right indent in centimeters (`w:ind/@right`)                         |
+
+    aioffice edit r.docx --ops '[{"op":"set","path":"/body/p[1]","props":{"shading":"EFF6FF","border":{"style":"single","color":"2563EB","widthPt":1,"sides":"all"},"spacingBefore":8,"spacingAfter":8,"indentLeft":1,"indentRight":1}}]'   # a shaded, boxed callout block
 
 ## run
 
@@ -216,8 +230,10 @@ under `replies`.
 | id            | string | required on `add`; letters/digits/_/-         |
 | kind          | string | paragraph (default) · character               |
 | name, basedOn | string | display name; parent style id                 |
+| next          | string | **1.8**: the style applied to the paragraph after one in this style (`w:next`); validated like `basedOn` (must be an existing style id) |
 | bold/italic/underline | bool |                                        |
 | color         | string | hex RGB                                       |
+| font          | string | **1.8**: the style's run font family (`w:rPr/w:rFonts` @ascii+@hAnsi+@cs) |
 | fontSize      | number | points                                        |
 | alignment     | string | left · center · right · justify (paragraph)   |
 | spacingBefore/spacingAfter | number | points (paragraph)               |
