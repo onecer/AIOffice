@@ -593,6 +593,66 @@ removed or renamed.
 
 Agents that target the 1.6.0 surface are byte-for-byte compatible with 1.7.0.
 
+## 7h. 1.8.0 — design depth: fills, fonts, brand colors (additive, surface 1.0)
+
+Package **1.8.0** keeps **`surfaceVersion 1.0`**, the **18 CLI verbs / 17 MCP tools**, and
+every envelope shape, error code, exit code, op/view/tool vocabulary in §§1–7. The changes
+are **additive** — new OPTIONAL `set`/`add` props on existing paths, plus new `numberFormat`
+preset names — that give agents the visual primitives to derive a per-brand look; nothing in
+§§1–7 was removed or renamed. The new props are not enumerated in the MCP tool schema (they
+flow through the existing op-props dispatch and are documented in the per-format `help`
+topics), so the schema token budget is unchanged.
+
+### pptx — gradient/image fills, master theme fonts
+
+- **New `set`/`add` props on a shape** (§4/§5, additive): `gradient` and `image`, siblings of
+  the solid `fill`. `gradient` (`{type:linear|radial, angle?(deg, linear only),
+  stops:[{color, at(0..100)}]}`) writes a real `a:gradFill`; when both `fill` and `gradient`
+  are given, **gradient wins**. `image` (a path string, or `{src, mode:stretch|tile, tint?}`)
+  fills the shape with a sandbox-resolved PNG/JPEG as an `a:blipFill` (`src` outside the
+  workspace is `sandbox_denied` before any read). Both replace any prior fill so the shape
+  carries exactly one. A gradient/image fill renders as a flat approximation (the gradient's
+  start stop) in `render --to svg`.
+- **New background props** (§4, additive): `gradient` and `image` on `set /slide[i]`,
+  `set /master[m]`, and `set /master[m]/layout[l]` write a proper `p:bg`/`p:bgPr` gradient or
+  picture fill, replacing any previous background.
+- **New `set /master[m]` props** (§4, additive): `majorFont` and `minorFont` rename the
+  master ThemePart font scheme's headings/body latin faces (`a:majorFont`/`a:minorFont ->
+  a:latin@typeface`), mirroring the docx `set /theme` font edit; `get /master[m]` now reports
+  `majorFont`/`minorFont`.
+
+### xlsx — brand chart colors, scaled/percent presets, gradient cell fill
+
+- **New chart prop `seriesColors`** (§5/§4, additive): an array of 6-hex RGB strings (leading
+  `#` optional), one per series in dataRange order; a shorter list cycles. Accepted on
+  `add type:chart` and `set /Sheet1/chart[i]`. Bar/area series get a solid fill, line/scatter
+  a tinted line, a single pie/doughnut series colors each slice. `get` reports it under
+  `polish.seriesColors`.
+- **New `numberFormat` presets** (§4, additive — name→code, unknown names still fall through
+  verbatim): `usd-millions`, `usd-thousands`, `millions`, `thousands-k`, `percent-0`,
+  `percent-1`, `percent-2`, `accounting-eur`, `accounting-gbp`.
+- **New cell/range prop `gradientFill`** (§4, additive): `{type:linear|radial, angle?(deg,
+  linear only), stops:[{color, pos}]}` → `Spreadsheet.GradientFill`; `get` reports it under
+  the cell's `gradientFill`. Round-trip caveat: a later ClosedXML re-save of the workbook can
+  drop the gradient to a solid first-stop fallback.
+
+### docx — paragraph callouts, fonts
+
+- **New `set` props on a body (or header/footer) paragraph** (§4, additive): `shading`
+  (hex RGB → `w:pPr/w:shd` clear-pattern, or `"none"`), `border` (`{style:single|double|
+  thick|dashed|dotted|wave, color?, widthPt?(default 0.5), sides?:all|top|bottom|left|right}`
+  → `w:pPr/w:pBdr`, or `"none"`), `spacingBefore`/`spacingAfter` (points → `w:spacing`),
+  `indentLeft`/`indentRight` (cm → `w:ind`, negative pulls into the margin). `get` echoes the
+  scalars inline and `border` as a structured object.
+- **New `font` prop** (§4, additive): on `set /body/p[i]/run[j]` (→ `w:rPr/w:rFonts`); on
+  `set /body/p[i]` it fans out to every run. Implements the previously documented-but-missing
+  run `font` prop.
+- **New custom-style props** (§5/§4, additive): `add`/`set type:style` gains `font` (the
+  style's run font family) and `next` (`Style.NextParagraphStyle`, validated like `basedOn`);
+  both reported by `get /style[@id=X]`.
+
+Agents that target the 1.7.0 surface are byte-for-byte compatible with 1.8.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

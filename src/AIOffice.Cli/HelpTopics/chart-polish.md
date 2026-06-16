@@ -44,3 +44,20 @@ sub-value returns `unsupported_feature` listing the supported set.
 
 `trendline`, `errorBars` and `secondaryAxis` operate on series; pie/doughnut
 charts (no value axis) reject axis-only props with `unsupported_feature`.
+
+## seriesColors (1.8 — brand palette, xlsx)
+
+A chart prop accepted on both `add type:chart` and `set /Sheet1/chart[i]`. Pass an
+array of 6-hex RGB strings (a leading `#` is optional), one per series in dataRange
+order; a short list cycles across the series:
+
+```
+aioffice edit book.xlsx --ops '[{"op":"set","path":"/Sheet1/chart[1]","props":{"seriesColors":["2E5AAC","#E8743B"]}}]'
+```
+
+Bar/area series get a solid fill in the color; line/scatter series get a tinted line;
+a single pie/doughnut series colors each slice (the palette cycles across the data
+points). `get` on the chart reports the applied colors under `polish.seriesColors`.
+Chart colors live in the chart part (preserved byte-identical), so they survive later
+edits. This lets a dashboard's charts match the chosen brand direction instead of
+Excel's default office palette.

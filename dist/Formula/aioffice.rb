@@ -23,7 +23,7 @@
 class Aioffice < Formula
   desc "AI-native CLI and MCP for .docx/.xlsx/.pptx, no Office install needed"
   homepage "https://github.com/onecer/AIOffice"
-  version "1.7.0"
+  version "1.8.0"
   license "Apache-2.0"
 
   # Each platform downloads the matching prebuilt single-file binary from the
@@ -32,13 +32,13 @@ class Aioffice < Formula
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-arm64"
       # asset: aioffice-mac-arm64
-      # TODO(human): fill from v1.7.0 SHA256SUMS. Example value below is from v1.5.0.
+      # TODO(human): fill from v1.8.0 SHA256SUMS. Example value below is from v1.5.0.
       sha256 "63a5d987013ed77561ee5e50d4a8e4f66ae81ec668cb0a5e99cc2b5e0c6aee6c"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-x64"
       # asset: aioffice-mac-x64
-      # TODO(human): fill from v1.7.0 SHA256SUMS. Example value below is from v1.5.0.
+      # TODO(human): fill from v1.8.0 SHA256SUMS. Example value below is from v1.5.0.
       sha256 "b8bc8d2467704ae0bab6fa6faffc4e4d92e80998c0d554d90fd48ab2eca63fe1"
     end
   end
@@ -47,13 +47,13 @@ class Aioffice < Formula
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-arm64"
       # asset: aioffice-linux-arm64
-      # TODO(human): fill from v1.7.0 SHA256SUMS. Example value below is from v1.5.0.
+      # TODO(human): fill from v1.8.0 SHA256SUMS. Example value below is from v1.5.0.
       sha256 "c73b06d3e1ad97989088bb4ab264f83bab8804e0b8e14d1c27174e533d00b5c0"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-x64"
       # asset: aioffice-linux-x64
-      # TODO(human): fill from v1.7.0 SHA256SUMS. Example value below is from v1.5.0.
+      # TODO(human): fill from v1.8.0 SHA256SUMS. Example value below is from v1.5.0.
       sha256 "842a55b1fb4f753a61ae5e534afb1a364cf331b49b83a9a305c79270bfebd570"
     end
   end
