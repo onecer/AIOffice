@@ -708,12 +708,15 @@ internal static class PptxQueryEngine
         var containerPath = address.CanonicalContainerPath;
         var shapes = PptxDoc.Shapes(PptxDoc.RequireShapeTree(masterPart));
         var layouts = PptxDoc.Layouts(masterPart);
+        var fontScheme = masterPart.ThemePart?.Theme?.ThemeElements?.FontScheme;
         return new
         {
             Path = containerPath,
             Index = address.MasterIndex,
             Kind = "master",
             Theme = masterPart.ThemePart?.Theme?.Name?.Value,
+            MajorFont = fontScheme?.MajorFont?.LatinFont?.Typeface?.Value,
+            MinorFont = fontScheme?.MinorFont?.LatinFont?.Typeface?.Value,
             LayoutCount = layouts.Count,
             Layouts = layouts.Select(l => LayoutSummary(presentation, address.MasterIndex, l.Index, l.Part)).ToList<object>(),
             ShapeCount = shapes.Count,

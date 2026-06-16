@@ -31,7 +31,7 @@ internal static class PptxEditor
          "smartart", "connector", "actionButton", "group", "ungroup"];
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
-        ["text", "x", "y", "w", "h", "fill", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
+        ["text", "x", "y", "w", "h", "fill", "gradient", "image", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
          "shadow", "glow", "reflection", "outline"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
@@ -81,7 +81,7 @@ internal static class PptxEditor
             case "add":
                 return new PptxOpOutcome(ApplyAdd(document, presentation, op, workspace));
             case "set":
-                return new PptxOpOutcome(ApplySet(presentation, op));
+                return new PptxOpOutcome(ApplySet(presentation, op, workspace));
             case "remove":
                 return new PptxOpOutcome(ApplyRemove(presentation, op));
             case "move":
@@ -177,7 +177,7 @@ internal static class PptxEditor
             case "shape" or "textbox":
             {
                 var slidePart = ResolveAddTargetSlide(presentation, address, op.Path, "shape");
-                var id = AddTextBox(slidePart, op.Props);
+                var id = AddTextBox(slidePart, op.Props, workspace);
                 return Units.Inv($"/slide[{address.SlideIndex}]/shape[@id={id}]");
             }
 
@@ -615,7 +615,7 @@ internal static class PptxEditor
         return PptxProperties.Set(document, op.Props);
     }
 
-    private static string ApplySet(PresentationPart presentation, EditOp op)
+    private static string ApplySet(PresentationPart presentation, EditOp op, Workspace workspace)
     {
         var address = PptxAddress.Parse(op.Path);
         if (op.Props is null || op.Props.Count == 0)
@@ -657,7 +657,7 @@ internal static class PptxEditor
 
         if (address.IsMaster)
         {
-            return PptxMasters.Set(presentation, address, op.Props);
+            return PptxMasters.Set(presentation, address, op.Props, workspace);
         }
 
         if (address.IsChart)
@@ -751,12 +751,12 @@ internal static class PptxEditor
 
         if (address.IsGroup)
         {
-            return SetGroupProps(presentation, address, op.Props);
+            return SetGroupProps(presentation, address, op.Props, workspace);
         }
 
         if (!address.HasShape)
         {
-            return SetSlideProps(presentation, address, op.Props);
+            return SetSlideProps(presentation, address, op.Props, workspace);
         }
 
         if (address.RunIndex is not null)
@@ -788,7 +788,7 @@ internal static class PptxEditor
 
         if (rest.Count > 0)
         {
-            SetShapeProps(view, rest);
+            SetShapeProps(view, rest, slidePart, workspace);
         }
 
         return view.CanonicalPath(address.SlideIndex);
@@ -841,7 +841,7 @@ internal static class PptxEditor
     /// props; the group itself (/group[@id=N]) takes name, altText and altTitle (resize a
     /// group by ungrouping first, then move/resize the shapes).
     /// </summary>
-    private static string SetGroupProps(PresentationPart presentation, PptxAddress address, JsonObject props)
+    private static string SetGroupProps(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var tree = PptxDoc.RequireShapeTree(slidePart);
@@ -850,7 +850,7 @@ internal static class PptxEditor
         if (address.HasShape)
         {
             var child = PptxGroups.ResolveChild(group, address);
-            SetShapeProps(child, props);
+            SetShapeProps(child, props, slidePart, workspace);
             return Units.Inv($"{address.CanonicalGroupPath}/shape[@id={child.Id}]");
         }
 
@@ -889,10 +889,11 @@ internal static class PptxEditor
         return address.CanonicalGroupPath;
     }
 
-    /// <summary>Slide-level set: solid background, transition and transition duration.</summary>
-    private static string SetSlideProps(PresentationPart presentation, PptxAddress address, JsonObject props)
+    /// <summary>Slide-level set: solid/gradient/image background, transition and transition duration.</summary>
+    private static string SetSlideProps(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var slideData = slidePart.Slide?.CommonSlideData ?? throw CorruptPresentation("the slide has no p:cSld");
         JsonNode? transitionNode = null, durationNode = null;
         var hasTransition = false;
         var hasDuration = false;
@@ -903,6 +904,12 @@ internal static class PptxEditor
             {
                 case "background":
                     SetBackground(slidePart, value);
+                    break;
+                case "gradient":
+                    PptxFill.ApplyToBackground(slideData, PptxFill.BuildGradientFill(value));
+                    break;
+                case "image":
+                    PptxFill.ApplyToBackground(slideData, PptxFill.BuildImageFill(value, slidePart, workspace));
                     break;
                 case "transition":
                     transitionNode = value;
@@ -916,9 +923,9 @@ internal static class PptxEditor
                     throw new AiofficeException(
                         ErrorCodes.InvalidArgs,
                         $"Prop '{key}' does not apply to a slide.",
-                        "Slide props: background, transition, transitionDuration. " +
+                        "Slide props: background, gradient, image, transition, transitionDuration. " +
                         "Shape props (text, fill, geometry, …) target /slide[i]/shape[j].",
-                        candidates: ["background", "transition", "transitionDuration"]);
+                        candidates: ["background", "gradient", "image", "transition", "transitionDuration"]);
             }
         }
 
@@ -1522,8 +1529,28 @@ internal static class PptxEditor
     /// picks a preset geometry (rect/roundRect/ellipse/triangle/diamond/arrow)
     /// or "line" (a straight connector honoring props.flip).
     /// </summary>
-    private static uint AddTextBox(SlidePart slidePart, JsonObject? props) =>
-        AddTextBox(PptxDoc.RequireShapeTree(slidePart), props);
+    private static uint AddTextBox(SlidePart slidePart, JsonObject? props, Workspace workspace)
+    {
+        var tree = PptxDoc.RequireShapeTree(slidePart);
+        var id = AddTextBox(tree, props);
+
+        // An image fill at add time needs the host part (where the picture embeds);
+        // apply it once the shape is in the tree so the blip resolves against it. A
+        // line (connector) has no area to fill, so image is a no-op there.
+        if (props is not null && props.TryGetPropertyValue("image", out var imageNode))
+        {
+            var shape = PptxDoc.Shapes(tree)
+                .Select(v => v.Element)
+                .OfType<P.Shape>()
+                .FirstOrDefault(s => s.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value == id);
+            if (shape is not null)
+            {
+                PptxFill.ApplyToShape(shape, PptxFill.BuildImageFill(imageNode, slidePart, workspace));
+            }
+        }
+
+        return id;
+    }
 
     internal static uint AddTextBox(P.ShapeTree tree, JsonObject? props)
     {
@@ -1579,7 +1606,14 @@ internal static class PptxEditor
                 Preset = geometry is null ? A.ShapeTypeValues.Rectangle : GeometryPresets[geometry],
             });
 
-        if (props.TryGetPropertyValue("fill", out var fillNode))
+        // A gradient fill at add time wins over a solid fill (gradient needs no host
+        // part); an image fill at add time only works on the slide overload, which
+        // applies it after the shape is in the tree (see AddTextBox(SlidePart, …)).
+        if (props.TryGetPropertyValue("gradient", out var gradientNode))
+        {
+            shapeProperties.Append(PptxFill.BuildGradientFill(gradientNode));
+        }
+        else if (props.TryGetPropertyValue("fill", out var fillNode))
         {
             shapeProperties.Append(new A.SolidFill(new A.RgbColorModelHex { Val = Units.ParseColorHex("fill", fillNode) }));
         }
@@ -1703,7 +1737,7 @@ internal static class PptxEditor
         }
     }
 
-    internal static void SetShapeProps(ShapeView view, JsonObject props)
+    internal static void SetShapeProps(ShapeView view, JsonObject props, OpenXmlPartContainer? host = null, Workspace? workspace = null)
     {
         long? x = null, y = null, w = null, h = null;
 
@@ -1711,6 +1745,12 @@ internal static class PptxEditor
         {
             switch (RequireKnownPropKey(key, ShapePropKeys))
             {
+                case "gradient" when view.Element is P.Shape gradientShape:
+                    PptxFill.ApplyToShape(gradientShape, PptxFill.BuildGradientFill(value));
+                    break;
+                case "image" when view.Element is P.Shape imageShape:
+                    PptxFill.ApplyToShape(imageShape, BuildShapeImageFill(value, host, workspace));
+                    break;
                 case "text" or "title" when view.Element is P.Shape shape:
                     ReplaceText(shape, value is null ? string.Empty : J.ScalarText(value));
                     break;
@@ -2051,6 +2091,24 @@ internal static class PptxEditor
         {
             properties.InsertAt(solidFill, 0);
         }
+    }
+
+    /// <summary>
+    /// Builds an image (blip) fill for a shape, requiring the host part (where the
+    /// picture embeds) and the workspace (which sandbox-resolves the source path).
+    /// </summary>
+    private static A.BlipFill BuildShapeImageFill(JsonNode? value, OpenXmlPartContainer? host, Workspace? workspace)
+    {
+        if (host is null || workspace is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                "An image fill cannot be applied here (no host part to embed the picture).",
+                "Set the image fill on a slide shape, e.g. " +
+                "{\"op\":\"set\",\"path\":\"/slide[1]/shape[@id=5]\",\"props\":{\"image\":\"banner.jpg\"}}.");
+        }
+
+        return PptxFill.BuildImageFill(value, host, workspace);
     }
 
     private static void ApplyRunProps(P.Shape shape, Action<A.RunProperties> mutate)

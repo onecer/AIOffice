@@ -24,26 +24,30 @@ internal static class PptxMasters
     private static readonly IReadOnlyList<string> AccentKeys =
         ["accent1", "accent2", "accent3", "accent4", "accent5", "accent6"];
 
+    /// <summary>The theme font slots that set /master[m] can rename (the master's theme font scheme).</summary>
+    private static readonly IReadOnlyList<string> FontKeys = ["majorFont", "minorFont"];
+
     // ---- set ---------------------------------------------------------------
 
     /// <summary>Routes a set op on a master/layout path to the right editor; returns the canonical target.</summary>
-    public static string Set(PresentationPart presentation, PptxAddress address, JsonObject props)
+    public static string Set(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         if (address.HasShape)
         {
-            return SetShape(presentation, address, props);
+            return SetShape(presentation, address, props, workspace);
         }
 
         return address.LayoutIndex is null
-            ? SetMaster(presentation, address, props)
-            : SetLayout(presentation, address, props);
+            ? SetMaster(presentation, address, props, workspace)
+            : SetLayout(presentation, address, props, workspace);
     }
 
-    /// <summary>set /master[m]: background plus theme accent colors (the color scheme in the theme part).</summary>
-    private static string SetMaster(PresentationPart presentation, PptxAddress address, JsonObject props)
+    /// <summary>set /master[m]: background (solid/gradient/image), theme accent colors and theme fonts.</summary>
+    private static string SetMaster(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var masterPart = PptxDoc.ResolveMaster(presentation, address.MasterIndex, address.Raw);
         var accents = new List<(int Slot, string Hex)>();
+        var fonts = new List<(bool Major, string Typeface)>();
 
         foreach (var (key, value) in props)
         {
@@ -51,6 +55,32 @@ internal static class PptxMasters
             {
                 var slideData = masterPart.SlideMaster?.CommonSlideData ?? throw Corrupt("the master has no p:cSld");
                 PptxEditor.SetBackground(slideData, value);
+                continue;
+            }
+
+            if (string.Equals(key, "gradient", StringComparison.Ordinal))
+            {
+                var slideData = masterPart.SlideMaster?.CommonSlideData ?? throw Corrupt("the master has no p:cSld");
+                PptxFill.ApplyToBackground(slideData, PptxFill.BuildGradientFill(value));
+                continue;
+            }
+
+            if (string.Equals(key, "image", StringComparison.Ordinal))
+            {
+                var slideData = masterPart.SlideMaster?.CommonSlideData ?? throw Corrupt("the master has no p:cSld");
+                PptxFill.ApplyToBackground(slideData, PptxFill.BuildImageFill(value, masterPart, workspace));
+                continue;
+            }
+
+            if (string.Equals(key, "majorFont", StringComparison.Ordinal))
+            {
+                fonts.Add((Major: true, Typeface: FontTypeface(key, value)));
+                continue;
+            }
+
+            if (string.Equals(key, "minorFont", StringComparison.Ordinal))
+            {
+                fonts.Add((Major: false, Typeface: FontTypeface(key, value)));
                 continue;
             }
 
@@ -74,9 +104,9 @@ internal static class PptxMasters
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Prop '{key}' does not apply to a master.",
-                "Master props: background, accent1..accent6 (theme colors). " +
+                "Master props: background, gradient, image, accent1..accent6 (theme colors), majorFont, minorFont. " +
                 "Edit master shapes via /master[m]/shape[i]; layout props target /master[m]/layout[l].",
-                candidates: [.. new[] { "background" }.Concat(AccentKeys)]);
+                candidates: [.. new[] { "background", "gradient", "image" }.Concat(AccentKeys).Concat(FontKeys)]);
         }
 
         if (accents.Count > 0)
@@ -84,11 +114,16 @@ internal static class PptxMasters
             SetThemeAccents(masterPart, accents);
         }
 
+        if (fonts.Count > 0)
+        {
+            SetThemeFonts(masterPart, fonts);
+        }
+
         return address.CanonicalMasterPath;
     }
 
-    /// <summary>set /master[m]/layout[l]: the layout's background (shapes target the shape path).</summary>
-    private static string SetLayout(PresentationPart presentation, PptxAddress address, JsonObject props)
+    /// <summary>set /master[m]/layout[l]: the layout's background (solid/gradient/image); shapes target the shape path.</summary>
+    private static string SetLayout(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var masterPart = PptxDoc.ResolveMaster(presentation, address.MasterIndex, address.Raw);
         var layoutPart = PptxDoc.ResolveLayout(masterPart, address.MasterIndex, address.LayoutIndex!.Value, address.Raw);
@@ -102,24 +137,53 @@ internal static class PptxMasters
                 continue;
             }
 
+            if (string.Equals(key, "gradient", StringComparison.Ordinal))
+            {
+                var slideData = layoutPart.SlideLayout?.CommonSlideData ?? throw Corrupt("the layout has no p:cSld");
+                PptxFill.ApplyToBackground(slideData, PptxFill.BuildGradientFill(value));
+                continue;
+            }
+
+            if (string.Equals(key, "image", StringComparison.Ordinal))
+            {
+                var slideData = layoutPart.SlideLayout?.CommonSlideData ?? throw Corrupt("the layout has no p:cSld");
+                PptxFill.ApplyToBackground(slideData, PptxFill.BuildImageFill(value, layoutPart, workspace));
+                continue;
+            }
+
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Prop '{key}' does not apply to a layout.",
-                "Layout props: background. Edit layout shapes via /master[m]/layout[l]/shape[i]; " +
-                "theme colors target the master (/master[m]).",
-                candidates: ["background"]);
+                "Layout props: background, gradient, image. Edit layout shapes via /master[m]/layout[l]/shape[i]; " +
+                "theme colors/fonts target the master (/master[m]).",
+                candidates: ["background", "gradient", "image"]);
         }
 
         return address.CanonicalLayoutPath;
     }
 
-    /// <summary>set on a master/layout shape: delegates to the shared slide shape-prop setter.</summary>
-    private static string SetShape(PresentationPart presentation, PptxAddress address, JsonObject props)
+    /// <summary>set on a master/layout shape: delegates to the shared slide shape-prop setter (with the host part).</summary>
+    private static string SetShape(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
-        var (tree, containerPath, label) = ResolveShapeTree(presentation, address);
+        var (tree, containerPath, label, host) = ResolveShapeTree(presentation, address);
         var view = PptxDoc.ResolveShape(PptxDoc.Shapes(tree), address, containerPath, label);
-        PptxEditor.SetShapeProps(view, props);
+        PptxEditor.SetShapeProps(view, props, host, workspace);
         return view.CanonicalPathIn(containerPath);
+    }
+
+    /// <summary>One theme-font prop's typeface (the latin face name); an empty value is rejected.</summary>
+    private static string FontTypeface(string key, JsonNode? value)
+    {
+        var typeface = value is null ? string.Empty : J.ScalarText(value).Trim();
+        if (typeface.Length == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{key}' needs a non-empty font name.",
+                "Example: {\"majorFont\":\"Montserrat\",\"minorFont\":\"Inter\"}.");
+        }
+
+        return typeface;
     }
 
     /// <summary>Recolors the master theme part's accent slots (a:accent1..a:accent6 in the color scheme).</summary>
@@ -148,6 +212,51 @@ internal static class PptxMasters
             accent.AppendChild(new A.RgbColorModelHex { Val = hex });
         }
     }
+
+    /// <summary>
+    /// Renames the master theme part's font scheme faces (a:majorFont/a:minorFont
+    /// → a:latin@typeface). Mirrors the docx theme-font edit. A font scheme is
+    /// created (Office defaults) on demand so the edit always lands somewhere valid.
+    /// </summary>
+    private static void SetThemeFonts(SlideMasterPart masterPart, List<(bool Major, string Typeface)> fonts)
+    {
+        var elements = (masterPart.ThemePart?.Theme?.ThemeElements) ?? throw new AiofficeException(
+            ErrorCodes.UnsupportedFeature,
+            "The master has no theme to carry fonts.",
+            "Theme fonts are stored in the master's theme part; re-export the deck from PowerPoint to add one.");
+
+        var fontScheme = elements.FontScheme ??= BuildDefaultFontScheme();
+
+        foreach (var (major, typeface) in fonts)
+        {
+            var collection = major
+                ? (A.FontCollectionType)(fontScheme.MajorFont ??= new A.MajorFont(new A.LatinFont { Typeface = "Calibri Light" }))
+                : fontScheme.MinorFont ??= new A.MinorFont(new A.LatinFont { Typeface = "Calibri" });
+
+            var latin = collection.GetFirstChild<A.LatinFont>();
+            if (latin is null)
+            {
+                latin = new A.LatinFont();
+                collection.InsertAt(latin, 0);
+            }
+
+            latin.Typeface = typeface;
+        }
+    }
+
+    /// <summary>A complete Office-default theme font scheme (used when the theme part lacks one).</summary>
+    private static A.FontScheme BuildDefaultFontScheme() => new(
+        new A.MajorFont(
+            new A.LatinFont { Typeface = "Calibri Light" },
+            new A.EastAsianFont { Typeface = string.Empty },
+            new A.ComplexScriptFont { Typeface = string.Empty }),
+        new A.MinorFont(
+            new A.LatinFont { Typeface = "Calibri" },
+            new A.EastAsianFont { Typeface = string.Empty },
+            new A.ComplexScriptFont { Typeface = string.Empty }))
+    {
+        Name = "Office",
+    };
 
     // ---- add ---------------------------------------------------------------
 
@@ -304,7 +413,7 @@ internal static class PptxMasters
                 "Use the container path, e.g. {\"op\":\"add\",\"path\":\"/master[1]/layout[2]\",\"type\":\"shape\"}.");
         }
 
-        var (tree, containerPath, _) = ResolveShapeTree(presentation, address);
+        var (tree, containerPath, _, _) = ResolveShapeTree(presentation, address);
         var id = PptxEditor.AddTextBox(tree, props);
         return Units.Inv($"{containerPath}/shape[@id={id}]");
     }
@@ -382,7 +491,7 @@ internal static class PptxMasters
     /// <summary>remove a master/layout shape from its tree.</summary>
     private static string RemoveShape(PresentationPart presentation, PptxAddress address)
     {
-        var (tree, containerPath, label) = ResolveShapeTree(presentation, address);
+        var (tree, containerPath, label, _) = ResolveShapeTree(presentation, address);
         var view = PptxDoc.ResolveShape(PptxDoc.Shapes(tree), address, containerPath, label);
         var canonical = view.CanonicalPathIn(containerPath);
         view.Element.Remove();
@@ -391,8 +500,11 @@ internal static class PptxMasters
 
     // ---- shared ------------------------------------------------------------
 
-    /// <summary>Resolves the shape tree (and labels) behind a /master[m]/shape or /master[m]/layout[l]/shape path.</summary>
-    private static (P.ShapeTree Tree, string ContainerPath, string Label) ResolveShapeTree(
+    /// <summary>
+    /// Resolves the shape tree (labels + the host part where pictures embed) behind a
+    /// /master[m]/shape or /master[m]/layout[l]/shape path.
+    /// </summary>
+    private static (P.ShapeTree Tree, string ContainerPath, string Label, OpenXmlPartContainer Host) ResolveShapeTree(
         PresentationPart presentation, PptxAddress address)
     {
         var masterPart = PptxDoc.ResolveMaster(presentation, address.MasterIndex, address.Raw);
@@ -402,13 +514,15 @@ internal static class PptxMasters
             return (
                 PptxDoc.RequireShapeTree(layoutPart),
                 address.CanonicalLayoutPath,
-                Units.Inv($"on layout {layoutIndex} of master {address.MasterIndex}"));
+                Units.Inv($"on layout {layoutIndex} of master {address.MasterIndex}"),
+                layoutPart);
         }
 
         return (
             PptxDoc.RequireShapeTree(masterPart),
             address.CanonicalMasterPath,
-            Units.Inv($"on master {address.MasterIndex}"));
+            Units.Inv($"on master {address.MasterIndex}"),
+            masterPart);
     }
 
     /// <summary>The placeholder types a custom layout can declare, mapped to their OOXML ph type + idx base.</summary>

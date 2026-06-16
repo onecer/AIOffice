@@ -38,6 +38,9 @@ internal static class PptxImages
         return slidePart.GetIdOfPart(imagePart);
     }
 
+    /// <summary>The header-sniffed image part type (PNG/JPEG) for a byte payload; throws on anything else.</summary>
+    public static PartTypeInfo SniffPartType(byte[] bytes, string src) => Sniff(bytes, src).PartType;
+
     /// <summary>Adds the picture and returns its stable shape id.</summary>
     public static uint AddImage(SlidePart slidePart, JsonObject? props, Workspace workspace)
     {

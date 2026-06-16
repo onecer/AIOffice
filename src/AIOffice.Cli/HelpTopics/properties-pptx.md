@@ -24,7 +24,9 @@ appends a textbox; more shape kinds are M1.
 | title    | string | alias for text                            |
 | x, y     | length | position from the top-left                |
 | w, h     | length | size                                      |
-| fill     | string | background color, hex RGB                 |
+| fill     | string | solid background color, hex RGB           |
+| gradient | object | 1.8: a gradient fill (wins over `fill`); see below |
+| image    | string \| object | 1.8: a picture (blip) fill; see below |
 | fontSize | number | points                                    |
 | bold     | bool   |                                           |
 | color    | string | font color, hex RGB                       |
@@ -35,6 +37,44 @@ appends a textbox; more shape kinds are M1.
 
 Lengths: a bare number means **centimeters** (`"x": 2.5`); strings take a unit
 suffix: `"5cm"`, `"36pt"`, `"1in"`, `"96px"`, `"1800000emu"`.
+
+### gradient fill (1.8)
+
+A sibling of `fill` (when both are given, **gradient wins**), accepted on `add`
+and `set` of a shape, and as a **slide / master / layout background** (set it
+alongside or instead of `background`). It writes a real `a:gradFill`; any prior
+solid/gradient/image fill on the target is replaced.
+
+    {"gradient":{"type":"linear","angle":90,"stops":[
+       {"color":"0EA5E9","at":0},{"color":"6366F1","at":100}]}}
+
+- `type` — `"linear"` (default) or `"radial"`.
+- `angle` — degrees for a linear gradient (0 = left→right, 90 = top→bottom,
+  45 = diagonal); ignored for radial. Default 90.
+- `stops` — **at least two** `{color, at}` entries. `color` is an RRGGBB hex;
+  `at` is the position percent `0..100` (0 = start, 100 = end).
+
+Background example (gradient cover slide):
+
+    {"op":"set","path":"/slide[1]","props":{"gradient":{"type":"radial",
+      "stops":[{"color":"FFFFFF","at":0},{"color":"0F172A","at":100}]}}}
+
+### image (picture) fill (1.8)
+
+Fills the shape's area with a sandbox-resolved PNG/JPEG (a real `a:blipFill`),
+accepted on `add`/`set` of a shape and as a background. A path outside the
+workspace is `sandbox_denied` before any byte is read.
+
+    {"image":"banner.jpg"}
+    {"image":{"src":"banner.jpg","mode":"tile","tint":"1E40AF"}}
+
+- `src` — required; PNG/JPEG path inside the sandbox.
+- `mode` — `"stretch"` (default, fits the shape) or `"tile"` (repeats).
+- `tint` — optional RRGGBB hex; washes the picture toward that color
+  (a duotone overlay).
+
+`get` and `audit` still read only the solid `fill`; a gradient/image fill is
+rendered as a flat approximation (the gradient's start stop) in `render --to svg`.
 
 ## p (paragraph inside a shape, `/slide[2]/shape[3]/p[1]`)
 

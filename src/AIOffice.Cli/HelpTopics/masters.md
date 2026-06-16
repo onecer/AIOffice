@@ -12,6 +12,19 @@ created with a minimal valid body on first edit and reported by `get` and by
     aioffice edit deck.pptx --ops '[{"op":"set","path":"/master[1]","props":{"background":"1F2937"}}]'
     aioffice edit deck.pptx --ops '[{"op":"add","path":"/master[1]","type":"layout"}]'  # clone a layout
 
+`set /master[m]` props: `background` (solid hex), `accent1..accent6` (theme
+colors), and — added in **1.8** — `majorFont` / `minorFont` (the theme font
+scheme's headings/body faces) plus `gradient` / `image` backgrounds (the same
+specs as a slide; see `aioffice help properties-pptx`). `set
+/master[m]/layout[l]` takes `background`, `gradient`, `image`.
+
+    # 1.8: brand the deck's theme fonts (one master edit restyles every slide)
+    aioffice edit deck.pptx --ops '[{"op":"set","path":"/master[1]","props":{"majorFont":"Montserrat","minorFont":"Inter"}}]'
+    # 1.8: a gradient master background
+    aioffice edit deck.pptx --ops '[{"op":"set","path":"/master[1]","props":{"gradient":{"type":"linear","angle":90,"stops":[{"color":"0F172A","at":0},{"color":"1E293B","at":100}]}}}]'
+
+`get /master[1]` reports `majorFont` and `minorFont` back.
+
 ## Notes master (1.7)
 
 The shared look of every slide's notes page.

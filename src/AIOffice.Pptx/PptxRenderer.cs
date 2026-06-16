@@ -26,10 +26,37 @@ internal static class PptxRenderer
         return (Units.EmuToPx(cx), Units.EmuToPx(cy));
     }
 
+    /// <summary>
+    /// The first gradient stop colour of a shape's 1.8 gradient fill, used only as a
+    /// flat render approximation (the document fill stays gradient/blip in OOXML).
+    /// </summary>
+    private static string? ShapeGradientStartHex(DocumentFormat.OpenXml.OpenXmlCompositeElement element)
+    {
+        var properties = (element as P.Shape)?.ShapeProperties;
+        return GradientStartHex(properties?.GetFirstChild<A.GradientFill>());
+    }
+
+    /// <summary>The first gradient stop colour of a slide/master/layout background, for the flat render fallback.</summary>
+    private static string? BackgroundGradientStartHex(P.CommonSlideData? slideData)
+    {
+        var gradient = slideData?.Background?.BackgroundProperties?.GetFirstChild<A.GradientFill>();
+        return GradientStartHex(gradient);
+    }
+
+    /// <summary>The lowest-positioned stop's RGB hex (the gradient's visual "start").</summary>
+    private static string? GradientStartHex(A.GradientFill? gradient)
+    {
+        var stop = gradient?.GradientStopList?.Elements<A.GradientStop>()
+            .OrderBy(s => s.Position?.Value ?? 0)
+            .FirstOrDefault();
+        return stop?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+    }
+
     public static string RenderSlideSvg(PresentationPart presentation, SlidePart slidePart, int slideIndex)
     {
         var (width, height) = SlideSizePx(presentation);
-        var background = PptxDoc.BackgroundHex(slidePart);
+        var background = PptxDoc.BackgroundHex(slidePart)
+            ?? BackgroundGradientStartHex(slidePart.Slide?.CommonSlideData);
         var svg = new StringBuilder();
         svg.Append(Units.Inv($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {width:0.#} {height:0.#}\" "));
         svg.Append(Units.Inv($"width=\"{width:0.#}\" height=\"{height:0.#}\" font-family=\"Helvetica, Arial, sans-serif\" "));
@@ -58,7 +85,11 @@ internal static class PptxRenderer
         var y = Units.EmuToPx(geometry.Y);
         var w = Units.EmuToPx(geometry.Cx);
         var h = Units.EmuToPx(geometry.Cy);
-        var fill = PptxDoc.FillHex(shape.Element);
+
+        // A solid fill renders true; a 1.8 gradient/image fill renders as a flat
+        // approximation (the gradient's start stop, or a tint marker) so the shape
+        // shows colour rather than blank white — get/audit still read solid-only.
+        var fill = PptxDoc.FillHex(shape.Element) ?? ShapeGradientStartHex(shape.Element);
 
         // A linked shape carries its resolved target on the group so a browser /
         // assistive tech can surface the click action (the render contract's
