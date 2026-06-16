@@ -21,6 +21,12 @@ xattr -d com.apple.quarantine /path/to/aioffice
 
 The `install.sh` one-line installer and the Homebrew formula already strip the quarantine attribute for you; only **direct downloads** need this manual step. Alternatively: **System Settings → Privacy & Security → Open Anyway** after the first blocked launch.
 
+### Installer note: replace the inode, don't overwrite it · 升级时换 inode，别原地覆盖
+
+macOS keeps a code-signature validation cache **keyed by inode**. Overwriting an installed binary *in place* (`cp`/`>` onto the existing file) reuses its inode, so the cached signature from the old bytes no longer matches the new ones and AMFI kills/hangs the process on next launch — a real upgrade failure (fixed in `dist/install.sh`, commit `12eec48`). Rule for any updater: **never overwrite the binary in place** — write a sibling temp file and `mv` it over the destination (atomic same-dir rename = fresh inode), or `rm` then write. `mv` is also safe while the old binary is still running. `npm/install.js` (`fs.renameSync`) and the fixed `install.sh` / `install.ps1` all do this; Homebrew / `.pkg` / `.dmg` replace the whole file and get a fresh inode for free.
+
+**Interaction with signing (revisit when signing lands):** the fixed `install.sh` ad-hoc re-signs the staged macOS binary **only when it carries no real `Authority=` (Developer ID / notarized) signature** — so a properly signed, notarized release binary is left untouched (an ad-hoc re-sign would *strip* the Developer ID signature and its notarization, reintroducing the Gatekeeper prompt). Once real signing ships: confirm the installer takes the skip branch on the signed asset (`codesign -dvv aioffice-mac-arm64` shows an `Authority=` line), and consider dropping the ad-hoc fallback if it's no longer wanted.
+
 ---
 
 ## macOS: Developer ID signing + notarization · macOS 签名与公证
