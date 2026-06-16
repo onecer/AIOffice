@@ -77,8 +77,11 @@ $sumsUrl = "$base/SHA256SUMS"
 
 Write-Info "$releaseTag $asset -> $dest"
 
-# Force TLS 1.2+ on older PowerShell hosts.
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocol]::Tls12 -bor [Net.SecurityProtocol]::Tls13 } catch {}
+# Force TLS 1.2+ on older PowerShell hosts (Windows PowerShell 5.1 defaults to
+# SSL3/TLS1.0). The enum type is [Net.SecurityProtocolType]; add Tls13 in its own
+# try so a host that lacks it still gets Tls12.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13 } catch {}
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("aioffice-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
@@ -114,9 +117,18 @@ try {
     }
     Write-Info "sha256 verified ($actual)"
 
-    # 3. install
+    # 3. install. On Windows a running aioffice.exe is LOCKED against overwrite but
+    #    can still be renamed, so move any existing copy aside first, then install the
+    #    new one. A stale ".old-*" left behind by a still-running process is cleaned
+    #    up on a later upgrade, once the process holding it exits.
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    if (Test-Path $dest) {
+        $old = "$dest.old-$([System.Guid]::NewGuid().ToString('N'))"
+        try { Move-Item -Path $dest -Destination $old -Force } catch {}
+    }
     Copy-Item -Path $tmpBin -Destination $dest -Force
+    Get-ChildItem -Path $InstallDir -Filter "aioffice.exe.old-*" -ErrorAction SilentlyContinue |
+        ForEach-Object { try { Remove-Item -Path $_.FullName -Force -ErrorAction Stop } catch {} }
 }
 finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue

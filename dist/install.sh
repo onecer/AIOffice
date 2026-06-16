@@ -116,12 +116,13 @@ main() {
 
   INSTALL_DIR="${AIOFFICE_BIN:-$HOME/.local/bin}"
   DEST="${INSTALL_DIR}/aioffice"
+  STAGE="${DEST}.new.$$"
 
   printf 'aioffice-install: %s %s -> %s\n' "$RELEASE_TAG" "$ASSET" "$DEST"
 
   _tmp="$(mktemp -d "${TMPDIR:-/tmp}/aioffice-install.XXXXXX")" || die "failed to create temp dir"
   # shellcheck disable=SC2064
-  trap "rm -rf '$_tmp'" EXIT INT TERM
+  trap "rm -rf '$_tmp' '$STAGE'" EXIT INT TERM
 
   # 1. download binary + checksums
   download "$BIN_URL" "${_tmp}/aioffice" \
@@ -141,18 +142,34 @@ main() {
   fi
   printf 'aioffice-install: sha256 verified (%s)\n' "$_actual"
 
-  # 3. install
+  # 3. install — stage the new binary in the install dir, then atomically rename it
+  #    into place. A plain `cp` over an existing binary REUSES that file's inode; on
+  #    macOS the kernel keeps a code-signature cache keyed by inode, so once the bytes
+  #    change the cached signature no longer matches and the upgraded binary HANGS /
+  #    is killed on first run. `mv` (rename) swaps in a fresh inode, sidestepping the
+  #    stale cache — and it is safe to do while the OLD binary is still running.
+  #    Staging inside INSTALL_DIR keeps the rename on one filesystem (atomic).
   mkdir -p "$INSTALL_DIR" || die "cannot create install dir: ${INSTALL_DIR}"
-  # Move into place, then chmod. Use cp+rm so cross-filesystem installs work.
-  cp "${_tmp}/aioffice" "$DEST" || die "failed to write ${DEST} (need write permission, or set AIOFFICE_BIN)"
-  chmod +x "$DEST" || die "failed to mark ${DEST} executable"
+  cp "${_tmp}/aioffice" "$STAGE" || die "failed to write into ${INSTALL_DIR} (need write permission, or set AIOFFICE_BIN)"
+  chmod +x "$STAGE" || die "failed to mark the new binary executable"
 
-  # 4. macOS: strip the quarantine attribute so Gatekeeper does not block it
-  if [ "$(uname -s)" = "Darwin" ] && have xattr; then
-    xattr -d com.apple.quarantine "$DEST" >/dev/null 2>&1 || true
+  # 4. macOS: clear quarantine + provenance xattrs, and (re-)establish an ad-hoc
+  #    signature on the staged binary so the fresh inode gets a clean first-run
+  #    Gatekeeper/AMFI assessment. Integrity is already guaranteed by the SHA256
+  #    check above; we ad-hoc re-sign UNLESS the download already carries a real
+  #    (Developer ID / notarized) signature — detected by an `Authority=` line —
+  #    which we leave untouched.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    if have xattr; then xattr -c "$STAGE" >/dev/null 2>&1 || true; fi
+    if have codesign && ! codesign -dvv "$STAGE" 2>&1 | grep -q '^Authority='; then
+      codesign --force --sign - "$STAGE" >/dev/null 2>&1 || true
+    fi
   fi
 
-  # 5. PATH hint
+  # 5. atomically replace the old binary with the freshly-staged one (new inode).
+  mv -f "$STAGE" "$DEST" || die "failed to install ${DEST}"
+
+  # 6. PATH hint
   case ":${PATH}:" in
     *":${INSTALL_DIR}:"*) : ;;
     *)
@@ -162,7 +179,7 @@ main() {
       ;;
   esac
 
-  # 6. confirm install by running the binary
+  # 7. confirm install by running the binary
   printf 'aioffice-install: installed. '
   if "$DEST" version 2>/dev/null; then
     :
