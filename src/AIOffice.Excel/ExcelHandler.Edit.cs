@@ -2494,7 +2494,8 @@ public sealed partial class ExcelHandler
                 catch (Exception)
                 {
                     if (TryEvaluateFinancial(sheet, cell, computed) ||
-                        TryEvaluateScalar(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
+                        TryEvaluateScalar(sheet, cell, computed) ||
+                        TryEvaluateStatistical(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
                     {
                         continue;
                     }
@@ -2509,7 +2510,8 @@ public sealed partial class ExcelHandler
                     // a later edit keeps the cached spill values aioffice wrote raw;
                     // never strip them or warn (the result is already on disk).
                     if (TryEvaluateFinancial(sheet, cell, computed) ||
-                        TryEvaluateScalar(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
+                        TryEvaluateScalar(sheet, cell, computed) ||
+                        TryEvaluateStatistical(sheet, cell, computed) || IsSpilledArrayAnchor(cell))
                     {
                         continue;
                     }
@@ -2651,6 +2653,34 @@ public sealed partial class ExcelHandler
         if (value.IsError && value.GetError() == XLError.NameNotRecognized)
         {
             return false; // honest fallback: a sub-expression used an unevaluable function
+        }
+
+        sink.Add((sheet.Name, cell.Address.ToString()!, value));
+        return true;
+    }
+
+    /// <summary>
+    /// (1.11) Computes one statistical / ranking / lookup / reference formula
+    /// (SMALL/RANK[.EQ]/PERCENTILE[.INC]/QUARTILE[.INC]/CHOOSE/OFFSET/INDIRECT/
+    /// AGGREGATE) ClosedXML returned #NAME? for and records its value for the raw
+    /// write-back. Returns false when the cell is not one of those functions, OR
+    /// when the evaluator could not evaluate it (a nested unevaluable function or a
+    /// deferred AGGREGATE func_num) — in which case the cell honestly keeps the
+    /// formula_not_evaluated warning. (HLOOKUP is not handled here: ClosedXML
+    /// evaluates it natively, so it never reaches this fallback.)
+    /// </summary>
+    private static bool TryEvaluateStatistical(
+        IXLWorksheet sheet, IXLCell cell, List<(string Sheet, string Address, XLCellValue Value)> sink)
+    {
+        if (!cell.HasFormula || !ExcelStatisticalFunctions.IsStatisticalFunction(cell.FormulaA1))
+        {
+            return false;
+        }
+
+        var value = ExcelStatisticalFunctions.Evaluate(sheet, cell.FormulaA1);
+        if (value.IsError && value.GetError() == XLError.NameNotRecognized)
+        {
+            return false; // honest fallback: a sub-expression / deferred func_num
         }
 
         sink.Add((sheet.Name, cell.Address.ToString()!, value));
