@@ -34,6 +34,7 @@ appends a textbox; more shape kinds are M1.
 | name     | string | shape name                                |
 | altText  | string | M7: accessibility description (`a:cNvPr/@descr`); any shape kind; `""` clears |
 | altTitle | string | M7: accessibility title (`a:cNvPr/@title`); any shape kind; `""` clears |
+| autofit  | string \| object | 1.9: text-autofit on the shape's `a:bodyPr`; text shapes only; see below |
 
 Lengths: a bare number means **centimeters** (`"x": 2.5`); strings take a unit
 suffix: `"5cm"`, `"36pt"`, `"1in"`, `"96px"`, `"1800000emu"`.
@@ -75,6 +76,35 @@ workspace is `sandbox_denied` before any byte is read.
 
 `get` and `audit` still read only the solid `fill`; a gradient/image fill is
 rendered as a flat approximation (the gradient's start stop) in `render --to svg`.
+
+### autofit (1.9)
+
+Controls the single autofit child of the shape's `a:bodyPr` — the lever that
+stops text overflowing its box. Accepted on `add`/`set` of a text shape, and
+writing it **replaces** any existing autofit child (a `bodyPr` has exactly one).
+
+| value             | writes          | meaning                                           |
+|-------------------|-----------------|---------------------------------------------------|
+| `"shrink"`        | `a:normAutofit` | PowerPoint shrinks the text to fit the box        |
+| `"resize"`        | `a:spAutoFit`   | the shape grows to fit the text                   |
+| `"none"`          | `a:noAutofit`   | neither: text may overflow                        |
+
+`"shrink"` is the fix for agent text-overflow. A bare `"shrink"` writes a plain
+`a:normAutofit`, so PowerPoint computes the scale when the deck opens. To pin the
+scale explicitly, pass the object form:
+
+    {"autofit":{"mode":"shrink","fontScale":90,"lineSpaceReduction":10}}
+
+- `mode` — `"shrink"` (the only mode the object form configures; `"resize"`/`"none"`
+  carry no parameters, so pass them as the bare string).
+- `fontScale` — percent `0..100` the font is scaled to (90 = 90%); written as
+  `a:normAutofit/@fontScale` in OOXML thousandths (90 → `"90000"`).
+- `lineSpaceReduction` — percent `0..100` the line spacing is reduced by;
+  written as `@lnSpcReduction`.
+
+`get` reports the current `autofit` as `{mode}` plus `fontScale`/`lineSpaceReduction`
+(back in percent) when a `normAutofit` carries them; a shape with no autofit child
+omits the field.
 
 ## p (paragraph inside a shape, `/slide[2]/shape[3]/p[1]`)
 

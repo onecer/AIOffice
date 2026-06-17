@@ -22,6 +22,13 @@ internal sealed record ShapeView(OpenXmlCompositeElement Element, uint Id, int O
 /// <summary>Shape geometry in EMU.</summary>
 internal readonly record struct GeometryEmu(long X, long Y, long Cx, long Cy);
 
+/// <summary>
+/// The text-autofit state read back from a shape's a:bodyPr: a mode token
+/// ("shrink"/"resize"/"none") plus, for "shrink", any explicit fontScale and
+/// lineSpaceReduction percentages the a:normAutofit carries (null when absent).
+/// </summary>
+internal sealed record AutofitInfo(string Mode, double? FontScale, double? LineSpaceReduction);
+
 /// <summary>Package plumbing shared by every pptx verb: open, enumerate, resolve, extract.</summary>
 internal static class PptxDoc
 {
@@ -479,6 +486,42 @@ internal static class PptxDoc
             (false, true) => "v",
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// The text-autofit state of a shape's a:bodyPr: "shrink" (a:normAutofit),
+    /// "resize" (a:spAutoFit) or "none" (a:noAutofit); null when the shape has no
+    /// text body or no explicit autofit child. For "shrink" the explicit fontScale
+    /// and lineSpaceReduction percentages (OOXML thousandths -> percent, 90000 -> 90)
+    /// ride along when the normAutofit carries them.
+    /// </summary>
+    public static AutofitInfo? Autofit(OpenXmlCompositeElement element)
+    {
+        var bodyPr = (element as P.Shape)?.TextBody?.GetFirstChild<A.BodyProperties>();
+        if (bodyPr is null)
+        {
+            return null;
+        }
+
+        if (bodyPr.GetFirstChild<A.NormalAutoFit>() is { } norm)
+        {
+            return new AutofitInfo(
+                "shrink",
+                norm.FontScale is { } fs ? Math.Round(fs.Value / 1000.0, 2) : null,
+                norm.LineSpaceReduction is { } lsr ? Math.Round(lsr.Value / 1000.0, 2) : null);
+        }
+
+        if (bodyPr.GetFirstChild<A.ShapeAutoFit>() is not null)
+        {
+            return new AutofitInfo("resize", null, null);
+        }
+
+        if (bodyPr.GetFirstChild<A.NoAutoFit>() is not null)
+        {
+            return new AutofitInfo("none", null, null);
+        }
+
+        return null;
     }
 
     public static GeometryEmu? Geometry(OpenXmlCompositeElement element)

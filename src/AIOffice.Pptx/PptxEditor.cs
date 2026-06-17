@@ -32,7 +32,7 @@ internal static class PptxEditor
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "gradient", "image", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
-         "shadow", "glow", "reflection", "outline"];
+         "shadow", "glow", "reflection", "outline", "autofit"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
     private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
@@ -1633,6 +1633,13 @@ internal static class PptxEditor
                 new P.ApplicationNonVisualDrawingProperties()),
             shapeProperties,
             body);
+
+        // Autofit lives on the bodyPr, which exists now that the body is built.
+        if (props.TryGetPropertyValue("autofit", out var autofitNode))
+        {
+            ApplyAutofit(shape, autofitNode);
+        }
+
         tree.Append(shape);
         return id;
     }
@@ -1813,12 +1820,16 @@ internal static class PptxEditor
                 case "outline":
                     PptxEffects.SetOutline(view, value);
                     break;
+                case "autofit" when view.Element is P.Shape autofitShape:
+                    ApplyAutofit(autofitShape, value);
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
                         $"Prop '{key}' does not apply to a '{view.Kind}'.",
                         "Pictures, charts, lines and groups take x, y, w, h, name, altText, altTitle, shadow, glow, " +
-                        "reflection and outline (lines also fill for the stroke color); text and styling props target text shapes.");
+                        "reflection and outline (lines also fill for the stroke color); text and styling props " +
+                        "(including autofit) target text shapes.");
             }
         }
 
@@ -1952,6 +1963,120 @@ internal static class PptxEditor
             paragraph.Append(run);
             body.Append(paragraph);
         }
+    }
+
+    /// <summary>
+    /// Sets the text-autofit behaviour on a shape's a:bodyPr. A bodyPr holds exactly
+    /// one autofit child, so this replaces any existing one. Accepts a bare mode token
+    /// ("shrink" -> a:normAutofit, "resize" -> a:spAutoFit, "none" -> a:noAutofit) or,
+    /// for "shrink", an object {mode:"shrink", fontScale:90, lineSpaceReduction:10}
+    /// that writes the explicit a:normAutofit @fontScale/@lnSpcReduction percentages
+    /// (90 -> "90000"); a bare "shrink" leaves them off so PowerPoint computes the
+    /// scale when the deck opens.
+    /// </summary>
+    internal static void ApplyAutofit(P.Shape shape, JsonNode? value)
+    {
+        var body = shape.TextBody;
+        if (body is null)
+        {
+            body = new P.TextBody(new A.BodyProperties(), new A.ListStyle());
+            shape.Append(body);
+        }
+
+        var bodyPr = body.GetFirstChild<A.BodyProperties>();
+        if (bodyPr is null)
+        {
+            bodyPr = new A.BodyProperties();
+            body.InsertAt(bodyPr, 0);
+        }
+
+        var autofit = BuildAutofit(value);
+
+        // A bodyPr has at most one autofit; drop any existing one before inserting.
+        foreach (var existing in bodyPr.Elements<OpenXmlElement>()
+                     .Where(e => e is A.NormalAutoFit or A.ShapeAutoFit or A.NoAutoFit).ToList())
+        {
+            existing.Remove();
+        }
+
+        // In a:bodyPr the autofit child follows a:prstTxWarp and precedes the 3D /
+        // extLst children; insert right after prstTxWarp when present, else first.
+        if (bodyPr.PresetTextWarp is { } warp)
+        {
+            bodyPr.InsertAfter<OpenXmlElement>(autofit, warp);
+        }
+        else
+        {
+            bodyPr.InsertAt(autofit, 0);
+        }
+    }
+
+    /// <summary>Builds the autofit child element for an autofit prop value.</summary>
+    private static OpenXmlElement BuildAutofit(JsonNode? value)
+    {
+        if (value is JsonObject obj)
+        {
+            var mode = J.Str(obj, "mode")?.Trim().ToLowerInvariant();
+            if (mode is not null && !string.Equals(mode, "shrink", StringComparison.Ordinal))
+            {
+                // resize/none carry no parameters, so route the object's mode through
+                // the same scalar path (it just yields a parameterless element).
+                return BuildAutofitFromMode(mode);
+            }
+
+            // Object form configures the shrink (normAutofit) percentages.
+            var normAutofit = new A.NormalAutoFit();
+            if (TryAutofitPercent(obj, "fontScale", out var fontScale))
+            {
+                normAutofit.FontScale = fontScale;
+            }
+
+            if (TryAutofitPercent(obj, "lineSpaceReduction", out var lineSpaceReduction))
+            {
+                normAutofit.LineSpaceReduction = lineSpaceReduction;
+            }
+
+            return normAutofit;
+        }
+
+        return BuildAutofitFromMode(value is null ? null : J.ScalarText(value).Trim().ToLowerInvariant());
+    }
+
+    private static OpenXmlElement BuildAutofitFromMode(string? mode) => mode switch
+    {
+        "shrink" => new A.NormalAutoFit(),
+        "resize" => new A.ShapeAutoFit(),
+        "none" => new A.NoAutoFit(),
+        _ => throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"Unknown autofit mode: {mode ?? "null"}.",
+            "Use \"shrink\" (normAutofit, shrink text to fit), \"resize\" (spAutoFit, grow the shape) " +
+            "or \"none\" (noAutofit); \"shrink\" also accepts {mode:\"shrink\", fontScale, lineSpaceReduction}."),
+    };
+
+    /// <summary>
+    /// Reads an autofit percentage field (e.g. fontScale: 90) and converts it to the
+    /// OOXML thousandths-of-a-percent the bodyPr stores (90 -> 90000). Percent inputs
+    /// are 0..100; bare-thousandths inputs are rejected as out of range.
+    /// </summary>
+    private static bool TryAutofitPercent(JsonObject obj, string key, out int thousandths)
+    {
+        thousandths = 0;
+        if (!obj.TryGetPropertyValue(key, out var node) || node is not JsonValue value || !Units.TryNumber(value, out var percent))
+        {
+            return false;
+        }
+
+        if (percent is < 0 or > 100)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"autofit '{key}' is out of range: {percent.ToString(CultureInfo.InvariantCulture)}.",
+                "Use a percentage between 0 and 100 (e.g. 90 means 90%).");
+        }
+
+        thousandths = (int)Math.Round(percent * 1000);
+        return true;
     }
 
     private static void ReplaceParagraphText(A.Paragraph paragraph, string text)

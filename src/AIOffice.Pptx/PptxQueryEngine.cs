@@ -614,6 +614,7 @@ internal static class PptxQueryEngine
             LineColor = PptxDoc.LineHex(view.Element),
             Hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
+            Autofit = PptxDoc.Autofit(view.Element),
             Chart = PptxCharts.Summary(slidePart, view.Element),
             Effects = PptxEffects.Read(view.Element),
             Media = view.Element is P.Picture picture && PptxMedia.MediaKindOf(picture) is { } mediaKind
@@ -670,6 +671,7 @@ internal static class PptxQueryEngine
                 H = childGeometry is { } cg4 ? Units.EmuToCm(cg4.Cy) : (double?)null,
                 Fill = PptxDoc.FillHex(child.Element),
                 Font = childParagraph is null ? null : FontInfo(childParagraph),
+                Autofit = PptxDoc.Autofit(child.Element),
             };
         }
 
