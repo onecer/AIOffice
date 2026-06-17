@@ -18,13 +18,23 @@ namespace AIOffice.Render;
 /// </summary>
 public static class PdfRenderVerb
 {
-    /// <summary>Renders <c>ctx.File</c> to PDF. Reads <c>ctx.Args.scope</c> and <c>ctx.Args.output</c> (pre-resolved).</summary>
+    /// <summary>
+    /// Renders <c>ctx.File</c> to PDF. Reads <c>ctx.Args.scope</c>,
+    /// <c>ctx.Args.output</c> (pre-resolved) and <c>ctx.Args.engine</c>
+    /// (optional: chromium [default] | soffice | auto).
+    /// </summary>
     public static Envelope Execute(IFormatHandler handler, CommandContext ctx)
     {
         var file = ctx.File ?? throw new AiofficeException(
             ErrorCodes.InvalidArgs,
             "render --to pdf needs a document file.",
             "Pass the document path, e.g. 'aioffice render report.docx --to pdf'.");
+
+        var engine = RenderEngineSelector.Resolve(RenderEngineSelector.Parse(Str(ctx.Args, "engine")));
+        if (engine == RenderEngine.Soffice)
+        {
+            return ExecuteSoffice(ctx, file);
+        }
 
         var scope = Str(ctx.Args, "scope");
         var intermediate = handler.Kind == DocumentKind.Pptx ? "svg" : "html";
@@ -64,6 +74,40 @@ public static class PdfRenderVerb
                 pages = pages > 0 ? (int?)pages : null,
             },
             rendered.Meta);
+    }
+
+    /// <summary>
+    /// soffice engine: convert the ORIGINAL document to PDF with LibreOffice
+    /// (whole document, high fidelity). The whole document is always converted,
+    /// so a <c>--scope</c> is reported back but does not narrow the output; a
+    /// <c>scope_defaulted</c> warning names that when a scope was passed.
+    /// </summary>
+    private static Envelope ExecuteSoffice(CommandContext ctx, string file)
+    {
+        var scope = Str(ctx.Args, "scope");
+        var outPdf = Str(ctx.Args, "output") ?? Path.ChangeExtension(file, ".pdf");
+
+        var warnings = new List<Warning>();
+        if (scope is not null)
+        {
+            warnings.Add(new Warning(
+                WarningCodes.ScopeDefaulted,
+                "The soffice engine converts the whole document to PDF; --scope was ignored. " +
+                "Use --to png --engine soffice --scope for a single page, or --engine chromium."));
+        }
+
+        var written = SofficeRenderer.DocumentToPdf(file, outPdf);
+        return Envelope.Ok(
+            new
+            {
+                format = "pdf",
+                engine = "soffice",
+                scope,
+                written,
+                sizeBytes = new FileInfo(written).Length,
+                pages = (int?)null,
+            },
+            warnings.Count > 0 ? new Meta { Warnings = warnings } : new Meta());
     }
 
     /// <summary>docx/xlsx: wrap the handler's HTML fragment in a printable A4 page and print it.</summary>

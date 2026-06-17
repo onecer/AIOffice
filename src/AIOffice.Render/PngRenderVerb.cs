@@ -19,10 +19,11 @@ public static class PngRenderVerb
     public const int DefaultWidthPx = 1280;
 
     /// <summary>
-    /// Renders <c>ctx.File</c> to PNG. Reads <c>ctx.Args.scope</c> (optional)
-    /// and <c>ctx.Args.output</c> (optional absolute path, pre-resolved by the
-    /// caller's workspace). For pptx without a scope, only the first slide is
-    /// rendered and a <c>scope_defaulted</c> warning names the fix.
+    /// Renders <c>ctx.File</c> to PNG. Reads <c>ctx.Args.scope</c> (optional),
+    /// <c>ctx.Args.output</c> (optional absolute path, pre-resolved by the
+    /// caller's workspace) and <c>ctx.Args.engine</c> (optional: chromium
+    /// [default] | soffice | auto). For pptx without a scope, only the first
+    /// slide is rendered and a <c>scope_defaulted</c> warning names the fix.
     /// </summary>
     public static Envelope Execute(IFormatHandler handler, CommandContext ctx)
     {
@@ -30,6 +31,12 @@ public static class PngRenderVerb
             ErrorCodes.InvalidArgs,
             "render --to png needs a document file.",
             "Pass the document path, e.g. 'aioffice render report.docx --to png'.");
+
+        var engine = RenderEngineSelector.Resolve(RenderEngineSelector.Parse(Str(ctx.Args, "engine")));
+        if (engine == RenderEngine.Soffice)
+        {
+            return ExecuteSoffice(handler, ctx, file);
+        }
 
         var scope = Str(ctx.Args, "scope");
         var intermediate = handler.Kind == DocumentKind.Pptx ? "svg" : "html";
@@ -75,6 +82,44 @@ public static class PngRenderVerb
             },
             meta);
     }
+
+    /// <summary>
+    /// soffice engine: hand the ORIGINAL document to LibreOffice → pdf, then
+    /// rasterize one page with pdftoppm. The page comes from <c>--scope</c>
+    /// (<c>/slide[N]</c> for pptx; page 1 otherwise). The handler is only used
+    /// for its <see cref="DocumentKind"/> here — soffice reads the real file.
+    /// </summary>
+    private static Envelope ExecuteSoffice(IFormatHandler handler, CommandContext ctx, string file)
+    {
+        var scope = Str(ctx.Args, "scope");
+        var page = RenderEngineSelector.PageFromScope(scope);
+        var width = handler.Kind == DocumentKind.Pptx ? PptxWidthPx : DefaultWidthPx;
+        var outPng = Str(ctx.Args, "output") ?? Path.ChangeExtension(file, ".png");
+
+        var warnings = new List<Warning>();
+        if (handler.Kind == DocumentKind.Pptx && scope is null)
+        {
+            warnings.Add(new Warning(
+                WarningCodes.ScopeDefaulted,
+                "Rendered slide 1; pass --scope /slide[N] for another slide."));
+        }
+
+        var written = SofficeRenderer.DocumentToPng(file, outPng, page, width);
+        return Envelope.Ok(
+            new
+            {
+                format = "png",
+                engine = "soffice",
+                scope,
+                page,
+                written,
+                sizeBytes = new FileInfo(written).Length,
+            },
+            warnings.Count > 0 ? new Meta { Warnings = warnings } : new Meta());
+    }
+
+    /// <summary>Default rasterization width for soffice pptx slide PNGs (16:9 720p-ish).</summary>
+    private const int PptxWidthPx = 1280;
 
     /// <summary>docx/xlsx: wrap the handler's HTML fragment in a minimal UTF-8 page and screenshot it.</summary>
     private static string RenderHtmlContent(Envelope rendered, string outPng)

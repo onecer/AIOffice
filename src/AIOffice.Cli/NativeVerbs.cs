@@ -27,6 +27,8 @@ public sealed class NativeVerbs
         "action-buttons", "layouts", "line-numbers",
         // v1.7 additive topics.
         "print-setup", "masters",
+        // v1.9 additive topics.
+        "render-engines",
     ];
 
     private readonly Workspace _workspace;
@@ -148,6 +150,7 @@ public sealed class NativeVerbs
             }),
             mcp = new { assembly = "AIOffice.Mcp", status = mcpStatus },
             browser = AIOffice.Render.BrowserLocator.Probe(),
+            renderers = Renderers(),
             preview = PreviewLockDirInfo(),
             dependencies = new[]
             {
@@ -187,6 +190,26 @@ public sealed class NativeVerbs
         renderTargets = new[] { "html", "svg", "text", "png", "pdf" },
         auditCategories = AuditOptions.Categories,
     };
+
+    /// <summary>
+    /// The render engines available on this machine (v1.9). <c>chromium</c> is
+    /// the default engine and screenshots/prints aioffice's own HTML/SVG
+    /// projection; <c>libreoffice</c> (soffice) is the optional TRUE-fidelity
+    /// engine that hands the original document to LibreOffice, and <c>poppler</c>
+    /// (pdftoppm) rasterizes a PDF page to PNG for it. The existing top-level
+    /// <c>browser</c> field is unchanged; this is an additive summary.
+    /// </summary>
+    private static object Renderers()
+    {
+        var browser = AIOffice.Render.BrowserLocator.Probe();
+        var soffice = AIOffice.Render.SofficeLocator.Probe();
+        return new
+        {
+            chromium = new { engine = "chromium", found = browser.Found, path = browser.Path, kind = browser.Kind },
+            libreoffice = new { engine = "soffice", found = soffice.Found, path = soffice.Path },
+            poppler = new { tool = "pdftoppm", found = soffice.Pdftoppm, path = soffice.PdftoppmPath },
+        };
+    }
 
     /// <summary>Status of the preview lockfile directory (where running servers advertise their port).</summary>
     private static object PreviewLockDirInfo()

@@ -90,6 +90,7 @@ public static class SurfaceSchema
             [("file", "document path"),
              ("--to", "html|svg|text|png (default html; png screenshots via a local Chromium and is written to a file)"),
              ("--scope", "render only this subtree, e.g. /slide[3], /Sheet1/A1:F20; png on a multi-slide pptx defaults to /slide[1] with a warning"),
+             ("--engine", "png/pdf engine: chromium (default) | soffice (LibreOffice true-fidelity; png also needs pdftoppm) | auto; svg/html/text fall back to chromium"),
              ("-o", "output file or directory inside the workspace (png default: source path with .png)")],
             [ErrorCodes.UnsupportedFeature, ErrorCodes.InvalidPath, ErrorCodes.FileNotFound,
              ErrorCodes.SandboxDenied, ErrorCodes.FormatCorrupt, ErrorCodes.InternalError],

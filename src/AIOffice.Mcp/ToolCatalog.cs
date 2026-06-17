@@ -99,6 +99,8 @@ public static class ToolCatalog
               "to":{"type":"string","enum":["html","svg","text","png","pdf"],"default":"html",
                 "description":"html: docx/xlsx/pptx; svg: pptx, one file per slide; text: plain text; png: browser screenshot, written next to source (pptx: one slide, default /slide[1] — pass scope); pdf: paged print via local Chromium, written next to source (pptx: whole deck, one page per slide)"},
               "scope":{"type":"string","description":"Render only this subtree, e.g. \"/slide[3]\", \"/Sheet1/A1:F20\", \"/body/table[1]\""},
+              "engine":{"type":"string","enum":["chromium","soffice","auto"],"default":"chromium",
+                "description":"png/pdf engine. soffice=LibreOffice true-fidelity (png also needs pdftoppm); auto=soffice if installed else chromium. office_help{topic:\"render-engines\"}"},
               "output":{"type":"string","description":"Output file or directory inside workspace (default: alongside source)"}},
              "required":["file"]}
             """),

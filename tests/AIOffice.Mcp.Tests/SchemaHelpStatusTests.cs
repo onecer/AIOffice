@@ -103,6 +103,39 @@ public sealed class SchemaHelpStatusTests
     }
 
     [Fact]
+    public async Task OfficeStatus_ReportsTheRenderEngines()
+    {
+        using var ws = new TempWorkspace();
+        await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
+
+        var data = EnvelopeAssert.Ok(await srv.CallAsync("office_status"));
+        var renderers = data.GetProperty("renderers");
+
+        // chromium (the default engine), libreoffice (soffice) and poppler
+        // (pdftoppm) are each reported with a found flag — additive in 1.9.
+        Assert.Equal("chromium", renderers.GetProperty("chromium").GetProperty("engine").GetString());
+        Assert.True(renderers.GetProperty("chromium").TryGetProperty("found", out _));
+        Assert.Equal("soffice", renderers.GetProperty("libreoffice").GetProperty("engine").GetString());
+        Assert.True(renderers.GetProperty("libreoffice").TryGetProperty("found", out _));
+        Assert.Equal("pdftoppm", renderers.GetProperty("poppler").GetProperty("tool").GetString());
+        Assert.True(renderers.GetProperty("poppler").TryGetProperty("found", out _));
+    }
+
+    [Fact]
+    public async Task OfficeSchema_RenderVerb_ExposesTheEngineOption()
+    {
+        using var ws = new TempWorkspace();
+        await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
+
+        var data = EnvelopeAssert.Ok(await srv.CallAsync("office_schema",
+            new Dictionary<string, object?> { ["verb"] = "render" }));
+        var render = Assert.Single(data.GetProperty("verbs").EnumerateArray().ToList());
+        var engine = render.GetProperty("args").GetProperty("--engine").GetString();
+        Assert.Contains("soffice", engine, StringComparison.Ordinal);
+        Assert.Contains("chromium", engine, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task OfficeCreate_WritesThroughTheHandler_AndRefusesSilentOverwrite()
     {
         using var ws = new TempWorkspace();

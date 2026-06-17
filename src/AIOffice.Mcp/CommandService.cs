@@ -97,22 +97,15 @@ public sealed class CommandService
         var resolved = Workspace.Resolve(file, mustExist: true);
         var handler = Handlers.Resolve(resolved);
 
-        // png/pdf are cross-format plumbing (handler artifact -> headless
-        // browser); everything else goes straight to the handler.
+        // png/pdf (and the engine-aware fallback for svg/html/text) are
+        // cross-format plumbing orchestrated by the Render layer, not handlers.
         var to = OptionalString(a, "to");
-        if (to is "png" or "pdf")
+        if (to is "png" or "pdf" && OptionalString(a, "output") is { } output)
         {
-            if (OptionalString(a, "output") is { } output)
-            {
-                a["output"] = Workspace.Resolve(output); // the render verbs expect a resolved path
-            }
-
-            return to == "png"
-                ? AIOffice.Render.PngRenderVerb.Execute(handler, Context(resolved, a))
-                : AIOffice.Render.PdfRenderVerb.Execute(handler, Context(resolved, a));
+            a["output"] = Workspace.Resolve(output); // the render verbs expect a resolved path
         }
 
-        return handler.Render(Context(resolved, a));
+        return AIOffice.Render.RenderDispatch.Execute(handler, Context(resolved, a), to);
     });
 
     public Envelope Validate(JsonObject args) => FormatVerb(args, static (h, ctx) => h.Validate(ctx));
@@ -397,6 +390,7 @@ public sealed class CommandService
             },
             workspace = Workspace.Root,
             snapshotStore = new { path = _snapshotDir, count, bytes },
+            renderers = RenderersInfo(),
             capabilities = new
             {
                 surfaceVersion = Meta.SurfaceVersion,
@@ -437,6 +431,24 @@ public sealed class CommandService
 
     private CommandContext Context(string resolvedFile, JsonObject args) =>
         new() { Workspace = Workspace, File = resolvedFile, Args = args };
+
+    /// <summary>
+    /// The render engines available on this machine (v1.9), mirroring the CLI
+    /// doctor's <c>renderers</c> object: the default <c>chromium</c> browser,
+    /// the optional <c>libreoffice</c> (soffice) true-fidelity engine, and the
+    /// <c>poppler</c> (pdftoppm) PDF→PNG helper it needs. Additive.
+    /// </summary>
+    private static object RenderersInfo()
+    {
+        var browser = AIOffice.Render.BrowserLocator.Probe();
+        var soffice = AIOffice.Render.SofficeLocator.Probe();
+        return new
+        {
+            chromium = new { engine = "chromium", found = browser.Found, path = browser.Path, kind = browser.Kind },
+            libreoffice = new { engine = "soffice", found = soffice.Found, path = soffice.Path },
+            poppler = new { tool = "pdftoppm", found = soffice.Pdftoppm, path = soffice.PdftoppmPath },
+        };
+    }
 
     /// <summary>
     /// Times the body, converts any exception into a failure envelope, and

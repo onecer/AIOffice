@@ -99,3 +99,29 @@ public sealed class BrowserFactAttribute : FactAttribute
         string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase);
 }
+
+/// <summary>
+/// A fact that needs a REAL LibreOffice (<c>soffice</c>) — and, for PNG,
+/// <c>pdftoppm</c> — on the machine; skipped (not failed) when
+/// <see cref="SofficeLocator.Probe"/> finds none. CI (macos-14 + windows-latest)
+/// has no LibreOffice, so these end-to-end soffice tests skip there exactly like
+/// <see cref="BrowserFactAttribute"/> skips the real-browser test — the engine
+/// plumbing (arg builders, locator, fallback, failure maps) is covered
+/// deterministically by the non-soffice tests in this suite.
+/// </summary>
+public sealed class SofficeFactAttribute : FactAttribute
+{
+    /// <param name="needsPdftoppm">PNG tests also require pdftoppm (poppler).</param>
+    public SofficeFactAttribute(bool needsPdftoppm = false)
+    {
+        var info = SofficeLocator.Probe(refresh: true);
+        if (!info.Found)
+        {
+            Skip = "No LibreOffice (soffice) found on this machine; the soffice engine is optional.";
+        }
+        else if (needsPdftoppm && !info.Pdftoppm)
+        {
+            Skip = "No pdftoppm (poppler) found on this machine; soffice PNG needs it.";
+        }
+    }
+}

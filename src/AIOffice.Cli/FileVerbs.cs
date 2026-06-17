@@ -158,17 +158,14 @@ public sealed class FileVerbs
             ["to"] = args.GetOption("to"),
             ["scope"] = scope,
             ["output"] = output is null ? null : _workspace.Resolve(output),
+            // v1.9 optional render engine: chromium (default) | soffice | auto.
+            ["engine"] = args.GetOption("engine"),
         });
         var handler = ResolveHandler(file, kindOverride: null);
 
-        // PNG/PDF are cross-format plumbing (handler artifact -> headless
-        // browser), so they are orchestrated here instead of inside handlers.
-        return args.GetOption("to") switch
-        {
-            "png" => AIOffice.Render.PngRenderVerb.Execute(handler, ctx),
-            "pdf" => AIOffice.Render.PdfRenderVerb.Execute(handler, ctx),
-            _ => handler.Render(ctx),
-        };
+        // PNG/PDF (and the engine-aware fallback for svg/html/text) are
+        // cross-format plumbing orchestrated by the Render layer, not handlers.
+        return AIOffice.Render.RenderDispatch.Execute(handler, ctx, args.GetOption("to"));
     }
 
     public Envelope Validate(ParsedArgs args)

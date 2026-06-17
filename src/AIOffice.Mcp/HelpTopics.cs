@@ -95,9 +95,31 @@ public static class HelpTopics
                 - table-styles    pptx built-in table styles + banded rows on add type "table" (1.4)
                 - print-setup     xlsx print completeness (titles/breaks/fit/center/header-footer) + calc mode/iterative (1.7)
                 - masters         pptx slide/notes/handout masters: set /master[i], /notesMaster, /handoutMaster (M6/1.7)
+                - render-engines  render --engine chromium (default) | soffice (LibreOffice true-fidelity) | auto (1.9)
                 Call office_help {topic:"<name>"} (CLI: aioffice help <name>).
                 """,
                 ["addressing", "selectors", "edit-ops", "bridges"]),
+
+            ["render-engines"] = (
+                """
+                ## render engines (1.9) — render --engine chromium|soffice|auto (png/pdf)
+                The --engine flag is ADDITIVE: omit it (or pass chromium) and every existing render is unchanged.
+                chromium (DEFAULT): screenshots/prints aioffice's own HTML (docx/xlsx) or SVG (pptx) projection via a
+                  headless Chromium (Chrome/Edge/Chromium on PATH or $AIOFFICE_BROWSER). Fast, no Office install; the
+                  layout is aioffice's reconstruction.
+                soffice (TRUE fidelity, optional): hands the ORIGINAL document to a headless LibreOffice.
+                  --to pdf  -> soffice --headless --convert-to pdf (the WHOLE document; scope is ignored, use png for one page).
+                  --to png  -> soffice to pdf, then pdftoppm rasterizes the page (pptx: --scope /slide[N], default 1; docx/xlsx: page 1).
+                              PNG needs pdftoppm (poppler) AND LibreOffice; a missing pdftoppm is unsupported_feature (brew install poppler).
+                  --to svg|html|text -> not supported; falls back to the native/chromium engine with an engine_fallback warning.
+                auto: soffice when doctor finds LibreOffice on this machine, else chromium.
+                Explicit --engine soffice with no LibreOffice -> a clear unsupported_feature error (no silent fallback);
+                auto silently falls back to chromium instead.
+                Requirements: LibreOffice (macOS LibreOffice.app, linux libreoffice pkg, windows installer; $AIOFFICE_SOFFICE
+                  overrides) and poppler pdftoppm for png ($AIOFFICE_PDFTOPPM overrides). office_status / doctor report a
+                  `renderers` object {chromium, libreoffice, poppler} with found+path each.
+                """,
+                ["errors", "envelope"]),
 
             ["audit"] = (
                 """

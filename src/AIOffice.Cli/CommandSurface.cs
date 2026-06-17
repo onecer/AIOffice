@@ -119,6 +119,7 @@ public static class CommandSurface
             [
                 new("to", "html|svg|text|png|pdf", "Output format. html for docx/xlsx, svg or html per slide for pptx; png screenshots via a local Chromium (pptx: one slide, default /slide[1] — use --scope); pdf prints paged output via the same Chromium (pptx: the whole deck, one page per slide)."),
                 new("scope", "<path>", "Render only the node at this path, e.g. /slide[2]."),
+                new("engine", "chromium|soffice|auto", "png/pdf engine (default chromium). soffice = true-fidelity via LibreOffice (needs it installed; png also needs pdftoppm/poppler); auto = soffice if present else chromium. svg/html/text fall back to chromium with an engine_fallback warning. See 'aioffice help render-engines'."),
                 new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope (png/pdf default: source path with .png/.pdf)."),
             ],
             "office_render"),
