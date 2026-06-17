@@ -425,6 +425,39 @@ public sealed class StatisticalFunctionTests : ExcelTestBase
         AssertValidatorClean(file);
     }
 
+    [Fact]
+    public void Aggregate_options_that_do_not_ignore_errors_propagate_them()
+    {
+        var file = SeedColumn();
+        // A6 = #DIV/0!. Options 0/1/4/5 do NOT ignore errors -> the error propagates;
+        // option 6 still ignores it (-> 26). This is the AGGREGATE options fix.
+        Assert.True(EditOps(file, SetOp("/Sheet1/A6", ("value", "=1/0"))).IsOk);
+        var env = EditOps(
+            file,
+            SetOp("/Sheet1/C1", ("value", "=AGGREGATE(9,4,A1:A6)")),   // SUM, opt4: ignore nothing
+            SetOp("/Sheet1/C2", ("value", "=AGGREGATE(1,0,A1:A6)")),   // AVERAGE, opt0
+            SetOp("/Sheet1/C3", ("value", "=AGGREGATE(9,6,A1:A6)")));  // opt6: ignores -> 26
+        Assert.True(env.IsOk, env.ToJson());
+        var (_, c1, _) = RawCell(file, "Sheet1", "C1");
+        var (_, c2, _) = RawCell(file, "Sheet1", "C2");
+        Assert.Equal("#DIV/0!", c1);
+        Assert.Equal("#DIV/0!", c2);
+        Assert.Equal(26.0, GetCached(file, "C3"));
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Aggregate_invalid_options_is_value_error()
+    {
+        var file = SeedColumn();
+        // options must be 0..7; 8 -> #VALUE!.
+        var env = EditOps(file, SetOp("/Sheet1/C1", ("value", "=AGGREGATE(9,8,A1:A5)")));
+        Assert.True(env.IsOk, env.ToJson());
+        var (_, c1, _) = RawCell(file, "Sheet1", "C1");
+        Assert.Equal("#VALUE!", c1);
+        AssertValidatorClean(file);
+    }
+
     // ----- HLOOKUP (already native; verify it keeps working) -----------------
 
     [Fact]

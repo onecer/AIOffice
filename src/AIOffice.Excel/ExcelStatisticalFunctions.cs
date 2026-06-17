@@ -367,10 +367,26 @@ internal static class ExcelStatisticalFunctions
         }
 
         var functionNum = (int)Math.Floor(ToNumber(EvalScalar(sheet, args[0])));
-        // options (args[1]) accepted but not differentiated: this evaluator already
-        // ignores errors and blanks, which covers the common 2/3/6/7 cases; the
-        // hidden-row distinction is not modeled (a documented limitation).
-        var numbers = ReadNumbers(sheet, args[2]); // errors/blanks already dropped
+        var options = (int)Math.Floor(ToNumber(EvalScalar(sheet, args[1])));
+        if (options is < 0 or > 7)
+        {
+            return XLError.IncompatibleValue; // #VALUE! — options must be 0..7
+        }
+
+        // Excel options 2/3/6/7 IGNORE error values; 0/1/4/5 do NOT — an error in the
+        // referenced range then propagates as the result. (The hidden-row distinction
+        // in 1/3/5/7 is not modeled headlessly — a documented limitation.) Blanks are
+        // always skipped by the aggregate functions regardless.
+        if (options is not (2 or 3 or 6 or 7))
+        {
+            var firstError = FirstError(sheet, args[2]);
+            if (firstError is not null)
+            {
+                return firstError.Value;
+            }
+        }
+
+        var numbers = ReadNumbers(sheet, args[2]); // numeric cells; blanks/errors dropped
 
         // 14-17 take a trailing k / q argument.
         double K()
@@ -553,6 +569,31 @@ internal static class ExcelStatisticalFunctions
         return scalar.Type is XLDataType.Number or XLDataType.DateTime
             ? [ToNumber(scalar)]
             : [];
+    }
+
+    /// <summary>The first error value found in a reference's cells, or null if none.
+    /// Used by AGGREGATE options 0/1/4/5, which (unlike 2/3/6/7) do NOT ignore errors —
+    /// an error in the range propagates as the aggregate's result.</summary>
+    private static XLError? FirstError(IXLWorksheet sheet, string reference)
+    {
+        var trimmed = reference.Trim();
+        if (!LooksLikeReference(trimmed))
+        {
+            // A brace literal {…} carries no cell errors; a scalar arg's error would
+            // already have surfaced through EvalScalar.
+            return null;
+        }
+
+        foreach (var cell in ResolveRange(sheet, trimmed).Cells())
+        {
+            var value = ValueOf(cell);
+            if (value.IsError)
+            {
+                return value.GetError();
+            }
+        }
+
+        return null;
     }
 
     /// <summary>True when the text is plausibly a cell/range reference (so we read it as a range, not arithmetic).</summary>

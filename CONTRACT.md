@@ -717,6 +717,27 @@ through the existing op dispatch; no MCP tool-schema change) — nothing removed
 
 Agents that target the 1.9.0 surface are byte-for-byte compatible with 1.10.0.
 
+## 7k. 1.11.0 — xlsx headless function evaluation (additive, surface 1.0)
+
+Package **1.11.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface. There is **no**
+new op / prop / verb / tool — the change is internal to the **write-time formula evaluator**
+(§10): more functions now compute and cache a real value instead of firing
+`formula_not_evaluated`.
+
+- **Newly evaluated + cached at write time** (xlsx): `SMALL` (a bug fix — its twin `LARGE`
+  was already evaluated natively), `RANK` / `RANK.EQ`, `PERCENTILE` / `PERCENTILE.INC`,
+  `QUARTILE` / `QUARTILE.INC`, `CHOOSE`, `OFFSET`, `INDIRECT`, and `AGGREGATE` (function
+  numbers 1–12 and 14–17; the `options` argument is honored — 2/3/6/7 ignore error cells,
+  0/1/4/5 propagate them; the hidden-row distinction is not modeled headlessly).
+- **Still honestly unevaluated** (cache nothing, keep the `formula_not_evaluated` warning):
+  `AGGREGATE` 18/19 (`PERCENTILE.EXC` / `QUARTILE.EXC`) and 13 (`MODE.SNGL`), and
+  `OFFSET` / `INDIRECT` used as a multi-cell range argument to another aggregate (the
+  scalar / top-level use IS evaluated). `HLOOKUP` was already evaluated natively, unchanged.
+
+This only ever turns a `formula_not_evaluated` warning into a correct cached value (or a
+correct Excel error like `#NUM!` / `#N/A` / `#REF!` / `#DIV/0!`); no previously-cached value
+changes. Agents that target the 1.10.0 surface are byte-for-byte compatible with 1.11.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

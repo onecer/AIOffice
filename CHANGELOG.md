@@ -4,6 +4,26 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.11.0 — xlsx headless function evaluation (additive)
+
+`surfaceVersion` stays **1.0**; no new op/prop/verb/tool — the write-time formula evaluator
+now computes + caches more functions instead of firing `formula_not_evaluated`. Agents that
+target 1.10.0 are byte-for-byte compatible with 1.11.0.
+
+### Fixed
+
+- **`SMALL` now evaluates** — it returned `#NAME?` while its twin `LARGE` worked. The
+  reported bug.
+
+### Added — xlsx write-time evaluation
+
+- `RANK`/`RANK.EQ`, `PERCENTILE`/`PERCENTILE.INC`, `QUARTILE`/`QUARTILE.INC`, `CHOOSE`,
+  `OFFSET`, `INDIRECT`, and `AGGREGATE` (function numbers 1–12 and 14–17, with the `options`
+  argument honored — 2/3/6/7 ignore error cells, 0/1/4/5 propagate them) now compute and
+  cache a real value. The `.EXC` AGGREGATE variants (18/19), `MODE.SNGL` (13), and
+  `OFFSET`/`INDIRECT` used as a multi-cell range argument stay honestly unevaluated.
+  `HLOOKUP` was already evaluated natively and is unchanged.
+
 ## 1.10.0 — docx typography primitives (additive)
 
 `surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Additive only —

@@ -93,7 +93,7 @@ Both are useful for testing or for serving binaries from a private mirror:
 
 | Variable                     | Default                                                           | Purpose                                  |
 | ---------------------------- | ---------------------------------------------------------------- | ---------------------------------------- |
-| `AIOFFICE_DOWNLOAD_VERSION`  | `v{package version}` (e.g. `v1.10.0`)                             | Release tag to download.                 |
+| `AIOFFICE_DOWNLOAD_VERSION`  | `v{package version}` (e.g. `v1.11.0`)                             | Release tag to download.                 |
 | `AIOFFICE_DOWNLOAD_BASEURL`  | `https://github.com/onecer/AIOffice/releases/download`           | Base URL for the assets + `SHA256SUMS`.  |
 
 The binary is fetched from `{BASEURL}/{VERSION}/{asset}` and the checksum file
@@ -101,7 +101,7 @@ from `{BASEURL}/{VERSION}/SHA256SUMS`.
 
 ```sh
 # Example: install a specific version from a local mirror
-AIOFFICE_DOWNLOAD_VERSION=v1.10.0 \
+AIOFFICE_DOWNLOAD_VERSION=v1.11.0 \
 AIOFFICE_DOWNLOAD_BASEURL=https://mirror.example.com/aioffice \
 npm install -g aioffice
 ```
