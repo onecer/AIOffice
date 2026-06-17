@@ -688,6 +688,35 @@ the `render` verb (default unchanged), a new additive `renderers` field on
 
 Agents that target the 1.8.0 surface are byte-for-byte compatible with 1.9.0.
 
+## 7j. 1.10.0 — docx typography primitives (additive, surface 1.0)
+
+Package **1.10.0** keeps **`surfaceVersion 1.0`**, the **18 CLI verbs / 17 MCP tools**, and
+every envelope shape, error code, exit code, op/view/tool vocabulary in §§1–7. The changes
+are **additive** — new OPTIONAL run and paragraph props on existing docx paths (they flow
+through the existing op dispatch; no MCP tool-schema change) — nothing removed or renamed.
+
+### docx — run typography (on `set /body/p[i]/run[j]`; also fans out from `set /body/p[i]`)
+
+- **New `set` props** (§4, additive): `highlight` (a NAMED Word highlight color —
+  `yellow|green|cyan|magenta|blue|red|darkBlue|darkCyan|darkGreen|darkMagenta|darkRed|`
+  `darkYellow|darkGray|lightGray|black|white|none`; **not** a hex), `strike` / `doubleStrike`
+  (`w:strike` / `w:dstrike`), `smallCaps` (`w:smallCaps`), `allCaps` (`w:caps`),
+  `superscript` / `subscript` (one `w:vertAlign`; setting one clears the other),
+  `characterSpacing` (points, may be negative; `w:spacing @val` in twentieths). `get` reports
+  each; setting any of these on a paragraph fans it out to every run (like `font`).
+
+### docx — paragraph typography (on `set /body/p[i]`)
+
+- **New `set` props** (§4, additive): `lineSpacing` (a number = line-height multiple →
+  `w:spacing @lineRule="auto"`; or `{atLeast|exactly: points}` → `@lineRule` + `@line`),
+  `keepNext`, `keepLines`, `pageBreakBefore`, `widowControl` (present/absent toggles),
+  `outlineLevel` (0–9; `w:outlineLvl`), `tabStops` (array of `{pos:cm, align?:`
+  `left|center|right|decimal|bar, leader?: none|dot|hyphen|underscore}` → `w:tabs`; `[]`
+  clears). These coexist with the 1.8 `spacingBefore`/`spacingAfter`/`shading`/`border`/
+  `indent*` props on the same paragraph. `get` echoes them all.
+
+Agents that target the 1.9.0 surface are byte-for-byte compatible with 1.10.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

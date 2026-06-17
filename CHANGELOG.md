@@ -4,6 +4,24 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.10.0 — docx typography primitives (additive)
+
+`surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Additive only —
+new optional docx run + paragraph formatting props flowing through the existing set/get op
+dispatch (no MCP tool-schema change). Agents that target the 1.9.0 surface are byte-for-byte
+compatible with 1.10.0.
+
+### Added — docx
+
+- **Run typography** (`set /body/p[i]/run[j]`, also fans out from `set /body/p[i]`):
+  `highlight` (named Word highlight color), `strike`/`doubleStrike`, `smallCaps`/`allCaps`,
+  `superscript`/`subscript`, `characterSpacing` (points).
+- **Paragraph typography** (`set /body/p[i]`): `lineSpacing` (multiple, or
+  `{atLeast|exactly: points}`), `keepNext`, `keepLines`, `pageBreakBefore`, `widowControl`,
+  `outlineLevel` (0–9), `tabStops` (array of `{pos:cm, align?, leader?}`). An agent can now
+  produce double-spaced reports, highlighted/struck text, super/subscripts, keep-with-next
+  headings, page-break-before sections, and dot-leader tabs.
+
 ## 1.9.0 — fidelity: text autofit + LibreOffice render engine (additive)
 
 `surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Additive only —
