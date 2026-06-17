@@ -29,6 +29,21 @@ listing the supported set; capabilities not built yet answer
 
     aioffice edit r.docx --ops '[{"op":"set","path":"/body/p[1]","props":{"shading":"EFF6FF","border":{"style":"single","color":"2563EB","widthPt":1,"sides":"all"},"spacingBefore":8,"spacingAfter":8,"indentLeft":1,"indentRight":1}}]'   # a shaded, boxed callout block
 
+**1.10** paragraph typography (line spacing, keep/break toggles, outline level, tab stops):
+
+| prop            | type          | notes                                                              |
+|-----------------|---------------|--------------------------------------------------------------------|
+| lineSpacing     | number/object | line height. A bare **number** is a multiple → `w:spacing@lineRule="auto"`, `@line=round(multiple*240)` (1.5 → 360, 2 → 480). An **object** `{atLeast:pts}` or `{exactly:pts}` sets a fixed rule → `@lineRule="atLeast"|"exact"`, `@line=pts*20`. `get` reports the multiple, or `{atLeast|exactly: pts}`. Coexists with spacingBefore/After on the same `w:spacing` |
+| keepNext        | bool          | keep with the next paragraph (`w:keepNext`); `false` removes it    |
+| keepLines       | bool          | keep all the paragraph's lines together (`w:keepLines`)            |
+| pageBreakBefore | bool          | force a page break before the paragraph (`w:pageBreakBefore`)     |
+| widowControl    | bool          | prevent a lone first/last line at a page boundary (`w:widowControl`) |
+| outlineLevel    | int 0–9       | outline/TOC level (`w:outlineLvl`); **0-based** — a level-1 heading is 0. Out of range → `invalid_args` |
+| tabStops        | array         | the paragraph's tab stops (`w:tabs`); replaces the whole set, `[]` clears it. Each is `{pos: cm, align?, leader?}` — `align` = left·center·right·decimal·bar (default left), `leader` = none·dot·hyphen·underscore (default none). `pos` is converted to twips (`cm*567`); `get` reports `pos` back in cm (2dp) |
+
+    aioffice edit r.docx --ops '[{"op":"set","path":"/body/p[1]","props":{"lineSpacing":2,"keepNext":true,"outlineLevel":0}}]'   # a double-spaced, kept-together top-level heading
+    aioffice edit r.docx --ops '[{"op":"set","path":"/body/p[1]","props":{"tabStops":[{"pos":12,"align":"right","leader":"dot"}]}}]'   # a dot-leader tab for a table-of-contents row
+
 ## run
 
 | prop      | type   | notes                       |
@@ -41,6 +56,19 @@ listing the supported set; capabilities not built yet answer
 | color     | string | hex RGB, e.g. FF0000        |
 | font      | string | font family name            |
 | rtl       | bool   | M6: right-to-left mark (`w:rtl`) for mixed-direction text |
+
+**1.10** character typography (set on a run, or on a `p` to fan out to every run like `bold`/`font`):
+
+| prop             | type   | notes                                                                       |
+|------------------|--------|-----------------------------------------------------------------------------|
+| highlight        | string | text highlighter (`w:highlight`) — a **named** color only (no hex; that is `shading`): yellow·green·cyan·magenta·blue·red·darkBlue·darkCyan·darkGreen·darkMagenta·darkRed·darkYellow·darkGray·lightGray·black·white·none. Names are case-insensitive; anything else → `invalid_args` |
+| strike           | bool   | single strikethrough (`w:strike`)                                           |
+| doubleStrike     | bool   | double strikethrough (`w:dstrike`)                                          |
+| smallCaps        | bool   | small capitals (`w:smallCaps`)                                              |
+| allCaps          | bool   | all capitals (`w:caps`)                                                     |
+| superscript      | bool   | raise to superscript (`w:vertAlign@val="superscript"`); setting it clears subscript (one shared element); `false` returns to baseline |
+| subscript        | bool   | lower to subscript (`w:vertAlign@val="subscript"`); mutually exclusive with superscript |
+| characterSpacing | number | expand/condense letter spacing in **points** (`w:spacing@val`, in twentieths — `points*20`); may be **negative** to condense. `get` reports points |
 
 ## table / tr / tc
 
