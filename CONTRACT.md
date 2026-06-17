@@ -83,6 +83,7 @@ Every command prints **exactly one** JSON object to stdout:
   | `csv_empty` | a csv import/export produced no rows |
   | `md_block_skipped` · `md_html_skipped` · `md_image_skipped` · `md_link_skipped` | a markdown source had content with no neutral equivalent |
   | `scope_defaulted` | a render scope was defaulted (e.g. a deck rendered slide 1) |
+  | `engine_fallback` | (1.9) `render --engine soffice` for a format soffice can't make (svg/html/text) fell back to the native/chromium engine |
   | `stream_fallback` | a streaming view fell back to loading the whole workbook |
   | `template_unresolved` | one or more `{{placeholders}}` were left unfilled |
   | `toc_pages_unknown` · `toc_refreshed` | a table of contents could not be paginated / was refreshed |
@@ -652,6 +653,40 @@ topics), so the schema token budget is unchanged.
   both reported by `get /style[@id=X]`.
 
 Agents that target the 1.7.0 surface are byte-for-byte compatible with 1.8.0.
+
+## 7i. 1.9.0 — fidelity: text autofit + LibreOffice render engine (additive, surface 1.0)
+
+Package **1.9.0** keeps **`surfaceVersion 1.0`**, the **18 CLI verbs / 17 MCP tools**, and
+every envelope shape, error code, exit code, op/view/tool vocabulary in §§1–7. The changes
+are **additive** — one new OPTIONAL pptx shape prop, one new OPTIONAL `--engine` option on
+the `render` verb (default unchanged), a new additive `renderers` field on
+`doctor`/`office_status`, one new warning code, one new help topic — nothing removed or renamed.
+
+### pptx — text autofit
+
+- **New `set`/`add` shape body prop** (§4/§5, additive): `autofit` on a text shape —
+  `"shrink"` → `a:normAutofit` (PowerPoint shrinks text to fit; the fix for agent text
+  overflow), `"resize"` → `a:spAutoFit` (shape grows to fit), `"none"` → `a:noAutofit`. An
+  object form `{mode:"shrink", fontScale, lineSpaceReduction}` (percent) writes an explicit
+  `a:normAutofit`. Writing `autofit` replaces the single existing bodyPr autofit child; `get`
+  reports `{mode, fontScale?, lineSpaceReduction?}`.
+
+### render — optional LibreOffice (soffice) engine
+
+- **New `render` option** (additive): `--engine chromium|soffice|auto` (default `chromium` —
+  existing behavior byte-for-byte unchanged). `soffice` renders `--to pdf` (whole document,
+  high fidelity, via LibreOffice) and `--to png` (per page via `pdftoppm`, the page from
+  `--scope /slide[N]`); `--to svg|html|text` fall back to the native/chromium engine with the
+  new `engine_fallback` warning. `auto` uses soffice when available, else chromium. An explicit
+  `--engine soffice` with no LibreOffice errors with an install hint; soffice `png` also needs
+  `pdftoppm` (poppler). Successful soffice renders carry `data.engine:"soffice"`.
+- **New `doctor` / `office_status` field** (additive): a `renderers` object
+  `{chromium, libreoffice, poppler}` (each `{found, path}`); existing fields unchanged.
+  `AIOFFICE_SOFFICE` / `AIOFFICE_PDFTOPPM` env overrides.
+- **New warning code** (§2, additive): `engine_fallback`.
+- **New help topic** (additive): `render-engines`.
+
+Agents that target the 1.8.0 surface are byte-for-byte compatible with 1.9.0.
 
 ## 8. What is experimental (NOT frozen)
 

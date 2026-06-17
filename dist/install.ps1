@@ -13,11 +13,11 @@
 
     or, with a pinned version / custom directory:
 
-      $env:VERSION = "v1.8.0"; $env:AIOFFICE_BIN = "C:\tools\aioffice"
+      $env:VERSION = "v1.9.0"; $env:AIOFFICE_BIN = "C:\tools\aioffice"
       irm https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.ps1 | iex
 
 .PARAMETER Version
-    Release tag to install (e.g. v1.8.0). Defaults to $env:VERSION, then the
+    Release tag to install (e.g. v1.9.0). Defaults to $env:VERSION, then the
     latest GitHub release, then the hardcoded fallback.
 
 .PARAMETER InstallDir
@@ -34,7 +34,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $Repo            = "onecer/AIOffice"
-$FallbackVersion = "v1.8.0"
+$FallbackVersion = "v1.9.0"
 
 function Write-Info($msg) { Write-Host "aioffice-install: $msg" }
 function Die($msg) { Write-Error "aioffice-install: $msg"; exit 1 }

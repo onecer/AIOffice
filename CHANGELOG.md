@@ -4,6 +4,55 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.9.0 — fidelity: text autofit + LibreOffice render engine (additive)
+
+`surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Additive only —
+one new optional pptx shape prop, one new optional `render --engine` option (default behavior
+byte-for-byte unchanged), an additive `renderers` field on `doctor`/`office_status`, one new
+warning (`engine_fallback`), one new help topic (`render-engines`). Agents that target the
+1.8.0 surface are byte-for-byte compatible with 1.9.0.
+
+### Added — pptx
+
+- **Text autofit** (`set`/`add` shape prop `autofit`): `"shrink"` → `a:normAutofit`
+  (PowerPoint shrinks text to fit its box — the fix for agent text overflow), `"resize"` →
+  `a:spAutoFit` (shape grows to fit), `"none"` → `a:noAutofit`; object form
+  `{mode:"shrink", fontScale, lineSpaceReduction}` writes an explicit scale. `get` reports it.
+
+### Added — render / cross-cutting
+
+- **Optional LibreOffice render engine** (`render --engine chromium|soffice|auto`, default
+  `chromium`): `soffice` produces true-fidelity `--to pdf` (whole document) and `--to png`
+  (per page via `pdftoppm`, page from `--scope`); `svg|html|text` fall back to the native
+  engine with an `engine_fallback` warning. `auto` uses LibreOffice when present, else chromium.
+- **`doctor` / `office_status` `renderers` probe**: `{chromium, libreoffice, poppler}` each
+  `{found, path}` (`AIOFFICE_SOFFICE` / `AIOFFICE_PDFTOPPM` overrides).
+- **New help topic** `render-engines`.
+
+## 1.8.0 — design depth: fills, fonts, brand colors (additive)
+
+`surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Additive visual
+primitives so an agent can derive a per-brand look instead of default-white. Agents that
+target the 1.7.0 surface are byte-for-byte compatible with 1.8.0.
+
+### Added — pptx
+
+- **Gradient fill** (`gradient` prop) on shapes and slide/master/layout backgrounds; **image
+  (picture) fill** (`image` prop) on shapes and backgrounds; **master theme fonts**
+  (`majorFont`/`minorFont` on `set /master[m]`).
+
+### Added — xlsx
+
+- **`seriesColors`** chart prop (brand-match chart palette, on `add`/`set` chart); expanded
+  **numberFormat presets** (`usd-millions`, `usd-thousands`, `millions`, `thousands-k`,
+  `percent-0|1|2`, `accounting-eur|gbp`); **`gradientFill`** cell/range prop.
+
+### Added — docx
+
+- **Paragraph visuals** on `/body/p[i]`: `shading`, `border`, `spacingBefore`/`spacingAfter`,
+  `indentLeft`/`indentRight` (callout & lead blocks); **custom-style** `font`/`next`;
+  **run-level `font`** (implements the previously documented-but-missing prop).
+
 ## 1.7.0 — print readiness, camera tool, calc mode, deeper equations (additive)
 
 `surfaceVersion` stays **1.0**; **18 CLI verbs / 17 MCP tools** unchanged. Every change is

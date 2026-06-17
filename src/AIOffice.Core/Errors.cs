@@ -138,14 +138,18 @@ public static class WarningCodes
     /// <summary>A table of contents was refreshed from the current headings.</summary>
     public const string TocRefreshed = "toc_refreshed";
 
+    /// <summary>A <c>render --engine soffice</c> request for a format the soffice engine
+    /// does not produce (svg/html/text) fell back to the native/chromium engine.</summary>
+    public const string EngineFallback = "engine_fallback";
+
     /// <summary>The complete, closed set of warning codes, for the schema command.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         AlreadyRunning, BibliographyCached, CaptionNumbersCached, ConvertLossy, CsvEmpty, DiffTruncated,
-        EquationNumbersCached, EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated, GoalSeekNoSolution,
-        IndexCached, LinkedPictureStatic, MdBlockSkipped, MdHtmlSkipped, MdImageSkipped, MdLinkSkipped, Model3DAsMedia,
-        ResultTruncated, ScopeDefaulted, StreamFallback, TableFormulaCached, TemplateUnresolved, TocPagesUnknown,
-        TocRefreshed,
+        EngineFallback, EquationNumbersCached, EquationPartial, FiguresCached, FindNoMatch, FormulaNotEvaluated,
+        GoalSeekNoSolution, IndexCached, LinkedPictureStatic, MdBlockSkipped, MdHtmlSkipped, MdImageSkipped,
+        MdLinkSkipped, Model3DAsMedia, ResultTruncated, ScopeDefaulted, StreamFallback, TableFormulaCached,
+        TemplateUnresolved, TocPagesUnknown, TocRefreshed,
     ];
 }
 

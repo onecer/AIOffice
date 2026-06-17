@@ -109,6 +109,9 @@ Internalize these five ideas and you will drive AIOffice correctly:
    and **any file to PNG or PDF** via the system browser — no Office. After a visual edit,
    `render --to png` and actually *look* at the result, then fix. For non-visual problems
    (schema violations, dangling references) use `validate` — it is cheaper than rendering.
+   The default renderer is a fast approximation; for **true Office fidelity** add
+   `--engine soffice` (or `--engine auto`) to render pdf/png via LibreOffice when it is
+   installed (`doctor` reports availability under `renderers`; png also needs poppler).
 
 5. **Sandbox + snapshots.** All file access is confined to a workspace (default: cwd, or
    `--workspace <dir>` / `AIOFFICE_WORKSPACE`). A path escaping it fails with `sandbox_denied`.
