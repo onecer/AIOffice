@@ -386,6 +386,10 @@ public sealed partial class ExcelHandler
             freezeRows = sheet.SheetView.SplitRow > 0 ? sheet.SheetView.SplitRow : (int?)null,
             freezeCols = sheet.SheetView.SplitColumn > 0 ? sheet.SheetView.SplitColumn : (int?)null,
             autoFilter = sheet.AutoFilter.IsEnabled ? sheet.AutoFilter.Range?.RangeAddress.ToString() : null,
+            // (1.12, additive) the active per-column filter criteria (values/custom),
+            // read raw from the worksheet's <autoFilter> element; null when the filter
+            // is just enabled (no column carries a criterion) or absent.
+            autoFilterColumns = sheet.AutoFilter.IsEnabled ? ExcelAutoFilter.Read(file, sheet.Name) : null,
             // Embedded objects live in raw package parts ClosedXML cannot see;
             // surface a count so 'get' on a sheet hints at them (polish, M10).
             embeds = ExcelEmbeds.ListOnSheet(file, sheet.Name).Count,

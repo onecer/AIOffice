@@ -86,8 +86,20 @@ public sealed partial class ExcelHandler
                 "Address the data including its header row, e.g. {op:set, path:/Sheet1/A1:D20, props:{autoFilter:true}}.");
         }
 
-        var enable = BoolPropValue(node, "autoFilter", index);
         var sheet = target.Sheet;
+        var requested = target.Range!.RangeAddress.ToString();
+
+        // (1.12, additive) the criteria form — an object {column, values|criteria} or
+        // an array of them — sets a real applied filter that HIDES the non-matching
+        // rows. The bool form below is unchanged.
+        if (node is JsonObject or JsonArray)
+        {
+            GuardSingleFilter(sheet, requested, index);
+            applied.AddRange(ExcelAutoFilter.Apply(sheet, target.Range!, node, index));
+            return;
+        }
+
+        var enable = BoolPropValue(node, "autoFilter", index);
         if (!enable)
         {
             sheet.AutoFilter.Clear();
@@ -95,7 +107,14 @@ public sealed partial class ExcelHandler
             return;
         }
 
-        var requested = target.Range!.RangeAddress.ToString();
+        GuardSingleFilter(sheet, requested, index);
+        target.Range!.SetAutoFilter();
+        applied.Add("autoFilter");
+    }
+
+    /// <summary>Excel allows one autofilter per sheet; a second range is invalid_args with the clear recipe.</summary>
+    private static void GuardSingleFilter(IXLWorksheet sheet, string? requested, int index)
+    {
         if (sheet.AutoFilter.IsEnabled &&
             sheet.AutoFilter.Range?.RangeAddress.ToString() is { } existing &&
             !string.Equals(existing, requested, StringComparison.OrdinalIgnoreCase))
@@ -106,9 +125,6 @@ public sealed partial class ExcelHandler
                 "Clear it first with {op:set, path:" + ExcelPaths.SheetPath(sheet) + "/" + existing +
                 ", props:{autoFilter:false}}, then set the new range.");
         }
-
-        target.Range!.SetAutoFilter();
-        applied.Add("autoFilter");
     }
 
     // ----- page setup -----------------------------------------------------------

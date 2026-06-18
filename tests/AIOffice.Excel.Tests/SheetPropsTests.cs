@@ -153,6 +153,243 @@ public sealed class SheetPropsTests : ExcelTestBase
         Assert.Contains("range", envelope.Error.Message, StringComparison.Ordinal);
     }
 
+    // ----- autofilter criteria (1.12) ------------------------------------------
+
+    /// <summary>A Region/Amount table: header + 4 rows over A1:B5.</summary>
+    private string CreateFilterTable()
+    {
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1:B5", ("values", new JsonArray(
+                new JsonArray("Region", "Amount"),
+                new JsonArray("East", 10),
+                new JsonArray("West", 200),
+                new JsonArray("North", 30),
+                new JsonArray("South", 400))))).IsOk);
+        return file;
+    }
+
+    private static bool RowHidden(SpreadsheetDocument document, int rowNumber, string sheet = "Sheet1")
+    {
+        var row = RawSheet(document, sheet).Descendants<S.Row>()
+            .FirstOrDefault(r => r.RowIndex?.Value == (uint)rowNumber);
+        return row?.Hidden?.Value == true;
+    }
+
+    [Fact]
+    public void AutoFilter_values_filter_hides_nonmatching_rows_and_round_trips()
+    {
+        var file = CreateFilterTable();
+
+        var values = new JsonObject { ["column"] = "Region", ["values"] = new JsonArray("East", "West") };
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", values)));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            // East (row 2) and West (row 3) stay; North (4) and South (5) hide.
+            Assert.False(RowHidden(document, 2));
+            Assert.False(RowHidden(document, 3));
+            Assert.True(RowHidden(document, 4));
+            Assert.True(RowHidden(document, 5));
+
+            var filter = RawSheet(document).Elements<S.AutoFilter>().Single();
+            var column = filter.Elements<S.FilterColumn>().Single();
+            Assert.Equal(0u, column.ColumnId?.Value); // first column of the range
+            var vals = column.Elements<S.Filters>().Single().Elements<S.Filter>()
+                .Select(f => f.Val?.Value).ToList();
+            Assert.Equal(["East", "West"], vals);
+        }
+
+        var sheetInfo = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))));
+        Assert.Equal("A1:B5", sheetInfo["autoFilter"]!.GetValue<string>());
+        var columns = sheetInfo["autoFilterColumns"]!.AsArray();
+        Assert.Single(columns);
+        Assert.Equal("A", columns[0]!["column"]!.GetValue<string>());
+        Assert.Equal("values", columns[0]!["kind"]!.GetValue<string>());
+        Assert.Equal(
+            ["East", "West"],
+            columns[0]!["values"]!.AsArray().Select(v => v!.GetValue<string>()).ToList());
+    }
+
+    [Fact]
+    public void AutoFilter_comparison_filter_hides_nonmatching_rows_and_round_trips()
+    {
+        var file = CreateFilterTable();
+
+        // Amount > 100 keeps West (200) and South (400); hides East (10), North (30).
+        var criteria = new JsonObject { ["column"] = "Amount", ["criteria"] = ">100" };
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria)));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            Assert.True(RowHidden(document, 2)); // East 10
+            Assert.False(RowHidden(document, 3)); // West 200
+            Assert.True(RowHidden(document, 4)); // North 30
+            Assert.False(RowHidden(document, 5)); // South 400
+
+            var column = RawSheet(document).Elements<S.AutoFilter>().Single()
+                .Elements<S.FilterColumn>().Single();
+            Assert.Equal(1u, column.ColumnId?.Value); // second column of the range
+            var custom = column.Elements<S.CustomFilters>().Single().Elements<S.CustomFilter>().Single();
+            Assert.Equal(S.FilterOperatorValues.GreaterThan, custom.Operator?.Value);
+            Assert.Equal("100", custom.Val?.Value);
+        }
+
+        var columns = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["autoFilterColumns"]!.AsArray();
+        Assert.Single(columns);
+        Assert.Equal("B", columns[0]!["column"]!.GetValue<string>());
+        Assert.Equal("custom", columns[0]!["kind"]!.GetValue<string>());
+        Assert.Equal("greaterThan", columns[0]!["criteria"]![0]!["operator"]!.GetValue<string>());
+        Assert.Equal("100", columns[0]!["criteria"]![0]!["value"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void AutoFilter_wildcard_text_criteria_uses_a_contains_filter()
+    {
+        var file = CreateFilterTable();
+
+        // "*est*" is a contains filter on the inner text "est": only West contains it
+        // (East = E-a-s-t has no "est"); North and South hide too.
+        var criteria = new JsonObject { ["column"] = "A", ["criteria"] = "*est*" };
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        Assert.True(RowHidden(document, 2)); // East
+        Assert.False(RowHidden(document, 3)); // West
+        Assert.True(RowHidden(document, 4)); // North
+        Assert.True(RowHidden(document, 5)); // South
+
+        var custom = RawSheet(document).Elements<S.AutoFilter>().Single()
+            .Elements<S.FilterColumn>().Single()
+            .Elements<S.CustomFilters>().Single().Elements<S.CustomFilter>().Single();
+        Assert.Equal("*est*", custom.Val?.Value); // a contains filter is stored as *inner*
+    }
+
+    [Fact]
+    public void AutoFilter_multiple_columns_apply_an_and_filter()
+    {
+        var file = CreateFilterTable();
+
+        var filters = new JsonArray(
+            new JsonObject { ["column"] = "Region", ["values"] = new JsonArray("East", "West", "South") },
+            new JsonObject { ["column"] = "Amount", ["criteria"] = ">=200" });
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", filters))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            // Region in {East,West,South} AND Amount>=200 → West(200), South(400).
+            Assert.True(RowHidden(document, 2)); // East 10 (fails amount)
+            Assert.False(RowHidden(document, 3)); // West 200
+            Assert.True(RowHidden(document, 4)); // North (fails region)
+            Assert.False(RowHidden(document, 5)); // South 400
+        }
+
+        var columns = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["autoFilterColumns"]!.AsArray();
+        Assert.Equal(2, columns.Count);
+    }
+
+    [Fact]
+    public void AutoFilter_criteria_by_one_based_index_resolves_within_the_range()
+    {
+        var file = CreateFilterTable();
+
+        // index 2 within A1:B5 is the Amount column.
+        var criteria = new JsonObject { ["column"] = 2, ["criteria"] = "<100" };
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        Assert.False(RowHidden(document, 2)); // East 10
+        Assert.True(RowHidden(document, 3)); // West 200
+        Assert.False(RowHidden(document, 4)); // North 30
+        Assert.True(RowHidden(document, 5)); // South 400
+    }
+
+    [Fact]
+    public void AutoFilter_unknown_column_is_invalid_args_with_header_candidates()
+    {
+        var file = CreateFilterTable();
+
+        var criteria = new JsonObject { ["column"] = "Nope", ["criteria"] = ">1" };
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("Nope", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.NotNull(envelope.Error.Candidates);
+        Assert.Contains("Region", envelope.Error.Candidates!);
+        Assert.Contains("Amount", envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void AutoFilter_column_index_outside_the_range_is_invalid_args()
+    {
+        var file = CreateFilterTable();
+
+        var criteria = new JsonObject { ["column"] = 5, ["criteria"] = ">1" }; // only 2 columns
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("outside the filter range", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutoFilter_entry_needs_exactly_one_of_values_or_criteria()
+    {
+        var file = CreateFilterTable();
+
+        var both = new JsonObject
+        {
+            ["column"] = "Region",
+            ["values"] = new JsonArray("East"),
+            ["criteria"] = ">1",
+        };
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", both)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("exactly one", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutoFilter_false_clears_a_criteria_filter_and_unhides_rows()
+    {
+        var file = CreateFilterTable();
+        var criteria = new JsonObject { ["column"] = "Amount", ["criteria"] = ">100" };
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", criteria))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", false))).IsOk);
+
+        AssertValidatorClean(file);
+        var sheetInfo = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))));
+        Assert.Null(sheetInfo["autoFilter"]);
+        Assert.Null(sheetInfo["autoFilterColumns"]);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        Assert.Empty(RawSheet(document).Elements<S.AutoFilter>());
+    }
+
+    [Fact]
+    public void AutoFilter_bool_form_still_reports_no_criteria_columns()
+    {
+        var file = CreateFilterTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1:B5", ("autoFilter", true))).IsOk);
+
+        var sheetInfo = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))));
+        Assert.Equal("A1:B5", sheetInfo["autoFilter"]!.GetValue<string>());
+        // A plain enabled filter carries no per-column criteria.
+        Assert.Null(sheetInfo["autoFilterColumns"]);
+    }
+
     // ----- page setup -----------------------------------------------------------
 
     [Fact]

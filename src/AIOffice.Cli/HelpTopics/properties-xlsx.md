@@ -92,7 +92,7 @@ props:{value:"=SUM(SalesData)"}}` evaluates and caches a real value.
 | prop                    | target      | notes                              |
 |-------------------------|-------------|------------------------------------|
 | freezeRows, freezeCols  | sheet       | 0 clears that axis                 |
-| autoFilter (bool)       | range       | one filter per sheet; false clears |
+| autoFilter              | range       | bool toggles the dropdowns; an object/array applies real criteria (**1.12**, see **autofilter criteria**) |
 | orientation, paperSize  | sheet       | landscape/portrait; A4/Letter/…    |
 | fitToWidth, fitToHeight | sheet       | print scaling, pages               |
 | printArea               | sheet       | e.g. "A1:F40"                      |
@@ -110,6 +110,46 @@ Full grammar + examples: `aioffice help print-setup`.
 workbook calculation settings. Streaming reads (M3): files
 over 20 MB (or `stream:true`) answer `read --view stats|text` and cell/range
 `get` via a SAX scan without loading the workbook DOM.
+
+## autofilter criteria (1.12, on a range path)
+
+The `autoFilter` sheet-prop accepts a **criteria** object/array as well as the M3
+bool. A criteria filter is *applied*: the non-matching rows are hidden headlessly
+(a real filtered view a headless reader sees) and Excel re-applies it on open.
+
+| form                                   | meaning                                      |
+|----------------------------------------|----------------------------------------------|
+| `{autoFilter:true\|false}`             | enable / clear the filter (unchanged)        |
+| `{autoFilter:{column, values:[…]}}`    | **values** filter: keep rows whose column equals one of the listed values |
+| `{autoFilter:{column, criteria:"…"}}`  | **comparison/text** filter (see grammar)     |
+| `{autoFilter:[{column,…}, …]}`         | several columns, ANDed together              |
+
+`column` resolves against the filter range as a **header name** (the first row of
+the range), a **column letter** inside the range, or a **1-based index** within
+the range; an unresolved name is `invalid_args` with the headers as candidates.
+
+`criteria` grammar — a leading operator then a value, or wildcard text:
+
+| criteria      | keeps rows where the column …                       |
+|---------------|-----------------------------------------------------|
+| `">100"`      | is greater than 100 (`>= <= < >` and `=` likewise)  |
+| `"<=0"`       | is at most 0                                         |
+| `"<>0"` / `"!=0"` | is not equal to 0                               |
+| `"*text*"`    | contains `text` (wildcards: `*pre`, `suf*`, `*mid*`)|
+| `"East"`      | equals `East` (a bare value with no operator)       |
+
+      # values filter on a header column
+      {op:set, path:/Sheet1/A1:D20, props:{autoFilter:{column:"Region", values:["East","West"]}}}
+      # comparison filter on another column (index/letter also work)
+      {op:set, path:/Sheet1/A1:D20, props:{autoFilter:{column:"Amount", criteria:">100"}}}
+      # two columns at once (ANDed)
+      {op:set, path:/Sheet1/A1:D20, props:{autoFilter:[
+        {column:"Region", values:["East"]}, {column:"Amount", criteria:">=200"}]}}
+
+`get /Sheet1` reports the active filters under **`autoFilterColumns`** (per column:
+`kind` `values`/`custom`, the `values`, or the `criteria` operator + value); a
+plain bool-enabled filter omits it. `{autoFilter:false}` clears the criteria and
+un-hides the rows.
 
 ## in-place streaming write (M6 flagship)
 
