@@ -4,6 +4,30 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.12.0 — completion depth: edit-chart-in-place · more docx fields · xlsx autofilter criteria (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three half-implemented capabilities
+completed with additive props/kinds. Agents that target 1.11.0 are byte-for-byte compatible
+with 1.12.0.
+
+### Added — pptx
+
+- **Edit an existing chart in place**: `set /slide[i]/chart[k]` now accepts `title` (or `false`
+  to remove), `categories`, and `series` (`{name?, values}`) — rewriting both the chart caches
+  and the embedded Edit-Data workbook, instead of requiring remove-and-re-add.
+
+### Added — docx
+
+- **More `add type:field` kinds**: `fileName`, `numWords`, `numChars`, `author`, `createDate`,
+  `saveDate`, `printDate`, `ref` (to a bookmark; text/page/aboveBelow), `hyperlink`, `fillIn` —
+  each with a headless cached value (e.g. NUMWORDS = real body word count).
+
+### Added — xlsx
+
+- **AutoFilter criteria**: the sheet/table `autoFilter` prop now takes `{column, values:[…]}`
+  or `{column, criteria:">100"|"*text*"}` (or an array per column), applying a real filter that
+  hides non-matching rows; `get` reports the active filters. The bool form is unchanged.
+
 ## 1.11.0 — xlsx headless function evaluation (additive)
 
 `surfaceVersion` stays **1.0**; no new op/prop/verb/tool — the write-time formula evaluator

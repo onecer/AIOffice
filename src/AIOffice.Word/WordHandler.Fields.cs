@@ -54,12 +54,11 @@ public sealed partial class WordHandler
         var props = op.Props?.DeepClone().AsObject() ?? [];
 
         var kind = props["kind"] is { } kindNode ? NodeToString(kindNode) : null;
-        // props.author doubles as the AUTHOR-field override; for every other kind it
-        // is the batch-author noise the generic prop path strips, so drop it there.
-        if (kind != "author")
-        {
-            props.Remove("author");
-        }
+        // props.author is the batch-author noise (the edit's revision author) that the
+        // generic prop path strips. The AUTHOR field reads the document's own author
+        // (core property) at cache time and Word recomputes it on open, so an inline
+        // override is not supported — drop it for every kind.
+        props.Remove("author");
 
         if (kind is null || !FieldInstructions.TryGetValue(kind, out var instructionHead))
         {

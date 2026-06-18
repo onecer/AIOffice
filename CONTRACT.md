@@ -738,6 +738,41 @@ This only ever turns a `formula_not_evaluated` warning into a correct cached val
 correct Excel error like `#NUM!` / `#N/A` / `#REF!` / `#DIV/0!`); no previously-cached value
 changes. Agents that target the 1.10.0 surface are byte-for-byte compatible with 1.11.0.
 
+## 7l. 1.12.0 — completion depth: edit-chart, more docx fields, xlsx autofilter criteria (additive, surface 1.0)
+
+Package **1.12.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only
+(new OPTIONAL props / kinds / criteria on existing paths; no MCP tool-schema change). Three
+half-implemented capabilities are completed.
+
+### pptx — edit an existing chart in place
+
+- **`set /slide[i]/chart[k]` data props** (§4, additive): `title` (string, or `false` to
+  remove), `categories` (array of labels), `series` (array of `{name?, values}`) now edit an
+  existing native chart instead of returning `unsupported_feature`. Both the chart-XML caches
+  AND the embedded "Edit Data" workbook are rewritten. Series match by index; a replacement
+  `values` length must equal the category count; bubble (x/y/size) charts still require
+  remove-and-re-add. `add type:chart` and the v1.4 `set {embedData:true}` path are unchanged.
+
+### docx — more field kinds
+
+- **New `add type:field` kinds** (§5, additive), each writing the correct field instruction +
+  a headless cached value: `fileName` (FILENAME, optional `includePath`), `numWords` / `numChars`
+  (NUMWORDS / NUMCHARS — real body counts), `author` (AUTHOR, from the core creator),
+  `createDate` / `saveDate` / `printDate` (CREATEDATE / SAVEDATE / PRINTDATE, optional `format`),
+  `ref` (REF `{bookmark, mode?: text|page|aboveBelow}`, cached = the bookmark text), `hyperlink`
+  (HYPERLINK `{url, linkText?}`), `fillIn` (FILLIN `{prompt, default?}`). `get` reports the kind
+  + cached value.
+
+### xlsx — AutoFilter criteria
+
+- **Extended `autoFilter` prop** (§4, additive): besides the existing bool, a sheet/table
+  `autoFilter` now accepts `{column, values:[…]}` (a values filter) or `{column, criteria:
+  ">100" | "<>0" | "*text*"}` (comparison / wildcard), or an array of such per-column criteria
+  (ANDed). The filter is applied — non-matching rows are hidden headlessly — and `get` reports
+  the active filters. `column` resolves by header name, column letter, or 1-based index.
+
+Agents that target the 1.11.0 surface are byte-for-byte compatible with 1.12.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:
