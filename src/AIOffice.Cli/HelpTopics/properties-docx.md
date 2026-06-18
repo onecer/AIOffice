@@ -108,17 +108,24 @@ with `{op:"add", path:"/header[1]", type:"header", props:{text, align?}}`
 (same for footers) — adding them wires `w:titlePg` / `w:evenAndOddHeaders`
 automatically, all three variants coexist, and `get` reports the variant.
 
-## field (M5, +1.7 kinds)
+## field (M5, +1.7 kinds, +1.12 document-info & reference kinds)
 
 | prop        | type   | notes                                          |
 |-------------|--------|------------------------------------------------|
-| kind        | string | pageNumber (PAGE) · numPages (NUMPAGES) · date (DATE) · docTitle (TITLE) · **styleRef (STYLEREF, 1.7)** · **symbol (SYMBOL, 1.7)** · **quote (QUOTE, 1.7)** |
-| format      | string | date only: a format picture, e.g. `"yyyy"`     |
+| kind        | string | pageNumber (PAGE) · numPages (NUMPAGES) · date (DATE) · docTitle (TITLE) · **styleRef (STYLEREF, 1.7)** · **symbol (SYMBOL, 1.7)** · **quote (QUOTE, 1.7)** · **fileName (FILENAME, 1.12)** · **numWords (NUMWORDS, 1.12)** · **numChars (NUMCHARS, 1.12)** · **author (AUTHOR, 1.12)** · **createDate (CREATEDATE, 1.12)** · **saveDate (SAVEDATE, 1.12)** · **printDate (PRINTDATE, 1.12)** · **ref (REF, 1.12)** · **hyperlink (HYPERLINK, 1.12)** · **fillIn (FILLIN, 1.12)** |
+| format      | string | date / createDate / saveDate / printDate: a format picture, e.g. `"yyyy"` |
 | leadingText | string | literal text emitted before the field          |
 | styleRef    | string | **styleRef kind**: the style name to echo, e.g. `"Heading 1"` (running headers) |
 | charCode    | int    | **symbol kind**: a decimal or `0x`-hex character code, e.g. `169` → © |
 | symbolFont  | string | **symbol kind**, optional: the glyph font, e.g. `"Wingdings"` |
 | quoteText   | string | **quote kind**: the literal text the QUOTE field inserts |
+| includePath | bool   | **fileName kind**, optional: include the full path (`\p`); cached = absolute path |
+| bookmark    | string | **ref kind**: the bookmark name to reference (a valid Word bookmark name) |
+| mode        | string | **ref kind**, optional: `text` (default, cached = the bookmark's text) · `page` · `aboveBelow` |
+| url         | string | **hyperlink kind**: the link target, e.g. `"https://example.com"` |
+| linkText    | string | **hyperlink kind**, optional: the display text (cached); defaults to the url |
+| prompt      | string | **fillIn kind**: the prompt Word shows the user when refreshing the field |
+| default     | string | **fillIn kind**, optional: the default/placeholder text (cached) |
 
 `'Page X of Y'` footer: add a `pageNumber` field to `/footer[1]/p[1]`, then a
 `numPages` field with `leadingText:" of "`.
@@ -129,6 +136,21 @@ open / `F9`):
     aioffice edit r.docx --ops '[{"op":"add","path":"/header[1]/p[1]","type":"field","props":{"kind":"styleRef","styleRef":"Heading 1"}}]'   # running header echoing the nearest Heading 1
     aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"symbol","charCode":169,"symbolFont":"Symbol"}}]'   # © glyph
     aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"quote","quoteText":"Confidential"}}]'
+
+v1.12 document-info & reference fields each cache a value computed headlessly, so
+the document reads sensibly before Word refreshes (open / `F9`):
+
+    aioffice edit r.docx --ops '[{"op":"add","path":"/footer[1]/p[1]","type":"field","props":{"kind":"fileName"}}]'                          # cached = the file name; includePath:true caches the full path (\p)
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"numWords"}}]'                            # cached = the body word count (numChars caches the character count)
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"author"}}]'                              # cached = the core-property creator
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"createDate","format":"yyyy-MM-dd"}}]'    # createDate/saveDate from core created/modified; printDate caches "now"; all honor props.format
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"ref","bookmark":"Summary"}}]'           # REF to a bookmark; cached = the bookmark's text (mode text); mode page/aboveBelow cache a page placeholder
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"hyperlink","url":"https://example.com","linkText":"site"}}]'   # HYPERLINK field; cached = the link text (or url)
+    aioffice edit r.docx --ops '[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"fillIn","prompt":"Enter your name","default":"Name"}}]'        # interactive FILLIN prompt; cached = the default text
+
+`get` (and `read --view structure`) report every field's kind via the field-kind
+reverse lookup, so a `ref`/`author`/`numWords` field reads back under the
+paragraph's `fields` list just like the older kinds.
 
 ## watermark (M4 text, +1.7 picture)
 

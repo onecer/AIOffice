@@ -279,5 +279,328 @@ public sealed class FieldTests : WordTestBase
         // The pre-1.7 kinds are still offered (additive, nothing removed).
         Assert.Contains("pageNumber", ex.Candidates!);
         Assert.Contains("date", ex.Candidates!);
+        // 1.12 document-info & reference kinds are offered too.
+        Assert.Contains("fileName", ex.Candidates!);
+        Assert.Contains("numWords", ex.Candidates!);
+        Assert.Contains("author", ex.Candidates!);
+        Assert.Contains("ref", ex.Candidates!);
+        Assert.Contains("hyperlink", ex.Candidates!);
+        Assert.Contains("fillIn", ex.Candidates!);
+    }
+
+    // --------------------------------------- v1.12 document-info & reference fields
+
+    [Fact]
+    public void FileName_field_caches_the_document_file_name()
+    {
+        var file = CreateDoc("report.docx", title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"fileName"}}]
+            """);
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("fileName", summary["kind"]!.GetValue<string>());
+        Assert.Equal("report.docx", summary["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("FILENAME", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.DoesNotContain("\\p", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("report.docx", field.InnerText);
+        }
+
+        var props = Get(file, "/body/p[1]")["properties"]!;
+        Assert.Contains("fileName", props["fields"]!.AsArray().Select(f => f!.GetValue<string>()));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void FileName_field_with_include_path_adds_the_p_switch_and_full_path()
+    {
+        var file = CreateDoc("report.docx", title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"fileName","includePath":true}}]
+            """);
+        var cached = Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>();
+        Assert.Equal(Path.GetFullPath(file), cached);
+        Assert.EndsWith("report.docx", cached, StringComparison.Ordinal);
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("FILENAME \\p", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void NumWords_field_caches_the_body_word_count()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"one two three four five"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"numWords"}}]
+            """);
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("numWords", summary["kind"]!.GetValue<string>());
+        Assert.Equal("5", summary["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("NUMWORDS", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void NumChars_field_caches_the_body_character_count()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"abcde"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"numChars"}}]
+            """);
+        var cached = Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>();
+        Assert.Equal("5", cached);
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("NUMCHARS", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Author_field_caches_the_core_property_creator()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"set","path":"/properties","props":{"author":"Ada Lovelace"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"author"}}]
+            """);
+        var cached = Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>();
+        Assert.Equal("Ada Lovelace", cached);
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("AUTHOR", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("Ada Lovelace", field.InnerText);
+        }
+
+        // props.author is the author override here, not stripped batch-author noise.
+        var props = Get(file, "/body/p[1]")["properties"]!;
+        Assert.Contains("author", props["fields"]!.AsArray().Select(f => f!.GetValue<string>()));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void CreateDate_field_caches_the_core_created_date_with_the_format_picture()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"set","path":"/properties","props":{"created":"2026-06-13T10:00:00Z"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"createDate","format":"yyyy"}}]
+            """);
+        Assert.Equal("2026", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("CREATEDATE \\@ \"yyyy\"", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void SaveDate_field_caches_the_core_modified_date()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"set","path":"/properties","props":{"modified":"2026-06-14T08:00:00Z"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"saveDate","format":"yyyy-MM-dd"}}]
+            """);
+        Assert.Equal("2026-06-14", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("SAVEDATE", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void PrintDate_field_writes_the_field_and_caches_now()
+    {
+        var file = CreateDoc(title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"printDate","format":"yyyy"}}]
+            """);
+        Assert.Equal(
+            DateTime.Now.Year.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("PRINTDATE \\@ \"yyyy\"", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Ref_field_caches_the_bookmark_text()
+    {
+        var file = CreateDoc(title: "Doc");
+        // Append a text paragraph and bookmark it (the bookmark wraps the paragraph
+        // whose text a mode-text REF resolves to); the REF field lives elsewhere.
+        Edit(file, """
+            [
+              {"op":"add","path":"/body","type":"p","props":{"text":"The quarter beat plan."}}
+            ]
+            """);
+        var summaryParaIndex = BodyTexts(file)
+            .Select((t, i) => (t, i))
+            .First(x => x.t == "The quarter beat plan.").i + 1;
+        Edit(file, "[{\"op\":\"add\",\"path\":\"/body/p[" + summaryParaIndex +
+            "]\",\"type\":\"bookmark\",\"props\":{\"name\":\"Summary\"}}]");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"ref","bookmark":"Summary"}}]
+            """);
+        var summary = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("ref", summary["kind"]!.GetValue<string>());
+        Assert.Equal("The quarter beat plan.", summary["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("REF Summary", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("The quarter beat plan.", field.InnerText);
+        }
+
+        var props = Get(file, "/body/p[1]")["properties"]!;
+        Assert.Contains("ref", props["fields"]!.AsArray().Select(f => f!.GetValue<string>()));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Ref_field_page_mode_caches_a_page_placeholder()
+    {
+        var file = CreateDoc(title: "Doc");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"bookmark","props":{"name":"Target"}}]""");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"ref","bookmark":"Target","mode":"page"}}]
+            """);
+        Assert.Equal("1", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("REF Target \\p", field.Instruction!.Value!, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Ref_without_a_bookmark_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"ref"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("bookmark", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hyperlink_field_caches_the_link_text()
+    {
+        var file = CreateDoc(title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"hyperlink","url":"https://example.com","linkText":"Example"}}]
+            """);
+        Assert.Equal("Example", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("HYPERLINK \"https://example.com\"", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("Example", field.InnerText);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Hyperlink_field_without_link_text_caches_the_url()
+    {
+        var file = CreateDoc(title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"hyperlink","url":"https://example.com"}}]
+            """);
+        Assert.Equal("https://example.com", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Hyperlink_without_a_url_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"hyperlink"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("url", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FillIn_field_caches_the_default_text()
+    {
+        var file = CreateDoc(title: "Doc");
+
+        var envelope = Edit(file, """
+            [{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"fillIn","prompt":"Enter your name","default":"Name here"}}]
+            """);
+        Assert.Equal("Name here", Data(envelope)["ops"]!.AsArray()[0]!["cached"]!.GetValue<string>());
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var field = doc.MainDocumentPart!.Document!.Body!.Descendants<SimpleField>().Single();
+            Assert.Contains("FILLIN \"Enter your name\"", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Contains("\\d \"Name here\"", field.Instruction!.Value!, StringComparison.Ordinal);
+            Assert.Equal("Name here", field.InnerText);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void FillIn_without_a_prompt_is_invalid_args()
+    {
+        var file = CreateDoc(title: "Doc");
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"fillIn","default":"x"}}]"""));
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("prompt", ex.Message, StringComparison.Ordinal);
     }
 }

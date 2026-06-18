@@ -19,6 +19,24 @@ public sealed partial class WordHandler
         ["styleRef"] = "STYLEREF",
         ["symbol"] = "SYMBOL",
         ["quote"] = "QUOTE",
+        // (1.12) document-info & reference fields, each with a cached value computed
+        // headlessly (file name, body counts, core-property author/dates, bookmark text).
+        ["fileName"] = "FILENAME",
+        ["numWords"] = "NUMWORDS",
+        ["numChars"] = "NUMCHARS",
+        ["author"] = "AUTHOR",
+        ["createDate"] = "CREATEDATE",
+        ["saveDate"] = "SAVEDATE",
+        ["printDate"] = "PRINTDATE",
+        ["ref"] = "REF",
+        ["hyperlink"] = "HYPERLINK",
+        ["fillIn"] = "FILLIN",
+    };
+
+    /// <summary>The (1.12) date-property field kinds whose instruction takes a <c>\@</c> date picture.</summary>
+    private static readonly HashSet<string> DateFieldKinds = new(StringComparer.Ordinal)
+    {
+        "date", "createDate", "saveDate", "printDate",
     };
 
     /// <summary>
@@ -31,12 +49,18 @@ public sealed partial class WordHandler
     /// "Page X of Y" pattern is: set the paragraph text to "Page ", add a
     /// pageNumber field, then add a numPages field with leadingText " of ".
     /// </summary>
-    private static object ApplyAddField(WordprocessingDocument doc, EditOp op)
+    private static object ApplyAddField(WordprocessingDocument doc, string file, EditOp op)
     {
         var props = op.Props?.DeepClone().AsObject() ?? [];
-        props.Remove("author");
 
         var kind = props["kind"] is { } kindNode ? NodeToString(kindNode) : null;
+        // props.author doubles as the AUTHOR-field override; for every other kind it
+        // is the batch-author noise the generic prop path strips, so drop it there.
+        if (kind != "author")
+        {
+            props.Remove("author");
+        }
+
         if (kind is null || !FieldInstructions.TryGetValue(kind, out var instructionHead))
         {
             throw new AiofficeException(
@@ -45,7 +69,10 @@ public sealed partial class WordHandler
                     ? "add --type field needs props.kind."
                     : $"Unknown field kind '{kind}'.",
                 "Use kind pageNumber, numPages, date, docTitle, styleRef (props.styleRef), " +
-                "symbol (props.charCode, props.symbolFont?) or quote (props.quoteText), e.g. " +
+                "symbol (props.charCode, props.symbolFont?), quote (props.quoteText), " +
+                "fileName (props.includePath?), numWords, numChars, author, " +
+                "createDate/saveDate/printDate (props.format?), ref (props.bookmark, props.mode?), " +
+                "hyperlink (props.url, props.linkText?) or fillIn (props.prompt, props.default?), e.g. " +
                 "{\"op\":\"add\",\"path\":\"/footer[1]/p[1]\",\"type\":\"field\",\"props\":{\"kind\":\"pageNumber\"}}.",
                 candidates: [.. FieldInstructions.Keys]);
         }
@@ -80,13 +107,17 @@ public sealed partial class WordHandler
             "styleRef" => BuildStyleRefField(props),
             "symbol" => BuildSymbolField(props),
             "quote" => BuildQuoteField(props),
+            "fileName" => BuildFileNameField(file, props),
+            "ref" => BuildRefField(doc, props),
+            "hyperlink" => BuildHyperlinkField(props),
+            "fillIn" => BuildFillInField(props),
             _ => (
                 format is null
                     ? $" {instructionHead} \\* MERGEFORMAT "
-                    : kind == "date"
+                    : DateFieldKinds.Contains(kind)
                         ? $" {instructionHead} \\@ \"{format}\" "
                         : $" {instructionHead} \\* {format} ",
-                CachedFieldText(doc, kind, format)),
+                CachedFieldText(doc, file, kind, format)),
         };
 
         // SYMBOL renders its glyph with no separate cached-result run (the glyph IS
@@ -222,27 +253,208 @@ public sealed partial class WordHandler
     }
 
     /// <summary>A plausible cached result so the document reads sensibly before Word updates fields.</summary>
-    private static string CachedFieldText(WordprocessingDocument doc, string kind, string? format)
+    private static string CachedFieldText(WordprocessingDocument doc, string file, string kind, string? format)
     {
         switch (kind)
         {
             case "date":
-                try
-                {
-                    return DateTime.Now.ToString(format ?? "yyyy-MM-dd", CultureInfo.InvariantCulture);
-                }
-                catch (FormatException)
-                {
-                    return DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                }
+                return FormatFieldDate(DateTime.Now, format);
+
+            // CREATEDATE/SAVEDATE come from the core properties (created / modified);
+            // PRINTDATE has no core analogue, so cache "now" as the best headless value.
+            case "createDate":
+                return FormatFieldDate(ReadCoreProps(doc).Created ?? DateTime.Now, format);
+
+            case "saveDate":
+                return FormatFieldDate(ReadCoreProps(doc).Modified ?? DateTime.Now, format);
+
+            case "printDate":
+                return FormatFieldDate(DateTime.Now, format);
 
             case "docTitle":
                 var title = ReadCoreTitle(doc);
                 return title is { Length: > 0 } ? title : "(document title)";
 
+            case "author":
+                var creator = ReadCoreProps(doc).Creator;
+                return creator is { Length: > 0 } ? creator : "(author)";
+
+            case "numWords":
+                return BodyWordCount(doc).ToString(CultureInfo.InvariantCulture);
+
+            case "numChars":
+                return BodyCharacterCount(doc).ToString(CultureInfo.InvariantCulture);
+
             default: // pageNumber, numPages: 1 is the safest placeholder
                 return "1";
         }
+    }
+
+    /// <summary>Formats a field's cached date with props.format (a .NET picture), falling back to ISO on a bad picture.</summary>
+    private static string FormatFieldDate(DateTime when, string? format)
+    {
+        try
+        {
+            return when.ToString(format ?? "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+        catch (FormatException)
+        {
+            return when.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+    }
+
+    /// <summary>NUMWORDS cached value: body word count, matching the read --view stats counter.</summary>
+    private static int BodyWordCount(WordprocessingDocument doc) =>
+        BodyText(doc).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    /// <summary>NUMCHARS cached value: body character count (newlines excluded), matching read --view stats.</summary>
+    private static int BodyCharacterCount(WordprocessingDocument doc) =>
+        BodyText(doc).Replace("\n", string.Empty, StringComparison.Ordinal).Length;
+
+    /// <summary>The body's paragraph text joined by newlines (the basis for word/char counts).</summary>
+    private static string BodyText(WordprocessingDocument doc) =>
+        doc.MainDocumentPart?.Document?.Body is { } body
+            ? string.Join('\n', WordAddress.EnumerateBody(body).Where(n => n.Type == "p").Select(n => n.Element.InnerText))
+            : string.Empty;
+
+    /// <summary>FILENAME [\p]: the document's file name, optionally the full path (props.includePath).</summary>
+    private static (string Instruction, string Cached) BuildFileNameField(string file, System.Text.Json.Nodes.JsonObject props)
+    {
+        var includePath = props["includePath"] is { } pathNode
+            && NodeToString(pathNode) is "true" or "1" or "yes" or "on";
+        var cached = includePath ? Path.GetFullPath(file) : Path.GetFileName(file);
+        var pathSwitch = includePath ? " \\p" : string.Empty;
+        return ($" FILENAME{pathSwitch} \\* MERGEFORMAT ", cached);
+    }
+
+    /// <summary>REF bookmark [\* switch]: a reference to a bookmark; cached = the bookmark's text (mode text, the default).</summary>
+    private static (string Instruction, string Cached) BuildRefField(WordprocessingDocument doc, System.Text.Json.Nodes.JsonObject props)
+    {
+        var bookmark = props["bookmark"] is { } bmNode ? NodeToString(bmNode)
+            : props["name"] is { } altNode ? NodeToString(altNode)
+            : null;
+        if (string.IsNullOrWhiteSpace(bookmark))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "add --type field kind ref needs props.bookmark (the bookmark name to reference).",
+                "Example: {\"op\":\"add\",\"path\":\"/body/p[1]\",\"type\":\"field\"," +
+                "\"props\":{\"kind\":\"ref\",\"bookmark\":\"Results\"}}.");
+        }
+
+        if (!BookmarkNamePattern().IsMatch(bookmark))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{bookmark}' is not a valid bookmark name.",
+                "Bookmark names start with a letter or underscore, use letters/digits/underscores only, max 40 chars (no spaces).");
+        }
+
+        var mode = props["mode"] is { } modeNode ? NodeToString(modeNode).Trim().ToLowerInvariant() : "text";
+        var modeSwitch = mode switch
+        {
+            "page" => " \\p",                  // the page number of the bookmark
+            "abovebelow" or "above-below" => " \\p \\h", // "above"/"below" relative position
+            _ => string.Empty,                  // text (default): the bookmark's text
+        };
+
+        // Cached = the bookmarked range's text for mode text (Word recomputes page refs on open).
+        var cached = mode is "page" or "abovebelow" or "above-below"
+            ? "1"
+            : BookmarkText(doc, bookmark) ?? $"(text of {bookmark})";
+
+        return ($" REF {bookmark}{modeSwitch} \\h ", cached);
+    }
+
+    /// <summary>The text spanning a bookmark's start→end markers, or null when the bookmark is missing/empty.</summary>
+    private static string? BookmarkText(WordprocessingDocument doc, string name)
+    {
+        var start = EnumerateBookmarks(doc)
+            .FirstOrDefault(b => string.Equals(b.Name?.Value, name, StringComparison.OrdinalIgnoreCase));
+        if (start is null)
+        {
+            return null;
+        }
+
+        // The bookmark commonly wraps a paragraph (our add type:bookmark form); use that
+        // paragraph's text, which is what a mode-text REF resolves to.
+        var paragraph = start.Ancestors<Paragraph>().FirstOrDefault();
+        var text = paragraph?.InnerText;
+        return string.IsNullOrEmpty(text) ? null : text;
+    }
+
+    /// <summary>HYPERLINK "url" [\o tip]: a field hyperlink; cached = the link text (or the url).</summary>
+    private static (string Instruction, string Cached) BuildHyperlinkField(System.Text.Json.Nodes.JsonObject props)
+    {
+        var url = props["url"] is { } urlNode ? NodeToString(urlNode)
+            : props["href"] is { } altNode ? NodeToString(altNode)
+            : null;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "add --type field kind hyperlink needs props.url (the link target).",
+                "Example: {\"op\":\"add\",\"path\":\"/body/p[1]\",\"type\":\"field\"," +
+                "\"props\":{\"kind\":\"hyperlink\",\"url\":\"https://example.com\",\"linkText\":\"site\"}}.");
+        }
+
+        if (url.AsSpan().ContainsAny('"', '\\'))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"props.url must not contain quotes or backslashes, got '{url}'.",
+                "Pass a plain URL like \"https://example.com\".");
+        }
+
+        var linkText = props["linkText"] is { } textNode ? NodeToString(textNode)
+            : props["text"] is { } altTextNode ? NodeToString(altTextNode)
+            : null;
+        if (linkText is not null && linkText.Contains('"', StringComparison.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"props.linkText must not contain quotes, got '{linkText}'.",
+                "Pass plain display text without double quotes.");
+        }
+
+        var cached = linkText is { Length: > 0 } ? linkText : url;
+        return ($" HYPERLINK \"{url}\" ", cached);
+    }
+
+    /// <summary>FILLIN "prompt" [\d default]: an interactive prompt; cached = the default/placeholder text.</summary>
+    private static (string Instruction, string Cached) BuildFillInField(System.Text.Json.Nodes.JsonObject props)
+    {
+        var prompt = props["prompt"] is { } promptNode ? NodeToString(promptNode) : null;
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "add --type field kind fillIn needs props.prompt (the prompt Word shows the user).",
+                "Example: {\"op\":\"add\",\"path\":\"/body/p[1]\",\"type\":\"field\"," +
+                "\"props\":{\"kind\":\"fillIn\",\"prompt\":\"Enter your name\",\"default\":\"Name\"}}.");
+        }
+
+        if (prompt.Contains('"', StringComparison.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"props.prompt must not contain quotes, got '{prompt}'.",
+                "Pass plain prompt text without double quotes.");
+        }
+
+        var def = props["default"] is { } defNode ? NodeToString(defNode)
+            : props["defaultText"] is { } altNode ? NodeToString(altNode)
+            : null;
+        if (def is not null && def.Contains('"', StringComparison.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"props.default must not contain quotes, got '{def}'.",
+                "Pass plain default text without double quotes.");
+        }
+
+        var defaultSwitch = def is { Length: > 0 } ? $" \\d \"{def}\"" : string.Empty;
+        return ($" FILLIN \"{prompt}\"{defaultSwitch} ", def ?? string.Empty);
     }
 
     /// <summary>The field kind behind a w:fldSimple instruction ("PAGE \* MERGEFORMAT" → pageNumber).</summary>

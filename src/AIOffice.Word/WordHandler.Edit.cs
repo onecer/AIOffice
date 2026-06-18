@@ -147,7 +147,7 @@ public sealed partial class WordHandler
             "add" when op.Type == "link" && session.Track => throw TrackedStructureUnsupported("link"),
             "add" when op.Type == "link" => ApplyAddLink(doc, op, session),
             "add" when op.Type == "field" && session.Track => throw TrackedStructureUnsupported("field"),
-            "add" when op.Type == "field" => ApplyAddField(doc, op),
+            "add" when op.Type == "field" => ApplyAddField(doc, file, op),
             "add" when op.Type == "bookmark" => ApplyAddBookmark(doc, op),
             "add" when op.Type == "footnote" && session.Track => throw TrackedStructureUnsupported("footnote"),
             "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op),
