@@ -667,31 +667,51 @@ internal static class PptxEditor
                 return SetChartEmbedData(presentation, address, op.Props);
             }
 
-            // Chart-polish props (dataLabels/legend/axisTitles/trendline/errorBars/
-            // gridlines/secondaryAxis) edit the chart in place.
-            if (PptxChartPolish.Handles(op.Props))
+            // title/categories/series edit the chart's data in place (v1.12); the
+            // chart-polish props (dataLabels/legend/axisTitles/trendline/errorBars/
+            // gridlines/secondaryAxis) edit its presentation in place. Both may
+            // appear in one op: apply the data edit first, then the polish.
+            var handlesData = PptxCharts.HandlesData(op.Props);
+            var handlesPolish = PptxChartPolish.Handles(op.Props);
+            if (handlesData || handlesPolish)
             {
-                var polish = PptxChartPolish.Split(op.Props, out var nonPolish);
-                if (nonPolish.Count > 0)
+                var data = SplitChartProps(op.Props, PptxCharts.DataProps, out var afterData);
+                var polish = SplitChartProps(afterData, PptxChartPolish.PropKeys, out var unknown);
+                if (unknown.Count > 0)
                 {
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
-                        Units.Inv($"Chart prop(s) {string.Join(", ", nonPolish.Select(kv => kv.Key))} cannot be set in place."),
-                        "Polish props (dataLabels, legend, axisTitles, trendline, errorBars, gridlines, secondaryAxis) " +
-                        "are editable in place; to change data/title remove and re-add the chart, and set " +
-                        "position/size/name on its shape path.");
+                        Units.Inv($"Chart prop(s) {string.Join(", ", unknown.Select(kv => kv.Key))} cannot be set in place."),
+                        "Editable in place: data props (title, categories, series) and polish props " +
+                        "(dataLabels, legend, axisTitles, trendline, errorBars, gridlines, secondaryAxis); " +
+                        "position/size/name sets target the chart's shape path.");
                 }
 
-                return PptxCharts.SetPolish(presentation, address, polish);
+                string target;
+                if (data.Count > 0)
+                {
+                    target = PptxCharts.SetData(presentation, address, data);
+                }
+                else
+                {
+                    target = address.CanonicalChartPath;
+                }
+
+                if (polish.Count > 0)
+                {
+                    target = PptxCharts.SetPolish(presentation, address, polish);
+                }
+
+                return target;
             }
 
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                "Chart data and titles cannot be edited in place yet.",
-                "Remove the chart ({\"op\":\"remove\",\"path\":\"" + address.CanonicalChartPath + "\"}) " +
-                "and add it again with the new data; {\"embedData\":true} retrofits an editable workbook; " +
-                "the chart-polish props (dataLabels, legend, axisTitles, trendline, errorBars, gridlines, " +
-                "secondaryAxis) are editable in place; position/size/name sets target its shape path.");
+                Units.Inv($"Chart prop(s) {string.Join(", ", op.Props.Select(kv => kv.Key))} cannot be set in place."),
+                "Editable in place: data props (title, categories, series) and polish props " +
+                "(dataLabels, legend, axisTitles, trendline, errorBars, gridlines, secondaryAxis); " +
+                "{\"embedData\":true} retrofits an editable workbook; position/size/name sets target " +
+                "the chart's shape path (" + address.CanonicalChartPath + ").");
         }
 
         if (address.IsTable)
@@ -812,6 +832,26 @@ internal static class PptxEditor
         }
 
         return rest;
+    }
+
+    /// <summary>Pulls the named keys out of a chart props object, returning them and (via out) the rest.</summary>
+    private static JsonObject SplitChartProps(JsonObject props, IReadOnlyList<string> keys, out JsonObject rest)
+    {
+        var taken = new JsonObject();
+        rest = new JsonObject();
+        foreach (var (key, value) in props)
+        {
+            if (keys.Contains(key, StringComparer.Ordinal))
+            {
+                taken[key] = value?.DeepClone();
+            }
+            else
+            {
+                rest[key] = value?.DeepClone();
+            }
+        }
+
+        return taken;
     }
 
     /// <summary>set /slide[i]/chart[k] {embedData:true}: retrofit an embedded, editable data workbook.</summary>

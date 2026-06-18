@@ -470,6 +470,329 @@ internal static class PptxCharts
         return Units.Inv($"/slide[{address.SlideIndex}]/chart[{index}]");
     }
 
+    /// <summary>The data props this module edits in place (v1.12, additive).</summary>
+    public static readonly IReadOnlyList<string> DataProps = ["title", "categories", "series"];
+
+    /// <summary>True when the props object carries any in-place chart-data key (title/categories/series).</summary>
+    public static bool HandlesData(JsonObject props) =>
+        props.Any(kv => DataProps.Contains(kv.Key, StringComparer.Ordinal));
+
+    /// <summary>
+    /// set /slide[i]/chart[k] with chart-data props (v1.12, additive): edits an
+    /// existing chart's <c>title</c> (string to set/replace, <c>false</c> to remove),
+    /// its <c>categories</c> (replaces every series' c:cat cache and the embedded
+    /// sheet's column A) and its <c>series</c> (replaces each c:ser c:tx name and
+    /// c:val cache). Both the chart-XML caches and the embedded "Edit Data" workbook
+    /// are rewritten so render/get and PowerPoint both reflect the new data.
+    ///
+    /// Series are matched by index: passing fewer series than exist leaves the
+    /// trailing existing series untouched; passing more updates the overlapping
+    /// ones and ignores the surplus (adding/removing series groups would restructure
+    /// the plot area — remove and re-add the chart for that). Each replacement
+    /// series' values must match the (new or existing) category count.
+    /// </summary>
+    public static string SetData(PresentationPart presentation, PptxAddress address, JsonObject props)
+    {
+        var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
+        var (index, _, part) = Resolve(slidePart, address);
+        var chartSpace = part.ChartSpace ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The chart part has no chartSpace XML.",
+            "Remove the chart and add it again, or restore a snapshot.");
+
+        var chart = chartSpace.GetFirstChild<C.Chart>() ?? throw new AiofficeException(
+            ErrorCodes.FormatCorrupt,
+            "The chart part has no c:chart element.",
+            "Remove the chart and add it again, or restore a snapshot.");
+
+        var serElements = chart.Descendants<C.PlotArea>().FirstOrDefault()?.ChildElements
+            .Where(e => e.LocalName.EndsWith("Chart", StringComparison.Ordinal))
+            .SelectMany(g => g.ChildElements.Where(e => e.LocalName == "ser"))
+            .Cast<OpenXmlCompositeElement>()
+            .ToList() ?? [];
+
+        var current = ReadData(part);
+
+        // ----- title --------------------------------------------------------
+        if (props.TryGetPropertyValue("title", out var titleNode))
+        {
+            ApplyTitle(chart, titleNode);
+        }
+
+        // ----- categories ---------------------------------------------------
+        var categories = current.Categories;
+        if (props.TryGetPropertyValue("categories", out var catNode))
+        {
+            categories = ParseCategoriesArray(catNode);
+            // Bubble carries c:xVal as the x channel rather than a c:cat string axis.
+            var isBubble = serElements.Any(s => s.ChildElements.Any(c => c.LocalName == "yVal"));
+            if (isBubble)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    "A bubble chart has no category axis to relabel.",
+                    "Bubble points are x/y/size triples; remove and re-add the chart to change them.");
+            }
+
+            // Changing the category count would leave any series whose values are not
+            // also re-supplied mismatched against the new axis; require all series.
+            if (categories.Count != current.Categories.Count &&
+                !props.ContainsKey("series"))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"New 'categories' has {categories.Count} label(s) but the chart had {current.Categories.Count}."),
+                    "When you change the number of categories, pass 'series' in the same op with one value " +
+                    "per new category for every series, so the data stays aligned.");
+            }
+
+            foreach (var ser in serElements)
+            {
+                ReplaceSerChild(ser, "cat", BuildCategoryData(categories), insertBefore: "val");
+            }
+        }
+
+        // ----- series -------------------------------------------------------
+        if (props.TryGetPropertyValue("series", out var seriesNode))
+        {
+            // Bubble's yVal/xVal/bubbleSize triples have no single-array c:val to
+            // swap; restructuring them in place would mis-pair the channels.
+            if (serElements.Any(s => s.ChildElements.Any(c => c.LocalName == "yVal")))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    "A bubble chart's x/y/size series cannot be replaced in place.",
+                    "Remove the chart and add it again with the new bubble series.");
+            }
+
+            var replacements = ParseSeriesReplacements(seriesNode, categories.Count, serElements.Count);
+
+            // A category-count change must re-supply every series so none is left
+            // with a stale-length value cache against the new axis.
+            if (categories.Count != current.Categories.Count && replacements.Count < serElements.Count)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"Changing the category count needs all {serElements.Count} series re-supplied; got {replacements.Count}."),
+                    "Pass one series object per existing series (in order), each with one value per new category.");
+            }
+
+            for (var i = 0; i < serElements.Count && i < replacements.Count; i++)
+            {
+                var ser = serElements[i];
+                var (name, values) = replacements[i];
+                if (name is not null)
+                {
+                    ReplaceSerChild(ser, "tx", BuildSeriesText(name, i), insertAfter: ["order", "idx"]);
+                }
+
+                ReplaceSerChild(ser, "val", BuildValues(values, i), insertAfter: ["cat", "order", "idx"]);
+            }
+        }
+
+        // ----- rebuild the embedded "Edit Data" workbook --------------------
+        // Re-read so the workbook mirrors exactly what the caches now hold (names,
+        // categories and values), keeping PowerPoint's "Edit Data" sheet in sync.
+        if (DataEditable(part) &&
+            (props.ContainsKey("categories") || props.ContainsKey("series")))
+        {
+            RebuildEmbeddedWorkbook(part, chartSpace);
+        }
+
+        return Units.Inv($"/slide[{address.SlideIndex}]/chart[{index}]");
+    }
+
+    /// <summary>
+    /// Sets, replaces or removes the chart's c:title. A string sets/replaces the
+    /// title text (autoTitleDeleted=false); <c>false</c> removes it
+    /// (autoTitleDeleted=true). null/missing is a no-op (handled by the caller).
+    /// </summary>
+    private static void ApplyTitle(C.Chart chart, JsonNode? titleNode)
+    {
+        if (titleNode is JsonValue boolValue && boolValue.TryGetValue<bool>(out var flag))
+        {
+            if (flag)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "Chart title true is not a title.",
+                    "Pass a string to set the title, or false to remove it, e.g. {\"title\":\"Revenue\"} or {\"title\":false}.");
+            }
+
+            // false: remove the title and mark it auto-deleted.
+            foreach (var existing in chart.Elements<C.Title>().ToList())
+            {
+                existing.Remove();
+            }
+
+            SetAutoTitleDeleted(chart, deleted: true);
+            return;
+        }
+
+        var text = J.ScalarText(titleNode ?? throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            "Chart title cannot be null.",
+            "Pass a string to set the title, or false to remove it."));
+
+        var title = new C.Title(
+            new C.ChartText(new C.RichText(
+                new A.BodyProperties(),
+                new A.ListStyle(),
+                new A.Paragraph(new A.Run(new A.Text(text))))),
+            new C.Overlay { Val = false });
+
+        if (chart.Elements<C.Title>().FirstOrDefault() is { } old)
+        {
+            chart.ReplaceChild(title, old);
+        }
+        else
+        {
+            chart.InsertAt(title, 0); // c:title is the first child of c:chart
+        }
+
+        SetAutoTitleDeleted(chart, deleted: false);
+    }
+
+    /// <summary>Sets c:autoTitleDeleted (creating it after the title if absent).</summary>
+    private static void SetAutoTitleDeleted(C.Chart chart, bool deleted)
+    {
+        if (chart.Elements<C.AutoTitleDeleted>().FirstOrDefault() is { } existing)
+        {
+            existing.Val = deleted;
+            return;
+        }
+
+        var node = new C.AutoTitleDeleted { Val = deleted };
+        if (chart.Elements<C.Title>().FirstOrDefault() is { } title)
+        {
+            chart.InsertAfter(node, title);
+        }
+        else
+        {
+            chart.InsertAt(node, 0);
+        }
+    }
+
+    /// <summary>Parses a categories array prop (same rules as add) for an in-place edit.</summary>
+    private static List<string> ParseCategoriesArray(JsonNode? node)
+    {
+        if (node is not JsonArray array || array.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "set chart 'categories' must be a non-empty array.",
+                "Pass scalar labels, e.g. {\"categories\":[\"Q1\",\"Q2\",\"Q3\",\"Q4\"]}.");
+        }
+
+        var categories = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is null or JsonObject or JsonArray)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "set chart 'categories' must hold scalar labels.",
+                    "Use strings or numbers, e.g. {\"categories\":[\"Q1\",\"Q2\"]}.");
+            }
+
+            categories.Add(J.ScalarText(item));
+        }
+
+        return categories;
+    }
+
+    /// <summary>
+    /// Parses the replacement series for an in-place edit: each {name?, values:[…]}.
+    /// Values length must match the (new or kept) category count. Surplus series
+    /// beyond the existing count are reported so the caller can warn, but parsing
+    /// itself does not reject them — SetData simply ignores the overflow.
+    /// </summary>
+    private static List<(string? Name, IReadOnlyList<double?> Values)> ParseSeriesReplacements(
+        JsonNode? node, int categoryCount, int existingCount)
+    {
+        if (node is not JsonArray array || array.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "set chart 'series' must be a non-empty array.",
+                "Each series looks like {\"name\":\"Sales\",\"values\":[10,20,30,40]}.");
+        }
+
+        var result = new List<(string?, IReadOnlyList<double?>)>(array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject item)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"set chart series[{i}] is not an object."),
+                    "Each series looks like {\"name\":\"Sales\",\"values\":[10,20,30]}.");
+            }
+
+            if (!item.TryGetPropertyValue("values", out var valuesNode) || valuesNode is not JsonArray values)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"set chart series[{i}] has no values array."),
+                    "Each series needs numeric values, e.g. {\"name\":\"Sales\",\"values\":[10,20,30]}.");
+            }
+
+            if (values.Count != categoryCount)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    Units.Inv($"set chart series[{i}] has {values.Count} value(s) but there are {categoryCount} categories."),
+                    "Give every series exactly one value per category (null for a gap); " +
+                    "pass new 'categories' in the same op to change the count.");
+            }
+
+            var numbers = new List<double?>(values.Count);
+            for (var v = 0; v < values.Count; v++)
+            {
+                numbers.Add(NumericValue(values[v], i, v));
+            }
+
+            var name = item.TryGetPropertyValue("name", out var nameNode) && nameNode is not null
+                ? J.ScalarText(nameNode)
+                : null;
+            result.Add((name, numbers));
+        }
+
+        if (result.Count > existingCount)
+        {
+            // Surplus series cannot be added without restructuring the plot area;
+            // SetData updates the overlapping ones and leaves the rest of the chart
+            // as-is. This is the documented "more series than exist" behavior.
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Rebuilds the embedded "Edit Data" workbook from the chart's current caches so
+    /// PowerPoint's live sheet matches the edited values, then re-points the chart at
+    /// the fresh package part. No-op when the chart carries no embedded workbook.
+    /// </summary>
+    private static void RebuildEmbeddedWorkbook(ChartPart part, C.ChartSpace chartSpace)
+    {
+        var data = ReadData(part);
+
+        foreach (var embedded in part.Parts.Select(p => p.OpenXmlPart).OfType<EmbeddedPackagePart>().ToList())
+        {
+            part.DeletePart(embedded);
+        }
+
+        var newRelId = EmbedWorkbook(part, data);
+        if (chartSpace.Elements<C.ExternalData>().FirstOrDefault() is { } external)
+        {
+            external.Id = newRelId;
+        }
+        else
+        {
+            chartSpace.Append(new C.ExternalData(new C.AutoUpdate { Val = false }) { Id = newRelId });
+        }
+    }
+
     /// <summary>Replaces a ser child by local name, inserting at a schema-valid spot when absent.</summary>
     private static void ReplaceSerChild(
         OpenXmlCompositeElement ser,

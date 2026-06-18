@@ -233,17 +233,18 @@ public sealed class ChartTests : IDisposable
     }
 
     [Fact]
-    public void Set_OnChartPath_IsTypedUnsupported()
+    public void Set_UnknownChartProp_IsTypedUnsupported()
     {
         Create();
         Edit(TestEnv.Op("add", "/slide[1]", type: "chart", props: ChartProps("bar")));
 
         var envelope = _handler.Edit(
             _ws.Ctx("deck.pptx"),
-            [TestEnv.Op("set", "/slide[1]/chart[1]", props: TestEnv.Props(("title", "New")))]);
+            [TestEnv.Op("set", "/slide[1]/chart[1]", props: TestEnv.Props(("kind", "line")))]);
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
-        Assert.Contains("remove", error.Suggestion, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("kind", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("shape path", error.Suggestion, StringComparison.OrdinalIgnoreCase);
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 

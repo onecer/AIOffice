@@ -61,3 +61,40 @@ points). `get` on the chart reports the applied colors under `polish.seriesColor
 Chart colors live in the chart part (preserved byte-identical), so they survive later
 edits. This lets a dashboard's charts match the chosen brand direction instead of
 Excel's default office palette.
+
+## edit chart data in place (1.12 — pptx)
+
+`set /slide[i]/chart[k]` now edits an **existing** native pptx chart's data without
+remove-and-re-add. Three additive props, any combination in one op (data props apply
+first, then any polish props in the same op):
+
+| prop | value | effect |
+|------|-------|--------|
+| `title` | string · `false` | set/replace the chart title, or `false` to remove it (sets `c:autoTitleDeleted`). `true` is rejected — pass the text |
+| `categories` | array of scalar labels | relabel the category axis for every series (rewrites each `c:cat` cache) |
+| `series` | array of `{name?, values:[…]}` | replace each series — `values` updates the `c:val` number cache, `name` (optional) the `c:tx`. Omit `name` to keep it |
+
+```jsonc
+// pptx — retitle + reshape an existing chart's data
+{op:"set", path:"/slide[2]/chart[1]", props:{
+  title:"Q4 Actuals",
+  categories:["Jan","Feb","Mar"],
+  series:[{name:"Plan", values:[10,20,30]},
+          {name:"Actual", values:[11,19,34]}]}}
+
+// remove the title only
+{op:"set", path:"/slide[2]/chart[1]", props:{title:false}}
+```
+
+Both the chart-XML caches **and** the chart's embedded "Edit Data" workbook are
+rewritten, so `get`/`render` and PowerPoint's *Edit Data* sheet all show the new
+values (a foreign cached-only chart with no embedded workbook still updates its
+caches; add one with `{embedData:true}`).
+
+Series are matched **by index**: pass one object per series in order. Passing fewer
+series than the chart has leaves the trailing series untouched; passing more updates
+the overlapping ones and ignores the surplus (adding/removing whole series restructures
+the plot area — remove and re-add the chart for that). Each replacement series' `values`
+length must equal the category count; to change the number of categories, pass new
+`categories` **and** re-supply every series in the same op. Bubble charts (x/y/size
+triples) reject in-place data edits — remove and re-add them.
