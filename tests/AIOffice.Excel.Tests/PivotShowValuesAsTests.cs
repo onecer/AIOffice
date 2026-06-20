@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AIOffice.Core;
+using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
 using S = DocumentFormat.OpenXml.Spreadsheet;
@@ -318,5 +319,204 @@ public sealed class PivotShowValuesAsTests : ExcelTestBase
         // And the showAs survived that second save.
         using var document = SpreadsheetDocument.Open(file, isEditable: false);
         Assert.Equal("percentOfTotal", FirstDataField(document).ShowDataAs!.InnerText);
+    }
+
+    // ----- grand-total visibility (v1.14) -------------------------------------
+
+    /// <summary>
+    /// An add-pivot op over the show-values-as fixture carrying a <c>grandTotals</c>
+    /// prop (string or object) plus the given value field. Reuses the same
+    /// Region/Month/Sales source as the showAs tests.
+    /// </summary>
+    private EditOp GrandTotalsPivot(JsonNode? grandTotals, JsonObject valueEntry, string name = "GT") => new()
+    {
+        Op = "add",
+        Path = "/Sheet1",
+        Type = "pivot",
+        Props = new JsonObject
+        {
+            ["name"] = name,
+            ["sourceRange"] = "A1:C7",
+            ["targetSheet"] = "Pivot",
+            ["rows"] = new JsonArray("Region"),
+            ["columns"] = new JsonArray("Month"),
+            ["values"] = new JsonArray(valueEntry),
+            ["grandTotals"] = grandTotals,
+        },
+    };
+
+    /// <summary>Reopens the file through ClosedXML and reads the first pivot's grand-total flags.</summary>
+    private static (bool Rows, bool Columns) ReopenGrandTotals(string file)
+    {
+        using var workbook = new XLWorkbook(file);
+        var pivot = workbook.Worksheets
+            .SelectMany(s => s.PivotTables)
+            .First();
+        return (pivot.ShowGrandTotalsRows, pivot.ShowGrandTotalsColumns);
+    }
+
+    [Theory]
+    [InlineData("none", false, false)]
+    [InlineData("rows", true, false)]
+    [InlineData("columns", false, true)]
+    [InlineData("both", true, true)]
+    public void GrandTotals_string_survives_save_and_reopen(string mode, bool rows, bool columns)
+    {
+        var file = CreateSourceWorkbook();
+
+        var envelope = EditOps(file, GrandTotalsPivot(mode, Value("Sales", "sum")));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        // Reported back in the add details, additively under grandTotals.
+        var detail = OkData(envelope)["ops"]!.AsArray()[0]!["grandTotals"]!;
+        Assert.Equal(rows, detail["rows"]!.GetValue<bool>());
+        Assert.Equal(columns, detail["columns"]!.GetValue<bool>());
+
+        // Authoritative oracle: reopen and read the persisted flags.
+        var (reRows, reColumns) = ReopenGrandTotals(file);
+        Assert.Equal(rows, reRows);
+        Assert.Equal(columns, reColumns);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void GrandTotals_object_survives_save_and_reopen(bool rows, bool columns)
+    {
+        var file = CreateSourceWorkbook();
+        var spec = new JsonObject { ["rows"] = rows, ["columns"] = columns };
+
+        Assert.True(EditOps(file, GrandTotalsPivot(spec, Value("Sales", "sum"))).IsOk);
+        AssertValidatorClean(file);
+
+        var (reRows, reColumns) = ReopenGrandTotals(file);
+        Assert.Equal(rows, reRows);
+        Assert.Equal(columns, reColumns);
+    }
+
+    [Fact]
+    public void GrandTotals_object_omits_a_flag_keeps_that_axis_shown()
+    {
+        var file = CreateSourceWorkbook();
+
+        // Only columns is named false; rows is omitted and so stays shown (today's default).
+        var spec = new JsonObject { ["columns"] = false };
+        Assert.True(EditOps(file, GrandTotalsPivot(spec, Value("Sales", "sum"))).IsOk);
+
+        var (rows, columns) = ReopenGrandTotals(file);
+        Assert.True(rows);
+        Assert.False(columns);
+    }
+
+    [Fact]
+    public void Omitting_grandTotals_keeps_both_shown_and_writes_no_grand_total_attributes()
+    {
+        var file = CreateSourceWorkbook();
+
+        // No grandTotals prop at all (the existing showAs PivotOp builder).
+        Assert.True(EditOps(file, PivotOp(Value("Sales", "sum"), "Plain")).IsOk);
+        AssertValidatorClean(file);
+
+        var (rows, columns) = ReopenGrandTotals(file);
+        Assert.True(rows);
+        Assert.True(columns);
+
+        // Byte-stability proxy: with the always-both default ClosedXML does not emit
+        // the rowGrandTotals/colGrandTotals overrides, so the bytes match a pre-feature pivot.
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var definition = document.WorkbookPart!.WorksheetParts
+            .SelectMany(p => p.PivotTableParts)
+            .First().PivotTableDefinition!;
+        Assert.Null(definition.RowGrandTotals);
+        Assert.Null(definition.ColumnGrandTotals);
+    }
+
+    [Fact]
+    public void GrandTotals_coexists_with_a_showAs_value_field_after_the_raw_pass()
+    {
+        var file = CreateSourceWorkbook();
+
+        // grandTotals:none AND a showAs value field: proves the post-save raw show-values-as
+        // pass does not clobber the grand-total flags (and vice-versa).
+        var value = Value("Sales", "sum", ("showAs", "percentOfTotal"));
+        var envelope = EditOps(file, GrandTotalsPivot("none", value));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        // The showAs landed on the dataField...
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            Assert.Equal("percentOfTotal", FirstDataField(document).ShowDataAs!.InnerText);
+        }
+
+        // ...and the grand totals survived the same save+raw pass.
+        var (rows, columns) = ReopenGrandTotals(file);
+        Assert.False(rows);
+        Assert.False(columns);
+    }
+
+    [Fact]
+    public void Get_pivot_reports_grandTotals_alongside_the_other_facets()
+    {
+        var file = CreateSourceWorkbook();
+        var value = Value("Sales", "sum", ("showAs", "percentOfTotal"));
+        Assert.True(EditOps(file, GrandTotalsPivot(
+            new JsonObject { ["rows"] = true, ["columns"] = false }, value)).IsOk);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Pivot/pivot[@name=GT]"))));
+
+        // grandTotals is reported...
+        var gt = data["grandTotals"]!;
+        Assert.True(gt["rows"]!.GetValue<bool>());
+        Assert.False(gt["columns"]!.GetValue<bool>());
+
+        // ...and it coexists with the other facets get already surfaces.
+        Assert.Equal("Region", data["rows"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("Month", data["columns"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("percentOfTotal", data["values"]!.AsArray()[0]!["showAs"]!.GetValue<string>());
+        Assert.NotNull(data["filters"]);
+        Assert.NotNull(data["calculatedFields"]);
+    }
+
+    [Fact]
+    public void GrandTotals_unknown_string_is_invalid_args_with_candidates()
+    {
+        var file = CreateSourceWorkbook();
+
+        var envelope = EditOps(file, GrandTotalsPivot("foo", Value("Sales", "sum")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("foo", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Equal(["both", "rows", "columns", "none"], envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void GrandTotals_non_boolean_flag_is_invalid_args()
+    {
+        var file = CreateSourceWorkbook();
+
+        var spec = new JsonObject { ["rows"] = "yes" }; // string, not a boolean
+        var envelope = EditOps(file, GrandTotalsPivot(spec, Value("Sales", "sum")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("rows", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GrandTotals_unknown_sub_key_is_invalid_args_with_candidates()
+    {
+        var file = CreateSourceWorkbook();
+
+        var spec = new JsonObject { ["row"] = false }; // typo for "rows"
+        var envelope = EditOps(file, GrandTotalsPivot(spec, Value("Sales", "sum")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("row", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("rows", envelope.Error.Candidates!);
     }
 }

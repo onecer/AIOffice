@@ -73,7 +73,10 @@ internal static partial class ExcelPivots
     private const uint BaseItemNext = 1048829u;
 
     private static readonly IReadOnlyList<string> AddProps =
-        ["sourceRange", "targetSheet", "targetAnchor", "rows", "columns", "values", "filters", "name", "calculatedFields"];
+        ["sourceRange", "targetSheet", "targetAnchor", "rows", "columns", "values", "filters", "name", "calculatedFields", "grandTotals"];
+
+    /// <summary>The string forms <c>grandTotals</c> accepts; the object form is <c>{rows,columns}</c>.</summary>
+    private static readonly IReadOnlyList<string> GrandTotalModes = ["both", "rows", "columns", "none"];
 
     private static readonly IReadOnlyList<string> ValueProps = ["field", "agg", "showAs", "baseField", "baseItem"];
 
@@ -161,6 +164,10 @@ internal static partial class ExcelPivots
         // refs here so the whole op aborts before any byte is written on a bad ref.
         var calcFields = ParseCalculatedFields(props, headers, opIndex);
 
+        // Grand-total visibility (omitted => null => today's always-both default,
+        // left BYTE-IDENTICAL: nothing is set on the model below).
+        var grandTotals = ParseGrandTotals(props, opIndex);
+
         var targetSheetName = RequiredString(props, "targetSheet", opIndex, "Pivot");
         if (!workbook.TryGetWorksheet(targetSheetName, out var targetSheet))
         {
@@ -221,6 +228,13 @@ internal static partial class ExcelPivots
                 ApplyInMemory(pivotValue, value);
             }
 
+            // Grand-total visibility: only touch the model when the caller asked,
+            // so an omitted grandTotals leaves ClosedXML's always-both write byte-stable.
+            if (grandTotals is { } gt)
+            {
+                pivot.SetShowGrandTotalsRows(gt.Rows).SetShowGrandTotalsColumns(gt.Columns);
+            }
+
             pivot.PivotCache.Refresh(); // populate cached field items + records from the live data
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -270,6 +284,7 @@ internal static partial class ExcelPivots
             values = values.Select(ValueDetail).ToList(),
             filters,
             calculatedFields = calcFields.Select(c => new { name = c.Name, formula = c.Formula }).ToList(),
+            grandTotals = new { rows = pivot.ShowGrandTotalsRows, columns = pivot.ShowGrandTotalsColumns },
         };
     }
 
@@ -362,6 +377,7 @@ internal static partial class ExcelPivots
                 .ToList(),
             filters = pivot.ReportFilters.Select(f => f.SourceName).ToList(),
             calculatedFields = calc.Select(f => new { name = f.Name, formula = f.Formula }).ToList(),
+            grandTotals = new { rows = pivot.ShowGrandTotalsRows, columns = pivot.ShowGrandTotalsColumns },
         };
     }
 
@@ -1266,6 +1282,93 @@ internal static partial class ExcelPivots
                     "Each (field, agg, showAs) combination may appear once; drop the duplicate, use a different agg, or vary the showAs.");
             }
         }
+    }
+
+    /// <summary>Resolved grand-total visibility: which of the row / column grand totals show.</summary>
+    private readonly record struct GrandTotalsSpec(bool Rows, bool Columns);
+
+    /// <summary>
+    /// Parses the <c>grandTotals</c> prop, controlling row/column grand-total visibility.
+    /// Accepts EITHER a string <c>both</c>|<c>rows</c>|<c>columns</c>|<c>none</c> OR an
+    /// object <c>{rows:bool, columns:bool}</c>. Returns null when the prop is absent (the
+    /// caller then leaves ClosedXML's always-both default untouched, byte-for-byte). A bad
+    /// string is <c>invalid_args</c> with <see cref="GrandTotalModes"/> as candidates; a
+    /// non-boolean <c>rows</c>/<c>columns</c> (or an unknown sub-key) is also <c>invalid_args</c>.
+    /// </summary>
+    private static GrandTotalsSpec? ParseGrandTotals(JsonObject props, int opIndex)
+    {
+        if (!props.TryGetPropertyValue("grandTotals", out var node) || node is null)
+        {
+            return null;
+        }
+
+        switch (node)
+        {
+            case JsonValue value when value.GetValueKind() == JsonValueKind.String:
+            {
+                var mode = value.GetValue<string>();
+                return mode switch
+                {
+                    "both" => new GrandTotalsSpec(true, true),
+                    "rows" => new GrandTotalsSpec(true, false),
+                    "columns" => new GrandTotalsSpec(false, true),
+                    "none" => new GrandTotalsSpec(false, false),
+                    _ => throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{opIndex}]: unknown grandTotals '{mode}'.",
+                        "grandTotals is one of " + string.Join(", ", GrandTotalModes) +
+                        ", or an object like {\"rows\":true,\"columns\":false}.",
+                        candidates: GrandTotalModes),
+                };
+            }
+
+            case JsonObject obj:
+            {
+                foreach (var (key, _) in obj)
+                {
+                    if (key is not ("rows" or "columns"))
+                    {
+                        throw new AiofficeException(
+                            ErrorCodes.InvalidArgs,
+                            $"ops[{opIndex}]: unknown grandTotals field '{key}'.",
+                            "The grandTotals object accepts {rows, columns} booleans.",
+                            candidates: ["rows", "columns"]);
+                    }
+                }
+
+                // Omitting a sub-flag keeps that axis' grand total shown (today's default).
+                return new GrandTotalsSpec(
+                    ReadGrandTotalFlag(obj, "rows", opIndex),
+                    ReadGrandTotalFlag(obj, "columns", opIndex));
+            }
+
+            default:
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: 'grandTotals' must be a string ({string.Join("|", GrandTotalModes)}) " +
+                    "or an object {rows:bool, columns:bool}.",
+                    "E.g. {\"grandTotals\":\"none\"} or {\"grandTotals\":{\"rows\":false,\"columns\":true}}.");
+        }
+    }
+
+    /// <summary>Reads a boolean grandTotals sub-flag; absent => true (axis stays shown); non-bool => invalid_args.</summary>
+    private static bool ReadGrandTotalFlag(JsonObject obj, string key, int opIndex)
+    {
+        if (!obj.TryGetPropertyValue(key, out var node) || node is null)
+        {
+            return true;
+        }
+
+        if (node is not JsonValue value ||
+            value.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: grandTotals.{key} must be a boolean (true or false).",
+                "Pass e.g. {\"grandTotals\":{\"rows\":false,\"columns\":true}}.");
+        }
+
+        return value.GetValue<bool>();
     }
 
     private static List<ValueSpec> ParseValues(JsonObject props, int opIndex)
