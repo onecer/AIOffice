@@ -2,10 +2,13 @@
 
 ## slide (`/slide[2]`)
 
-| prop       | type   | notes                                              |
-|------------|--------|----------------------------------------------------|
-| title      | string | `add`: creates the title shape with this text      |
-| background | string | M2: hex RGB solid fill, a real `p:bg` (`set`/`add`)|
+| prop        | type   | notes                                              |
+|-------------|--------|----------------------------------------------------|
+| title       | string | `add`: creates the title shape with this text      |
+| background  | string | M2: hex RGB solid fill, a real `p:bg` (`set`/`add`)|
+| footer      | string \| false | 1.13: the slide footer caption (`ph type="ftr"`); `false` removes it |
+| slideNumber | bool   | 1.13: the slide-number field placeholder (`ph type="sldNum"`)        |
+| date        | true \| false \| string | 1.13: the date placeholder (`ph type="dt"`); `true` = auto field, a string = fixed text, `false` removes it |
 
 Add a slide after slide 1 (`position`: `at`/`before` = the new slide takes the
 path's index, `after` = one past it):
@@ -264,6 +267,48 @@ order. Editing SmartArt is `unsupported_feature` with the workaround named.
 `{width, height}` (cm/in/emu) rewrites `p:sldSz`; existing shapes keep their
 coordinates. `get /` reports `slideSize`, `widthCm`, `heightCm`, `slideCount`,
 `sectionCount`.
+
+## footer / slide number / date (1.13)
+
+Three placeholder shapes share the slide's bottom strip — a footer caption, an
+auto slide-number field, and an auto (or fixed) date field. Set them per-slide
+or deck-wide.
+
+**Per slide** (`set /slide[i]`):
+
+    {op:"set", path:"/slide[2]", props:{footer:"Acme Confidential",
+      slideNumber:true, date:true}}
+    {op:"set", path:"/slide[2]", props:{date:"October 2026"}}   # a fixed date caption
+    {op:"set", path:"/slide[2]", props:{footer:false, slideNumber:false}}  # remove
+
+| prop        | value                    | effect                                            |
+|-------------|--------------------------|---------------------------------------------------|
+| footer      | string                   | sets the footer caption (a `ph type="ftr"` shape) |
+| footer      | `false`                  | removes the footer shape                          |
+| slideNumber | `true` / `false`         | adds / removes the slide-number field (`sldNum`)  |
+| date        | `true`                   | adds the auto-updating date field (`dt`)          |
+| date        | `"any text"`             | a **fixed** date caption (a plain run, not a field) |
+| date        | `false`                  | removes the date shape                            |
+
+The slide-number and (auto) date are real `a:fld` fields PowerPoint recomputes
+live; each carries a cached `a:t` so it also renders in `render --to svg` and in
+LibreOffice. A `p:sld` has no `p:hf`, so on a single slide the *presence* of the
+placeholder shape is its visibility.
+
+**Deck-wide** — number a whole deck in one op via the `/` root (or `/master[m]`):
+
+    {op:"set", path:"/", props:{footer:"Q3 Review", slideNumber:true, date:true}}
+    {op:"set", path:"/", props:{slideNumber:true, skipTitle:false}}
+    {op:"set", path:"/master[1]", props:{slideNumber:true}}   # just this master's slides
+
+The deck-wide form stamps the master, its layouts **and every slide** (so the
+placeholders render everywhere) and wires the master/layout `p:hf` visibility.
+`skipTitle` (default `true`) hides the **footer** on title-layout slides by
+PowerPoint convention; pass `skipTitle:false` to keep it. Deck-wide footer props
+combine with `slideSize`/`width`/`height` in one op.
+
+`get /slide[i]` reports the slide's `footer` state (`{footer, slideNumber, date,
+dateText}`); `get /` reports the deck-wide state read off the first master.
 
 ## sections (M6, `/section[i]`)
 

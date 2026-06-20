@@ -145,7 +145,7 @@ public sealed class BackgroundTests : IDisposable
 
         var error = TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
         Assert.Equal(
-            new[] { "background", "gradient", "image", "transition", "transitionDuration" },
+            new[] { "background", "gradient", "image", "transition", "transitionDuration", "footer", "slideNumber", "date" },
             error.Candidates!);
     }
 }

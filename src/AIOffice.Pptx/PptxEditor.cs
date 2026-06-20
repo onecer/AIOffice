@@ -642,6 +642,14 @@ internal static class PptxEditor
 
         if (address.IsPresentation)
         {
+            // v1.13 deck-wide footer/slideNumber/date stamps every master/layout/slide
+            // in one op; any remaining props (slideSize/width/height) flow on.
+            if (PptxFooters.Handles(op.Props))
+            {
+                var path = PptxFooters.ApplyDeckWide(presentation, address, op.Props, out var restProps);
+                return restProps.Count > 0 ? PptxSlideSize.Set(presentation, restProps) : path;
+            }
+
             return PptxSlideSize.Set(presentation, op.Props);
         }
 
@@ -657,6 +665,14 @@ internal static class PptxEditor
 
         if (address.IsMaster)
         {
+            // A deck-wide footer addressed at /master[m] stamps that master, its layouts
+            // and the slides that use it; the rest (background/accents/fonts) flow on.
+            if (!address.HasShape && address.LayoutIndex is null && PptxFooters.Handles(op.Props))
+            {
+                var path = PptxFooters.ApplyDeckWide(presentation, address, op.Props, out var restProps);
+                return restProps.Count > 0 ? PptxMasters.Set(presentation, address, restProps, workspace) : path;
+            }
+
             return PptxMasters.Set(presentation, address, op.Props, workspace);
         }
 
@@ -929,11 +945,16 @@ internal static class PptxEditor
         return address.CanonicalGroupPath;
     }
 
-    /// <summary>Slide-level set: solid/gradient/image background, transition and transition duration.</summary>
+    /// <summary>Slide-level set: solid/gradient/image background, transition, transition duration, footer/slideNumber/date.</summary>
     private static string SetSlideProps(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var slideData = slidePart.Slide?.CommonSlideData ?? throw CorruptPresentation("the slide has no p:cSld");
+
+        // v1.13 footer/slideNumber/date placeholders are split out (they touch the
+        // slide's p:hf + placeholder shapes, not the background/transition levers).
+        var footerProps = PptxFooters.Handles(props) ? new JsonObject() : null;
+
         JsonNode? transitionNode = null, durationNode = null;
         var hasTransition = false;
         var hasDuration = false;
@@ -959,14 +980,22 @@ internal static class PptxEditor
                     durationNode = value;
                     hasDuration = true;
                     break;
+                case "footer" or "slideNumber" or "date":
+                    footerProps![key] = value?.DeepClone();
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.InvalidArgs,
                         $"Prop '{key}' does not apply to a slide.",
-                        "Slide props: background, gradient, image, transition, transitionDuration. " +
+                        "Slide props: background, gradient, image, transition, transitionDuration, footer, slideNumber, date. " +
                         "Shape props (text, fill, geometry, …) target /slide[i]/shape[j].",
-                        candidates: ["background", "gradient", "image", "transition", "transitionDuration"]);
+                        candidates: ["background", "gradient", "image", "transition", "transitionDuration", "footer", "slideNumber", "date"]);
             }
+        }
+
+        if (footerProps is { Count: > 0 })
+        {
+            PptxFooters.ApplyToSlide(slidePart, footerProps);
         }
 
         if (hasTransition || hasDuration)

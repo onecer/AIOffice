@@ -421,6 +421,11 @@ internal static class PptxDoc
                 case A.Run run when run.Text is { } text:
                     parts.Add(text.Text);
                     break;
+                // A field (slide number / date placeholder) carries a cached a:t —
+                // PowerPoint recomputes it live, but the cached text is what renders.
+                case A.Field field when field.Text is { } fieldText:
+                    parts.Add(fieldText.Text);
+                    break;
                 case A.Break:
                     parts.Add("\n");
                     break;

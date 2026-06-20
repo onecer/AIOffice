@@ -543,6 +543,7 @@ internal static class PptxQueryEngine
             Background = PptxDoc.BackgroundHex(slidePart),
             Transition = transition?.Kind,
             TransitionDuration = transition?.Duration,
+            Footer = PptxFooters.SlideState(slidePart),
             ShapeCount = shapes.Count,
             Shapes = shapes.Select(s => new
             {

@@ -25,6 +25,19 @@ specs as a slide; see `aioffice help properties-pptx`). `set
 
 `get /master[1]` reports `majorFont` and `minorFont` back.
 
+### Deck-wide footer / slide number / date (1.13)
+
+`set /` (the deck root) or `set /master[m]` also accepts `footer`,
+`slideNumber`, `date` and `skipTitle` — these stamp the footer / slide-number /
+date placeholders onto the master, its layouts **and every slide**, and wire the
+master/layout `p:hf` visibility, so an agent can number a whole deck in one op:
+
+    aioffice edit deck.pptx --ops '[{"op":"set","path":"/","props":{"footer":"Q3 Review","slideNumber":true,"date":true}}]'
+    aioffice edit deck.pptx --ops '[{"op":"set","path":"/master[1]","props":{"slideNumber":true}}]'
+
+`skipTitle` (default `true`) hides the footer on title-layout slides. Per-slide
+control and the full grammar live in `aioffice help properties-pptx`.
+
 ## Notes master (1.7)
 
 The shared look of every slide's notes page.

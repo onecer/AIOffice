@@ -122,6 +122,7 @@ internal static class PptxSlideSize
             HeightCm = Units.EmuToCm(cy),
             SlideCount = PptxDoc.Slides(presentation).Count,
             SectionCount = PptxSections.List(presentation).Count,
+            Footer = PptxFooters.DeckState(presentation),
         };
     }
 
