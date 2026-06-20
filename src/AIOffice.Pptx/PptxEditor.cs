@@ -166,7 +166,7 @@ internal static class PptxEditor
         switch (type)
         {
             case "slide":
-                return AddSlide(presentation, address, op.Position, op.Props);
+                return AddSlide(presentation, address, op.Position, op.Props, workspace);
 
             case "section":
                 throw new AiofficeException(
@@ -456,7 +456,7 @@ internal static class PptxEditor
         return PptxDoc.ResolveSlide(presentation, address.SlideIndex, path);
     }
 
-    private static string AddSlide(PresentationPart presentation, PptxAddress address, string? position, JsonObject? props)
+    private static string AddSlide(PresentationPart presentation, PptxAddress address, string? position, JsonObject? props, Workspace workspace)
     {
         if (address.HasShape || address.IsChart)
         {
@@ -510,7 +510,7 @@ internal static class PptxEditor
 
         if (props is not null && props.TryGetPropertyValue("background", out var backgroundNode))
         {
-            SetBackground(slidePart, backgroundNode);
+            SetBackground(slidePart, backgroundNode, workspace);
         }
 
         return Units.Inv($"/slide[{target}]");
@@ -964,7 +964,7 @@ internal static class PptxEditor
             switch (key)
             {
                 case "background":
-                    SetBackground(slidePart, value);
+                    SetBackground(slidePart, value, workspace);
                     break;
                 case "gradient":
                     PptxFill.ApplyToBackground(slideData, PptxFill.BuildGradientFill(value));
@@ -1006,36 +1006,85 @@ internal static class PptxEditor
         return address.CanonicalSlidePath;
     }
 
-    /// <summary>Sets a proper p:bg solid fill on a slide (replacing any previous background).</summary>
-    internal static void SetBackground(SlidePart slidePart, JsonNode? value)
+    /// <summary>Sets a proper p:bg fill on a slide (replacing any previous background).</summary>
+    internal static void SetBackground(SlidePart slidePart, JsonNode? value, Workspace? workspace = null)
     {
         var slideData = slidePart.Slide?.CommonSlideData ?? throw new AiofficeException(
             ErrorCodes.FormatCorrupt,
             "The slide has no common slide data (p:cSld).",
             "The slide part is malformed; re-export the file or restore a snapshot.");
-        SetBackground(slideData, value);
+        SetBackground(slideData, value, slidePart, workspace);
     }
 
-    /// <summary>Sets a proper p:bg solid fill on any p:cSld (slide, master or layout), replacing any previous one.</summary>
-    internal static void SetBackground(P.CommonSlideData slideData, JsonNode? value)
+    /// <summary>
+    /// Sets a proper p:bg fill on any p:cSld (slide, master or layout), replacing any previous one.
+    /// The 'background' prop accepts a solid hex string (the byte-stable legacy path, kept first),
+    /// or — additively (v1.14) — a {gradient:{…}} or {image:{…}} object that reuses the same
+    /// <see cref="PptxFill"/> builders shape fills use, wrapped in p:bg/p:bgPr.
+    /// </summary>
+    internal static void SetBackground(
+        P.CommonSlideData slideData,
+        JsonNode? value,
+        OpenXmlPartContainer? host = null,
+        Workspace? workspace = null)
     {
-        if (value is JsonObject or JsonArray ||
-            (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw)))
+        // Legacy solid path FIRST and byte-stable: a non-object value stays a hex → a:solidFill
+        // p:bg, including the gradient-/image-looking STRING guard a 1.13.0 agent relied on.
+        if (value is not JsonObject background)
         {
-            throw new AiofficeException(
-                ErrorCodes.UnsupportedFeature,
-                "Gradient and image backgrounds are not supported.",
-                "Use a solid color, e.g. {\"background\":\"0F172A\"} — or add a full-bleed picture: " +
-                "{\"op\":\"add\",\"type\":\"image\",\"props\":{\"src\":\"bg.png\",\"x\":0,\"y\":0,\"w\":\"33.87cm\",\"h\":\"19.05cm\"}}.");
+            if (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    "Gradient and image backgrounds are not supported.",
+                    "Use a solid color, e.g. {\"background\":\"0F172A\"} — or a gradient/image object: " +
+                    "{\"background\":{\"gradient\":{\"stops\":[…]}}} / {\"background\":{\"image\":{\"src\":\"bg.png\"}}}.");
+            }
+
+            var hex = Units.ParseColorHex("background", value);
+            slideData.Background = new P.Background(
+                new P.BackgroundProperties(
+                    new A.SolidFill(new A.RgbColorModelHex { Val = hex }),
+                    new A.EffectList()));
+            return;
         }
 
-        var hex = Units.ParseColorHex("background", value);
-        slideData.Background = new P.Background(
-            new P.BackgroundProperties(
-                new A.SolidFill(new A.RgbColorModelHex { Val = hex }),
-                new A.EffectList()));
+        // v1.14: a {gradient:{…}} or {image:{…}} object widens the existing prop to the
+        // visual fills BuildGradientFill / BuildImageFill already shape for fills.
+        OpenXmlElement fill;
+        if (background.TryGetPropertyValue("gradient", out var gradientNode))
+        {
+            EnsureSingleBackgroundKey(background, "gradient");
+            fill = PptxFill.BuildGradientFill(gradientNode);
+        }
+        else if (background.TryGetPropertyValue("image", out var imageNode))
+        {
+            EnsureSingleBackgroundKey(background, "image");
+            if (host is null || workspace is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.UnsupportedFeature,
+                    "An image background cannot embed a picture on this part.",
+                    "Set an image background on a slide, master or layout.");
+            }
+
+            fill = PptxFill.BuildImageFill(imageNode, host, workspace);
+        }
+        else
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "An object 'background' must carry a 'gradient' or an 'image' fill.",
+                "Use a solid hex (\"background\":\"0F172A\"), a gradient " +
+                "(\"background\":{\"gradient\":{\"type\":\"linear\",\"angle\":90,\"stops\":[…]}}) " +
+                "or an image (\"background\":{\"image\":{\"src\":\"bg.png\"}}).",
+                candidates: ["gradient", "image"]);
+        }
+
+        PptxFill.ApplyToBackground(slideData, fill);
     }
 
+    /// <summary>A gradient-/image-looking background STRING (kept for the legacy UnsupportedFeature guard).</summary>
     private static bool LooksLikeGradientOrImage(string raw)
     {
         var text = raw.Trim().ToLowerInvariant();
@@ -1045,6 +1094,22 @@ internal static class PptxEditor
             || text.EndsWith(".png", StringComparison.Ordinal)
             || text.EndsWith(".jpg", StringComparison.Ordinal)
             || text.EndsWith(".jpeg", StringComparison.Ordinal);
+    }
+
+    /// <summary>A {gradient}/{image} object background carries exactly one fill key and nothing else.</summary>
+    private static void EnsureSingleBackgroundKey(JsonObject background, string chosen)
+    {
+        foreach (var (key, _) in background)
+        {
+            if (key != chosen)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"An object 'background' takes a single '{chosen}' fill, not also '{key}'.",
+                    "Set one fill per background: a solid hex, {\"gradient\":{…}} or {\"image\":{…}}.",
+                    candidates: ["gradient", "image"]);
+            }
+        }
     }
 
     private static string ApplyRemove(PresentationPart presentation, EditOp op)

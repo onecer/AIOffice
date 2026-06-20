@@ -48,6 +48,24 @@ public sealed class BackgroundTests : IDisposable
     }
 
     [Fact]
+    public void SetBackground_SolidPath_IsByteStableVs1_13()
+    {
+        // Regression: a solid hex must serialize to the EXACT p:bg XML 1.13.0 produced —
+        // the legacy branch stays first and untouched by the v1.14 object widening.
+        Create();
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", "0F172A"))));
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var background = doc.PresentationPart!.SlideParts.Single().Slide!.CommonSlideData!.Background!;
+        Assert.Equal(
+            "<p:bg xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">" +
+            "<p:bgPr><a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
+            "<a:srgbClr val=\"0F172A\" /></a:solidFill>" +
+            "<a:effectLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" /></p:bgPr></p:bg>",
+            background.OuterXml);
+    }
+
+    [Fact]
     public void SetBackground_ReplacesThePreviousOne()
     {
         Create();
@@ -111,17 +129,174 @@ public sealed class BackgroundTests : IDisposable
         Assert.Contains("solid color", error.Suggestion, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---------------------------------------------------------- v1.14: object background fills
+
+    /// <summary>A test PNG written into the sandbox, returned by its workspace-relative name.</summary>
+    private string WritePng(string name = "bg.png", int w = 8, int h = 8)
+    {
+        File.WriteAllBytes(_ws.PathOf(name), TestImages.Png(w, h));
+        return name;
+    }
+
+    private static JsonObject GradientSpec() => new()
+    {
+        ["gradient"] = new JsonObject
+        {
+            ["type"] = "linear",
+            ["angle"] = 90,
+            ["stops"] = new JsonArray(
+                new JsonObject { ["color"] = "0EA5E9", ["at"] = 0 },
+                new JsonObject { ["color"] = "6366F1", ["at"] = 100 }),
+        },
+    };
+
     [Fact]
-    public void GradientObjectBackground_IsTypedUnsupportedFeature()
+    public void SetBackground_GradientObject_WritesGradFillWithStops()
+    {
+        Create();
+        var data = Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", GradientSpec()))));
+        Assert.Equal("/slide[1]", data["results"]![0]!["target"]!.GetValue<string>());
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var slideData = doc.PresentationPart!.SlideParts.Single().Slide!.CommonSlideData!;
+            var bgPr = slideData.Background!.BackgroundProperties!;
+            Assert.Single(slideData.Elements<P.Background>());
+
+            // p:bg/p:bgPr/a:gradFill with the two stops, read straight off the part.
+            var grad = bgPr.GetFirstChild<A.GradientFill>();
+            Assert.NotNull(grad);
+            Assert.Null(bgPr.GetFirstChild<A.SolidFill>());
+            var stops = grad!.GetFirstChild<A.GradientStopList>()!.Elements<A.GradientStop>().ToList();
+            Assert.Equal(2, stops.Count);
+            Assert.Equal("0EA5E9", stops[0].RgbColorModelHex!.Val!.Value);
+            Assert.Equal(0, stops[0].Position!.Value);
+            Assert.Equal("6366F1", stops[1].RgbColorModelHex!.Val!.Value);
+            Assert.Equal(100000, stops[1].Position!.Value);
+            // angle 90° → 90 * 60000 1/60000ths.
+            Assert.Equal(90 * 60000, grad.GetFirstChild<A.LinearGradientFill>()!.Angle!.Value);
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetBackground_ImageObject_EmbedsBlipFillOnANewPart()
+    {
+        Create();
+        var src = WritePng();
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(
+            ("background", new JsonObject { ["image"] = new JsonObject { ["src"] = src } }))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var slidePart = doc.PresentationPart!.SlideParts.Single();
+            var bgPr = slidePart.Slide!.CommonSlideData!.Background!.BackgroundProperties!;
+
+            // p:bg/p:bgPr/a:blipFill referencing a NEW image part on the slide part.
+            var blip = bgPr.GetFirstChild<A.BlipFill>()!.Blip!;
+            var imagePart = Assert.Single(slidePart.ImageParts);
+            Assert.Equal(slidePart.GetIdOfPart(imagePart), blip.Embed!.Value); // rel points at it, no orphan
+
+            using var stream = imagePart.GetStream();
+            Assert.Equal(TestImages.Png(8, 8).Length, stream.Length);
+        }
+
+        // Package opens repair-free (validator clean), no orphaned media part.
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetBackground_GradientThenSolid_LeavesExactlyOneBgAndNoOrphanMedia()
+    {
+        Create();
+        var src = WritePng();
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(
+            ("background", new JsonObject { ["image"] = new JsonObject { ["src"] = src } }))));
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", GradientSpec()))));
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", "445566"))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var slidePart = doc.PresentationPart!.SlideParts.Single();
+            var slideData = slidePart.Slide!.CommonSlideData!;
+
+            // Exactly one p:bg, and it is the final solid fill.
+            Assert.Single(slideData.Elements<P.Background>());
+            var bgPr = slideData.Background!.BackgroundProperties!;
+            Assert.Equal("445566", bgPr.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
+            Assert.Null(bgPr.GetFirstChild<A.GradientFill>());
+            Assert.Null(bgPr.GetFirstChild<A.BlipFill>());
+        }
+
+        // The earlier image part is no longer referenced; the package must still validate clean.
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetSlide_ReportsBackgroundKind()
+    {
+        Create();
+        var src = WritePng();
+
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", "0F172A"))));
+        Assert.Equal("solid", Kind("/slide[1]"));
+
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(("background", GradientSpec()))));
+        Assert.Equal("gradient", Kind("/slide[1]"));
+
+        Edit(TestEnv.Op("set", "/slide[1]", props: TestEnv.Props(
+            ("background", new JsonObject { ["image"] = new JsonObject { ["src"] = src } }))));
+        Assert.Equal("image", Kind("/slide[1]"));
+    }
+
+    private string? Kind(string path)
+    {
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        return detail["backgroundKind"]?.GetValue<string>();
+    }
+
+    [Fact]
+    public void SetBackground_GradientWithEmptyStops_IsInvalidArgs()
     {
         Create();
         var props = new JsonObject
         {
-            ["background"] = new JsonObject { ["gradient"] = new JsonArray("000000", "FFFFFF") },
+            ["background"] = new JsonObject
+            {
+                ["gradient"] = new JsonObject { ["stops"] = new JsonArray() },
+            },
         };
         var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("set", "/slide[1]", props: props)]);
 
-        TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void SetBackground_ImageWithoutSrc_IsInvalidArgs()
+    {
+        Create();
+        var props = new JsonObject
+        {
+            ["background"] = new JsonObject { ["image"] = new JsonObject { ["mode"] = "tile" } },
+        };
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("set", "/slide[1]", props: props)]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void SetBackground_ObjectWithoutGradientOrImage_IsInvalidArgs()
+    {
+        Create();
+        var props = new JsonObject
+        {
+            ["background"] = new JsonObject { ["solid"] = "0F172A" },
+        };
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("set", "/slide[1]", props: props)]);
+
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        Assert.Equal(new[] { "gradient", "image" }, error.Candidates!);
     }
 
     [Fact]

@@ -54,7 +54,7 @@ internal static class PptxMasters
             if (string.Equals(key, "background", StringComparison.Ordinal))
             {
                 var slideData = masterPart.SlideMaster?.CommonSlideData ?? throw Corrupt("the master has no p:cSld");
-                PptxEditor.SetBackground(slideData, value);
+                PptxEditor.SetBackground(slideData, value, masterPart, workspace);
                 continue;
             }
 
@@ -133,7 +133,7 @@ internal static class PptxMasters
             if (string.Equals(key, "background", StringComparison.Ordinal))
             {
                 var slideData = layoutPart.SlideLayout?.CommonSlideData ?? throw Corrupt("the layout has no p:cSld");
-                PptxEditor.SetBackground(slideData, value);
+                PptxEditor.SetBackground(slideData, value, layoutPart, workspace);
                 continue;
             }
 

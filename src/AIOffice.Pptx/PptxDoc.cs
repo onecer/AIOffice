@@ -439,6 +439,32 @@ internal static class PptxDoc
     public static string? BackgroundHex(SlidePart slidePart) => slidePart.Slide?.CommonSlideData?.Background?
         .BackgroundProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
 
+    /// <summary>
+    /// The kind of fill a slide's p:bg carries: "solid", "gradient" or "image" — or null when
+    /// no explicit background is set (the slide inherits the layout/master). Round-trips the
+    /// 'background' prop's widened gradient/image shapes.
+    /// </summary>
+    public static string? BackgroundKind(SlidePart slidePart)
+    {
+        var properties = slidePart.Slide?.CommonSlideData?.Background?.BackgroundProperties;
+        if (properties is null)
+        {
+            return null;
+        }
+
+        if (properties.GetFirstChild<A.GradientFill>() is not null)
+        {
+            return "gradient";
+        }
+
+        if (properties.GetFirstChild<A.BlipFill>() is not null)
+        {
+            return "image";
+        }
+
+        return properties.GetFirstChild<A.SolidFill>() is not null ? "solid" : null;
+    }
+
     /// <summary>Solid RRGGBB fill of a shape, when one is set with an explicit RGB color.</summary>
     public static string? FillHex(OpenXmlCompositeElement element)
     {
