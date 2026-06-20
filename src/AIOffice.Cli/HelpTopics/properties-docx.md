@@ -471,3 +471,29 @@ it back. Slots: `dk1/lt1/dk2/lt2`, `accent1`…`accent6`, `hlink`, `folHlink`
 ```jsonc
 {op:"set", path:"/theme", props:{accent1:"38BDF8", minorFont:"Calibri"}}
 ```
+
+## document protection (1.13, `/`)
+
+The document root carries document-level protection. `set /` writes it into
+`word/settings.xml` (the settings part is created on demand); `get /` reports
+`{protection:{edit, enforced}, readOnlyRecommended}` and stays additive with
+whatever the root already returns.
+
+- `protection` — `{edit:"readOnly"|"comments"|"trackedChanges"|"forms"|"none",
+  enforce?:bool}`. Writes `w:documentProtection` with `@w:edit` and
+  `@w:enforcement="1"`. `enforce` defaults to `true`; `enforce:false` or
+  `edit:"none"` removes the protection. `readOnly` blocks editing, `comments`
+  allows only comments, `trackedChanges` forces all edits to be tracked, `forms`
+  locks everything but form fields.
+- `readOnlyRecommended` — `bool`. Writes `w:writeProtection @w:recommended="1"`
+  so Word opens the document read-only-recommended; `false` removes it.
+
+This is ENFORCEMENT-FLAG protection, **not** password encryption — a `password`
+inside `protection` is accepted but ignored (strong encryption is out of scope,
+CONTRACT §10). The flag deters casual editing but does not encrypt the file.
+
+```jsonc
+{op:"set", path:"/", props:{protection:{edit:"readOnly"}}}
+{op:"set", path:"/", props:{protection:{edit:"comments"}, readOnlyRecommended:true}}
+{op:"set", path:"/", props:{protection:{edit:"none"}}}        // lift protection
+```

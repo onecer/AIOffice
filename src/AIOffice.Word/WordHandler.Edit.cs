@@ -112,10 +112,21 @@ public sealed partial class WordHandler
         var parsedPath = DocPath.Parse(op.Path);
         if (parsedPath.IsRoot)
         {
+            // The document root carries document-level protection since 1.13: set /
+            // writes w:documentProtection / w:writeProtection into settings.xml,
+            // mirroring how xlsx 'set /' carries workbook protection/calc props.
+            // Any other root-targeted op (or a propless set /) keeps the old
+            // helpful refusal that points at the real edit targets.
+            if (op.Op == "set" && op.Props is { Count: > 0 })
+            {
+                return ApplySetDocumentProtection(doc, op);
+            }
+
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 "docx has no document-root edit target ('/').",
-                "Edit page setup on /section[1], body content under /body, or use 'replace' with path '/' for document-wide find/replace.");
+                "Set document protection with {op:set, path:/, props:{protection:{edit:\"readOnly\"}}}; "
+                + "edit page setup on /section[1], body content under /body, or use 'replace' with path '/' for document-wide find/replace.");
         }
 
         var rootName = parsedPath.Segments[0].Name;

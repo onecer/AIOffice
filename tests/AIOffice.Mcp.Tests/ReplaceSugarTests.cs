@@ -199,12 +199,13 @@ public sealed class ReplaceSugarTests : IDisposable
             Op("set", "/", props: new JsonObject { ["text"] = "x" })));
 
         // M6: "/" is now a real path form (pptx slide size / sections + document
-        // -level get), so it parses instead of failing invalid_path. A non-replace
-        // op on the docx root has no edit target, so the docx handler rejects it
-        // with unsupported_feature naming the body/section workaround — still a
-        // hard rejection (nothing is written), only the code is more specific.
+        // -level get), so it parses instead of failing invalid_path. Since 1.13 a
+        // docx 'set /' WITH props is a real document-protection edit target, so a
+        // props bag that names no protection prop (here {text}) is rejected with
+        // invalid_args + candidates rather than unsupported_feature — still a hard
+        // rejection (nothing is written), only the code is more specific.
         Assert.False(envelope.IsOk);
-        Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
         Assert.False(string.IsNullOrWhiteSpace(envelope.Error.Suggestion));
     }
 }

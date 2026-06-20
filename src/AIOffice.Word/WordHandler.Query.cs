@@ -83,14 +83,13 @@ public sealed partial class WordHandler
             var docPath = DocPath.Parse(pathArg);
             var meta = MetaFor(file, Rev.OfBytes(bytes));
 
-            // "/" (document root) carries no docx surface — page setup lives on
-            // /section[1], document title in core properties.
+            // "/" (document root) reports document-level protection since 1.13
+            // (page setup still lives on /section[1], the title in core properties).
             if (docPath.IsRoot)
             {
-                throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    "docx has no document-root properties to get.",
-                    "Get page setup from /section[1], or a paragraph with /body/p[1]; set the title via 'aioffice create --title'.");
+                return Envelope.Ok(
+                    new { path = "/", type = "document", properties = DocumentProtectionShape(doc) },
+                    meta);
             }
 
             // Inline equations are addressed by their full path ending /omath[j].
