@@ -23,8 +23,59 @@ internal static partial class ExcelPivots
     /// <summary>The aggregations an add op accepts (wire names).</summary>
     public static readonly IReadOnlyList<string> Aggs = ["sum", "count", "average", "min", "max"];
 
+    /// <summary>
+    /// The show-values-as modes a pivot value field accepts (wire names). Every mode
+    /// here is APPLIED (the latent v1.0–1.12 bug — a <c>showAs</c> silently accepted
+    /// and never written — is gone): an unknown name is <c>invalid_args</c> with these
+    /// as candidates, and a mode ClosedXML/OOXML cannot express is rejected with
+    /// <c>unsupported_feature</c> (see <see cref="UnsupportedShowAs"/>), never ignored.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ShowAsModes =
+    [
+        "normal", "percentOfTotal", "percentOfColumn", "percentOfRow", "runningTotal",
+        "differenceFrom", "percentDifferenceFrom", "percentOf", "index",
+        // Accepted names, but rejected as unsupported_feature (OOXML showDataAs has no slot):
+        "percentOfParentTotal", "rankAscending", "rankDescending",
+    ];
+
+    /// <summary>Modes a caller may name but OOXML's <c>showDataAs</c> cannot carry → <c>unsupported_feature</c>.</summary>
+    private static readonly IReadOnlyDictionary<string, string> UnsupportedShowAs =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["percentOfParentTotal"] = "ClosedXML 0.105 / OOXML showDataAs only models a flat percentOfTotal, not the percentOfParent* family.",
+            ["rankAscending"] = "OOXML showDataAs has no rank slot (it is an Excel-2010 dataField ext); ClosedXML cannot author it.",
+            ["rankDescending"] = "OOXML showDataAs has no rank slot (it is an Excel-2010 dataField ext); ClosedXML cannot author it.",
+        };
+
+    /// <summary>Modes that require a <c>baseField</c> (and, for the difference pair, a <c>baseItem</c>).</summary>
+    private static readonly IReadOnlySet<string> NeedsBaseField =
+        new HashSet<string>(StringComparer.Ordinal) { "runningTotal", "differenceFrom", "percentDifferenceFrom", "percentOf" };
+
+    private static readonly IReadOnlySet<string> NeedsBaseItem =
+        new HashSet<string>(StringComparer.Ordinal) { "differenceFrom", "percentDifferenceFrom", "percentOf" };
+
+    /// <summary>The OOXML <c>showDataAs</c> attribute value for each applied (non-normal) mode.</summary>
+    private static readonly IReadOnlyDictionary<string, S.ShowDataAsValues> ShowDataAsOf =
+        new Dictionary<string, S.ShowDataAsValues>(StringComparer.Ordinal)
+        {
+            ["percentOfTotal"] = S.ShowDataAsValues.PercentOfTotal,
+            ["percentOfColumn"] = S.ShowDataAsValues.PercentOfColumn,
+            ["percentOfRow"] = S.ShowDataAsValues.PercentOfRaw, // OOXML spells "% of row" percentOfRow
+            ["runningTotal"] = S.ShowDataAsValues.RunTotal,
+            ["differenceFrom"] = S.ShowDataAsValues.Difference,
+            ["percentDifferenceFrom"] = S.ShowDataAsValues.PercentageDifference,
+            ["percentOf"] = S.ShowDataAsValues.Percent,
+            ["index"] = S.ShowDataAsValues.Index,
+        };
+
+    /// <summary>The OOXML <c>baseItem</c> sentinels (ECMA-376 ST_Index defaults): previous/next item.</summary>
+    private const uint BaseItemPrevious = 1048828u;
+    private const uint BaseItemNext = 1048829u;
+
     private static readonly IReadOnlyList<string> AddProps =
         ["sourceRange", "targetSheet", "targetAnchor", "rows", "columns", "values", "filters", "name", "calculatedFields"];
+
+    private static readonly IReadOnlyList<string> ValueProps = ["field", "agg", "showAs", "baseField", "baseItem"];
 
     [GeneratedRegex("^([A-Z]{1,3})([0-9]{1,7}):([A-Z]{1,3})([0-9]{1,7})$")]
     private static partial Regex RangePattern();
@@ -44,7 +95,7 @@ internal static partial class ExcelPivots
     /// </summary>
     public static object Add(
         XLWorkbook workbook, IXLWorksheet sourceSheet, EditOp op, int opIndex,
-        List<CalculatedFieldSpec> calculatedFields)
+        List<CalculatedFieldSpec> calculatedFields, List<ShowAsSpec> showValuesAs)
     {
         var props = op.Props;
         if (props is null || props.Count == 0)
@@ -97,7 +148,11 @@ internal static partial class ExcelPivots
         rows = [.. rows.Select(f => ResolveField(headers, f, opIndex))];
         columns = [.. columns.Select(f => ResolveField(headers, f, opIndex))];
         filters = [.. filters.Select(f => ResolveField(headers, f, opIndex))];
-        values = [.. values.Select(v => v with { Field = ResolveField(headers, v.Field, opIndex) })];
+        values = [.. values.Select(v => v with
+        {
+            Field = ResolveField(headers, v.Field, opIndex),
+            BaseField = v.BaseField is null ? null : ResolveField(headers, v.BaseField, opIndex),
+        })];
 
         GuardAxisOverlap(rows, columns, filters, opIndex);
         GuardDuplicateValues(values, opIndex);
@@ -151,11 +206,19 @@ internal static partial class ExcelPivots
                 pivot.ReportFilters.Add(field);
             }
 
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var value in values)
             {
-                pivot.Values
-                    .Add(value.Field, $"{AggLabel(value.Agg)} of {value.Field}")
+                var pivotValue = pivot.Values
+                    .Add(value.Field, UniqueValueName(value, usedNames))
                     .SetSummaryFormula(SummaryOf(value.Agg));
+
+                // Set the in-memory show-values-as so anything reading the live model
+                // (and ClosedXML's own cache compute, where it supports the mode) sees
+                // it. ClosedXML 0.105's WRITER drops these attributes on save, so the
+                // authoritative write is the raw post-save pass below — but the
+                // in-memory call keeps the model self-consistent and round-trippable.
+                ApplyInMemory(pivotValue, value);
             }
 
             pivot.PivotCache.Refresh(); // populate cached field items + records from the live data
@@ -176,6 +239,20 @@ internal static partial class ExcelPivots
             calculatedFields.Add(calc with { TargetSheet = targetSheet.Name, PivotName = name });
         }
 
+        // Queue every non-normal show-values-as for the post-save raw pass: ClosedXML
+        // 0.105 sets the in-memory Calculation but drops showDataAs/baseField/baseItem
+        // on save, so the dataField attributes are authored directly on the bytes.
+        // The dataField order matches the value-add order (calculated fields append
+        // AFTER), so the value index here is its dataField position.
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (!string.Equals(values[i].ShowAs, "normal", StringComparison.Ordinal))
+            {
+                showValuesAs.Add(new ShowAsSpec(
+                    targetSheet.Name, name, i, values[i].ShowAs, values[i].BaseField, values[i].BaseItem));
+            }
+        }
+
         return new
         {
             op = "add",
@@ -190,11 +267,17 @@ internal static partial class ExcelPivots
             location = anchor.ToUpperInvariant(),
             rows,
             columns,
-            values = values.Select(v => new { field = v.Field, agg = v.Agg }).ToList(),
+            values = values.Select(ValueDetail).ToList(),
             filters,
             calculatedFields = calcFields.Select(c => new { name = c.Name, formula = c.Formula }).ToList(),
         };
     }
+
+    /// <summary>The per-value details entry: field + agg, plus showAs (and its base) when not the default normal.</summary>
+    private static object ValueDetail(ValueSpec v) =>
+        string.Equals(v.ShowAs, "normal", StringComparison.Ordinal)
+            ? new { field = v.Field, agg = v.Agg }
+            : new { field = v.Field, agg = v.Agg, showAs = v.ShowAs, baseField = v.BaseField, baseItem = v.BaseItem };
 
     // ----- find / describe ---------------------------------------------------
 
@@ -275,12 +358,62 @@ internal static partial class ExcelPivots
             columns = pivot.ColumnLabels.Select(f => f.SourceName).ToList(),
             values = pivot.Values
                 .Where(v => !calcNames.Contains(v.SourceName))
-                .Select(v => new { field = v.SourceName, agg = AggName(v.SummaryFormula) })
+                .Select(DescribeValue)
                 .ToList(),
             filters = pivot.ReportFilters.Select(f => f.SourceName).ToList(),
             calculatedFields = calc.Select(f => new { name = f.Name, formula = f.Formula }).ToList(),
         };
     }
+
+    /// <summary>
+    /// One value field as <c>get</c> reports it: field + agg, plus showAs (and its
+    /// base) when ClosedXML read a non-normal calculation back from the file's
+    /// <c>showDataAs</c>. The (previous)/(next) base-item sentinels surface as their
+    /// readable names.
+    /// </summary>
+    private static object DescribeValue(IXLPivotValue value)
+    {
+        var showAs = ShowAsName(value.Calculation);
+        if (string.Equals(showAs, "normal", StringComparison.Ordinal))
+        {
+            return new { field = value.SourceName, agg = AggName(value.SummaryFormula) };
+        }
+
+        var baseField = string.IsNullOrEmpty(value.BaseFieldName) ? null : value.BaseFieldName;
+        // baseItem is only meaningful for the difference family; runningTotal et al.
+        // carry an unused index that ClosedXML surfaces as (previous) — suppress it.
+        var baseItem = NeedsBaseItem.Contains(showAs)
+            ? value.CalculationItem switch
+            {
+                XLPivotCalculationItem.Previous => "(previous)",
+                XLPivotCalculationItem.Next => "(next)",
+                _ => value.BaseItemValue.IsBlank ? null : value.BaseItemValue.ToString(CultureInfo.InvariantCulture),
+            }
+            : null;
+        return new
+        {
+            field = value.SourceName,
+            agg = AggName(value.SummaryFormula),
+            showAs,
+            baseField,
+            baseItem,
+        };
+    }
+
+    /// <summary>Wire show-values-as name for a calculation read back from a file (ClosedXML's enum).</summary>
+    private static string ShowAsName(XLPivotCalculation calculation) => calculation switch
+    {
+        XLPivotCalculation.Normal => "normal",
+        XLPivotCalculation.PercentageOfTotal => "percentOfTotal",
+        XLPivotCalculation.PercentageOfColumn => "percentOfColumn",
+        XLPivotCalculation.PercentageOfRow => "percentOfRow",
+        XLPivotCalculation.RunningTotal => "runningTotal",
+        XLPivotCalculation.DifferenceFrom => "differenceFrom",
+        XLPivotCalculation.PercentageDifferenceFrom => "percentDifferenceFrom",
+        XLPivotCalculation.PercentageOf => "percentOf",
+        XLPivotCalculation.Index => "index",
+        _ => "normal",
+    };
 
     // ----- post-save part sync ------------------------------------------------
 
@@ -476,6 +609,135 @@ internal static partial class ExcelPivots
         }
     }
 
+    // ----- show-values-as raw authoring (v1.13) ---------------------------------
+
+    /// <summary>
+    /// A validated show-values-as for the post-save raw pass. <c>ValueIndex</c> is the
+    /// 0-based position of the value field in the pivot's <c>dataFields</c> (= its add
+    /// order). <c>ShowAs</c> is the wire mode (never <c>normal</c> — those are not
+    /// queued). <c>BaseField</c>/<c>BaseItem</c> carry the resolved base for modes that
+    /// need one; both names are looked up against the saved cache definition.
+    /// </summary>
+    public sealed record ShowAsSpec(
+        string TargetSheet, string PivotName, int ValueIndex, string ShowAs, string? BaseField, string? BaseItem);
+
+    /// <summary>
+    /// Authors the queued show-values-as settings on the saved file. For each value
+    /// field it sets the <c>dataField</c>'s <c>showDataAs</c> attribute (and, for the
+    /// base-field modes, <c>baseField</c> = the base's 0-based cacheField index and
+    /// <c>baseItem</c> = the item's 0-based sharedItems index, or the
+    /// previous/next sentinel). ClosedXML's writer drops these, so this raw pass is the
+    /// authoritative write; Excel recomputes the displayed values on open and ClosedXML
+    /// reads the attributes back (so <see cref="Describe"/> reports them). Runs after
+    /// the calculated-fields pass so every dataField is present.
+    /// </summary>
+    public static void ApplyShowValuesAs(string file, IReadOnlyList<ShowAsSpec> specs)
+    {
+        if (specs.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.Workbook is null)
+        {
+            return;
+        }
+
+        foreach (var byPivot in specs.GroupBy(s => (s.TargetSheet, s.PivotName)))
+        {
+            var (pivotPart, cachePart) = LocatePivotParts(workbookPart, byPivot.Key.TargetSheet, byPivot.Key.PivotName);
+            if (pivotPart?.PivotTableDefinition is not { } definition ||
+                definition.DataFields is not { } dataFields ||
+                cachePart?.PivotCacheDefinition?.CacheFields is not { } cacheFields)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InternalError,
+                    $"Pivot '{byPivot.Key.PivotName}' on '{byPivot.Key.TargetSheet}' disappeared before its show-values-as was written.",
+                    "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+            }
+
+            var dataFieldList = dataFields.Elements<S.DataField>().ToList();
+            var cacheFieldList = cacheFields.Elements<S.CacheField>().ToList();
+
+            foreach (var spec in byPivot)
+            {
+                if (spec.ValueIndex >= dataFieldList.Count)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InternalError,
+                        $"Pivot '{byPivot.Key.PivotName}' value #{spec.ValueIndex} vanished before its show-values-as was written.",
+                        "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+                }
+
+                var dataField = dataFieldList[spec.ValueIndex];
+                dataField.ShowDataAs = ShowDataAsOf[spec.ShowAs];
+
+                if (spec.BaseField is { } baseField)
+                {
+                    var baseFieldIndex = cacheFieldList.FindIndex(
+                        cf => string.Equals(cf.Name?.Value, baseField, StringComparison.OrdinalIgnoreCase));
+                    if (baseFieldIndex < 0)
+                    {
+                        throw new AiofficeException(
+                            ErrorCodes.InternalError,
+                            $"Base field '{baseField}' for pivot '{byPivot.Key.PivotName}' is missing from its cache.",
+                            "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+                    }
+
+                    dataField.BaseField = baseFieldIndex;
+
+                    // baseItem only carries meaning for the difference family; for
+                    // runningTotal it is unused, so leave the dataField default rather
+                    // than writing a sentinel Excel would ignore.
+                    if (spec.BaseItem is not null)
+                    {
+                        dataField.BaseItem = ResolveBaseItemIndex(cacheFieldList[baseFieldIndex], spec.BaseItem);
+                    }
+                }
+            }
+
+            definition.Save();
+        }
+    }
+
+    /// <summary>
+    /// The OOXML <c>baseItem</c> index for a difference's base item: the
+    /// (previous)/(next) sentinel passes through, otherwise the item's 0-based
+    /// position in the base field's <c>sharedItems</c> (matched on its formatted value).
+    /// A literal with no match becomes the previous sentinel — Excel then recomputes
+    /// against the prior item rather than erroring on open.
+    /// </summary>
+    private static uint ResolveBaseItemIndex(S.CacheField baseCacheField, string baseItem)
+    {
+        if (BaseItemSentinel(baseItem) is { } sentinel)
+        {
+            return sentinel;
+        }
+
+        var items = baseCacheField.SharedItems?.Elements().ToList() ?? [];
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (string.Equals(SharedItemText(items[i]), baseItem, StringComparison.OrdinalIgnoreCase))
+            {
+                return (uint)i;
+            }
+        }
+
+        return BaseItemPrevious;
+    }
+
+    /// <summary>The text of a cache <c>sharedItems</c> entry (string/number/bool/date item), or null for a missing item.</summary>
+    private static string? SharedItemText(OpenXmlElement item) => item switch
+    {
+        S.StringItem s => s.Val?.Value,
+        S.NumberItem n => n.Val?.Value is { } d ? d.ToString(CultureInfo.InvariantCulture) : null,
+        S.BooleanItem b => b.Val?.Value is { } flag ? (flag ? "TRUE" : "FALSE") : null,
+        S.DateTimeItem t => t.Val is { } dt ? dt.Value.ToString("o", CultureInfo.InvariantCulture) : null,
+        _ => null,
+    };
+
     /// <summary>
     /// The element a new <c>dataFields</c> goes after in a pivotTableDefinition:
     /// rowItems / colItems / pageFields / formats sit before it, but pivotFields
@@ -615,6 +877,73 @@ internal static partial class ExcelPivots
 
     // ----- agg mapping ---------------------------------------------------------
 
+    /// <summary>
+    /// Mirrors a value's show-values-as onto the live ClosedXML model so the
+    /// in-memory pivot is self-consistent (the authoritative file write is the raw
+    /// post-save <see cref="ApplyShowValuesAs"/> pass, because ClosedXML 0.105's
+    /// writer drops these attributes). The (previous)/(next) base-item sentinels map
+    /// to ClosedXML's AndPrevious()/AndNext(); any other literal goes through And().
+    /// </summary>
+    private static void ApplyInMemory(IXLPivotValue pivotValue, ValueSpec value)
+    {
+        switch (value.ShowAs)
+        {
+            case "normal":
+                pivotValue.ShowAsNormal();
+                break;
+            case "percentOfTotal":
+                pivotValue.ShowAsPercentageOfTotal();
+                break;
+            case "percentOfColumn":
+                pivotValue.ShowAsPercentageOfColumn();
+                break;
+            case "percentOfRow":
+                pivotValue.ShowAsPercentageOfRow();
+                break;
+            case "index":
+                pivotValue.ShowAsIndex();
+                break;
+            case "runningTotal":
+                pivotValue.ShowAsRunningTotalIn(value.BaseField!);
+                break;
+            case "differenceFrom":
+                ApplyCombination(pivotValue.ShowAsDifferenceFrom(value.BaseField!), value.BaseItem!);
+                break;
+            case "percentDifferenceFrom":
+                ApplyCombination(pivotValue.ShowAsPercentageDifferenceFrom(value.BaseField!), value.BaseItem!);
+                break;
+            case "percentOf":
+                ApplyCombination(pivotValue.ShowAsPercentageFrom(value.BaseField!), value.BaseItem!);
+                break;
+            default:
+                throw new InvalidOperationException($"showAs '{value.ShowAs}' escaped validation");
+        }
+    }
+
+    private static void ApplyCombination(IXLPivotValueCombination combination, string baseItem)
+    {
+        switch (BaseItemSentinel(baseItem))
+        {
+            case BaseItemPrevious:
+                combination.AndPrevious();
+                break;
+            case BaseItemNext:
+                combination.AndNext();
+                break;
+            default:
+                combination.And(baseItem);
+                break;
+        }
+    }
+
+    /// <summary>Maps the (previous)/(next) base-item sentinels to their OOXML index; a literal returns null.</summary>
+    private static uint? BaseItemSentinel(string baseItem) => baseItem switch
+    {
+        "(previous)" => BaseItemPrevious,
+        "(next)" => BaseItemNext,
+        _ => null,
+    };
+
     private static XLPivotSummary SummaryOf(string agg) => agg switch
     {
         "sum" => XLPivotSummary.Sum,
@@ -633,6 +962,23 @@ internal static partial class ExcelPivots
         "min" => "Min",
         _ => "Max",
     };
+
+    /// <summary>
+    /// A unique ClosedXML custom name for a value field. The base is
+    /// "<c>{Agg} of {field}</c>"; a same-field-same-agg repeat (allowed when it varies
+    /// by showAs) gets a "<c> (2)</c>" suffix so ClosedXML's unique-name constraint holds.
+    /// </summary>
+    private static string UniqueValueName(ValueSpec value, HashSet<string> used)
+    {
+        var baseName = $"{AggLabel(value.Agg)} of {value.Field}";
+        var candidate = baseName;
+        for (var n = 2; !used.Add(candidate); n++)
+        {
+            candidate = string.Create(CultureInfo.InvariantCulture, $"{baseName} ({n})");
+        }
+
+        return candidate;
+    }
 
     /// <summary>Wire name of a summary read back from a file (foreign aggs keep their enum name, camelCased).</summary>
     public static string AggName(XLPivotSummary summary) => summary switch
@@ -799,7 +1145,17 @@ internal static partial class ExcelPivots
 
     // ----- parsing helpers ------------------------------------------------------
 
-    private sealed record ValueSpec(string Field, string Agg);
+    private sealed record ValueSpec(string Field, string Agg)
+    {
+        /// <summary>The wire show-values-as mode (default <c>normal</c>); see <see cref="ShowAsModes"/>.</summary>
+        public string ShowAs { get; init; } = "normal";
+
+        /// <summary>The base field name for modes that need one (running total, difference-from, …); else null.</summary>
+        public string? BaseField { get; init; }
+
+        /// <summary>The base item for difference-from modes: a literal value, or the <c>(previous)</c>/<c>(next)</c> sentinels.</summary>
+        public string? BaseItem { get; init; }
+    }
 
     private static (int FirstColumn, int FirstRow, int LastColumn, int LastRow) ParseSourceRange(
         string text, int opIndex)
@@ -896,15 +1252,18 @@ internal static partial class ExcelPivots
 
     private static void GuardDuplicateValues(List<ValueSpec> values, int opIndex)
     {
+        // A field may appear once per (agg, showAs) combination — Excel happily shows
+        // the same field as both a raw sum AND a % of total, so showAs is part of the
+        // identity (an exact (field, agg, showAs) repeat is the real duplicate).
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var value in values)
         {
-            if (!seen.Add(value.Field + "|" + value.Agg))
+            if (!seen.Add(value.Field + "|" + value.Agg + "|" + value.ShowAs))
             {
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
-                    $"ops[{opIndex}]: values lists '{value.Field}' with agg '{value.Agg}' twice.",
-                    "Each (field, agg) pair may appear once; drop the duplicate or use a different agg.");
+                    $"ops[{opIndex}]: values lists '{value.Field}' with agg '{value.Agg}' and showAs '{value.ShowAs}' twice.",
+                    "Each (field, agg, showAs) combination may appear once; drop the duplicate, use a different agg, or vary the showAs.");
             }
         }
     }
@@ -935,6 +1294,18 @@ internal static partial class ExcelPivots
 
                 case JsonObject obj:
                 {
+                    foreach (var (key, _) in obj)
+                    {
+                        if (!ValueProps.Contains(key, StringComparer.Ordinal))
+                        {
+                            throw new AiofficeException(
+                                ErrorCodes.InvalidArgs,
+                                $"ops[{opIndex}]: unknown values prop '{key}'.",
+                                "values entries accept " + string.Join(", ", ValueProps) + ".",
+                                candidates: ValueProps);
+                        }
+                    }
+
                     var field = obj.TryGetPropertyValue("field", out var f) && f is JsonValue fv &&
                         fv.GetValueKind() == JsonValueKind.String
                             ? fv.GetValue<string>()
@@ -955,7 +1326,7 @@ internal static partial class ExcelPivots
                             candidates: Aggs);
                     }
 
-                    result.Add(new ValueSpec(field, agg));
+                    result.Add(ParseShowAs(obj, new ValueSpec(field, agg), opIndex));
                     break;
                 }
 
@@ -968,6 +1339,121 @@ internal static partial class ExcelPivots
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Validates and folds the show-values-as props (<c>showAs</c>/<c>baseField</c>/
+    /// <c>baseItem</c>) of one value entry onto its <see cref="ValueSpec"/>.
+    /// An unknown <c>showAs</c> is <c>invalid_args</c> with <see cref="ShowAsModes"/>
+    /// as candidates; a mode OOXML cannot carry is <c>unsupported_feature</c>; modes
+    /// needing a base field/item that lack one are <c>invalid_args</c>. The base field
+    /// name itself is resolved against the headers later (in <see cref="Add"/>) so the
+    /// candidate list is the real headers.
+    /// </summary>
+    private static ValueSpec ParseShowAs(JsonObject obj, ValueSpec spec, int opIndex)
+    {
+        var showAs = OptionalString(obj, "showAs");
+        var hasBaseField = obj.TryGetPropertyValue("baseField", out var bf) && bf is not null;
+        var hasBaseItem = obj.TryGetPropertyValue("baseItem", out var bi) && bi is not null;
+
+        if (string.IsNullOrWhiteSpace(showAs))
+        {
+            if (hasBaseField || hasBaseItem)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: '{spec.Field}' sets baseField/baseItem without a showAs.",
+                    "baseField/baseItem only apply to a showAs like runningTotal or differenceFrom; add a showAs or drop them.");
+            }
+
+            return spec; // default normal
+        }
+
+        if (!ShowAsModes.Contains(showAs, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown showAs '{showAs}' on value field '{spec.Field}'.",
+                "Supported showAs modes: " + string.Join(", ", ShowAsModes) + ".",
+                candidates: ShowAsModes);
+        }
+
+        if (UnsupportedShowAs.TryGetValue(showAs, out var why))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"ops[{opIndex}]: showAs '{showAs}' on '{spec.Field}' cannot be authored. {why}",
+                "Use a supported mode: " + string.Join(", ", ShowAsModes.Where(m => !UnsupportedShowAs.ContainsKey(m))) +
+                " — e.g. percentOfTotal for a flat share, or runningTotal with a baseField.",
+                candidates: [.. ShowAsModes.Where(m => !UnsupportedShowAs.ContainsKey(m))]);
+        }
+
+        var baseField = OptionalString(obj, "baseField");
+        var baseItem = ReadBaseItem(obj, spec.Field, opIndex);
+
+        if (NeedsBaseField.Contains(showAs) && string.IsNullOrWhiteSpace(baseField))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: showAs '{showAs}' on '{spec.Field}' needs a baseField.",
+                "Pass the field to run/compare against, e.g. {\"showAs\":\"" + showAs + "\",\"baseField\":\"Date\"" +
+                (NeedsBaseItem.Contains(showAs) ? ",\"baseItem\":\"(previous)\"" : string.Empty) + "}.");
+        }
+
+        if (!NeedsBaseField.Contains(showAs) && !string.IsNullOrWhiteSpace(baseField))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: showAs '{showAs}' on '{spec.Field}' does not take a baseField.",
+                "Only runningTotal / differenceFrom / percentDifferenceFrom / percentOf use a baseField; drop it.");
+        }
+
+        if (NeedsBaseItem.Contains(showAs) && string.IsNullOrWhiteSpace(baseItem))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: showAs '{showAs}' on '{spec.Field}' needs a baseItem.",
+                "Pass the comparison item: a literal value from the baseField, or the \"(previous)\"/\"(next)\" sentinel.");
+        }
+
+        if (!NeedsBaseItem.Contains(showAs) && hasBaseItem)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: showAs '{showAs}' on '{spec.Field}' does not take a baseItem.",
+                "Only differenceFrom / percentDifferenceFrom / percentOf use a baseItem; drop it.");
+        }
+
+        return spec with { ShowAs = showAs, BaseField = baseField, BaseItem = baseItem };
+    }
+
+    /// <summary>Reads a <c>baseItem</c> as a string (numbers and bools stringify; the (previous)/(next) sentinels pass through).</summary>
+    private static string? ReadBaseItem(JsonObject obj, string field, int opIndex)
+    {
+        if (!obj.TryGetPropertyValue("baseItem", out var node) || node is null)
+        {
+            return null;
+        }
+
+        if (node is not JsonValue value)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: baseItem on '{field}' must be a value (a string, number, or \"(previous)\"/\"(next)\").",
+                "Pass e.g. {\"baseItem\":\"2023\"} or {\"baseItem\":\"(previous)\"}.");
+        }
+
+        return value.GetValueKind() switch
+        {
+            JsonValueKind.String => value.GetValue<string>(),
+            JsonValueKind.Number => value.GetValue<double>().ToString(CultureInfo.InvariantCulture),
+            JsonValueKind.True => "TRUE",
+            JsonValueKind.False => "FALSE",
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: baseItem on '{field}' must be a string, number, or boolean.",
+                "Pass the literal item value from the baseField, or \"(previous)\"/\"(next)\"."),
+        };
     }
 
     private static List<string> StringList(JsonObject props, string key, int opIndex)

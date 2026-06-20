@@ -208,7 +208,7 @@ outline symbols on reopen.
 | name        | string | default auto-generated; used in the canonical path |
 | targetAnchor| string | top-left cell on the target sheet (default A1/A3)  |
 | rows / columns / filters | string[] | source column header names           |
-| values      | array  | `[{field:"Sales", agg:"sum|average|count|min|max"}]` |
+| values      | array  | `[{field:"Sales", agg:"sum|average|count|min|max", showAs?, baseField?, baseItem?}]` |
 | calculatedFields | array | (1.3) `[{name:"Margin", formula:"=Revenue-Cost"}]` — formula fields computed from source headers |
 
 `{op:"add", path:"/Sheet1", type:"pivot", props:{...}}` — the op path is the
@@ -220,6 +220,36 @@ pivot on open (refreshOnLoad).
 references other source-column header names (e.g. `=Revenue-Cost`,
 `=Profit/Revenue`). They are validated against the headers at add time and
 surface under `get`'s `calculatedFields`; Excel recomputes them on open.
+
+`showAs` (1.13) sets a value field's **show-values-as** (the dataField's
+`showDataAs` is written so Excel computes it on open; `get` reports it back).
+Supported modes:
+
+| showAs                  | base needed              | meaning                                  |
+|-------------------------|--------------------------|------------------------------------------|
+| `normal` (default)      | —                        | the raw aggregate                        |
+| `percentOfTotal`        | —                        | % of the grand total                     |
+| `percentOfColumn`       | —                        | % of the column total                    |
+| `percentOfRow`          | —                        | % of the row total                       |
+| `index`                 | —                        | Excel's index ((cell×grand)/(row×col))   |
+| `runningTotal`          | `baseField`              | running total along the base field       |
+| `percentOf`             | `baseField` + `baseItem` | % of a base item's value                 |
+| `differenceFrom`        | `baseField` + `baseItem` | difference from a base item              |
+| `percentDifferenceFrom` | `baseField` + `baseItem` | % difference from a base item            |
+
+`baseField` is a source header; `baseItem` is a literal value of that field, or
+the `"(previous)"` / `"(next)"` sentinel. The same field may appear as several
+value fields differing only by `showAs` (e.g. a raw sum *and* its `percentOfTotal`).
+An unknown `showAs` is `invalid_args` (with the modes as candidates); a mode
+OOXML cannot carry — `percentOfParentTotal`, `rankAscending`, `rankDescending` —
+is `unsupported_feature` (never silently ignored).
+
+    # show Sales as % of grand total, plus a running total down the Month axis
+    {op:add, path:/Sheet1, type:pivot, props:{sourceRange:"A1:C7", targetSheet:"Pivot",
+      rows:["Region"], columns:["Month"], values:[
+        {field:"Sales", agg:"sum", showAs:"percentOfTotal"},
+        {field:"Sales", agg:"sum", showAs:"runningTotal", baseField:"Month"},
+        {field:"Sales", agg:"sum", showAs:"differenceFrom", baseField:"Month", baseItem:"(previous)"}]}}
 
 ## conditionalFormat (M2, `/Sheet1/conditionalFormat[1]`)
 

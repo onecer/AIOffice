@@ -257,6 +257,15 @@ public sealed partial class ExcelHandler
                 ExcelPivots.ApplyCalculatedFields(file, post.CalculatedFields);
             }
 
+            if (post.ShowValuesAs.Count > 0)
+            {
+                // Author pivot show-values-as raw (1.13): set each value field's
+                // dataField showDataAs/baseField/baseItem. ClosedXML 0.105 drops these
+                // on save, so the raw pass is the authoritative write. Runs after the
+                // calculated-fields pass so every dataField (incl. calc columns) exists.
+                ExcelPivots.ApplyShowValuesAs(file, post.ShowValuesAs);
+            }
+
             if (post.RemovedImages.Count > 0)
             {
                 ExcelImages.RemoveAfterSave(file, post.RemovedImages);
@@ -468,6 +477,15 @@ public sealed partial class ExcelHandler
         /// per-record placeholder values are authored directly on the saved bytes.
         /// </summary>
         public List<ExcelPivots.CalculatedFieldSpec> CalculatedFields { get; } = [];
+
+        /// <summary>
+        /// (1.13) Pivot show-values-as settings queued for the post-save raw pass.
+        /// ClosedXML 0.105 sets the in-memory Calculation but its writer drops the
+        /// dataField's <c>showDataAs</c>/<c>baseField</c>/<c>baseItem</c>, so those are
+        /// authored directly on the saved bytes (Excel computes the displayed values on
+        /// open; ClosedXML reads the attributes back so <c>get</c> reports them).
+        /// </summary>
+        public List<ExcelPivots.ShowAsSpec> ShowValuesAs { get; } = [];
 
         /// <summary>
         /// (1.4) Dynamic-array spills queued for the post-save raw pass: the anchor
@@ -2039,7 +2057,7 @@ public sealed partial class ExcelHandler
                 "rows:[\"Region\"], values:[{field:\"Sales\", agg:\"sum\"}]}}.");
         }
 
-        details.Add(ExcelPivots.Add(workbook, target.Sheet, op, index, post.CalculatedFields));
+        details.Add(ExcelPivots.Add(workbook, target.Sheet, op, index, post.CalculatedFields, post.ShowValuesAs));
     }
 
     private static void AddSheet(XLWorkbook workbook, EditOp op, int index, List<object> details)
