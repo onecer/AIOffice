@@ -4,6 +4,35 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.14.0 — default → hand-made: docx cell borders · xlsx pivot grand-totals · pptx slide backgrounds (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three "looks default vs hand-made" gaps closed,
+one per format, each a new value on an existing op. Agents that target 1.13.0 are byte-for-byte
+compatible with 1.14.0.
+
+### Added — docx
+
+- **Per-cell table borders** via `set` on a `tc`: `borders` takes any subset of `top`/`bottom`/`left`/
+  `right`/`insideH`/`insideV`/`all`, each `{color?, widthPt?, style?}` (or `"none"` to clear an edge).
+  `style` ∈ `single|double|thick|dashed|dotted|wave|none`. Writes `w:tcBorders` as a cell-level override
+  that coexists with table-level `w:tblBorders`; `get` reports it. Previously any unknown cell prop
+  errored — beyond the table-wide `all`/`outer`/`none` borders there was no per-edge control.
+
+### Added — xlsx
+
+- **Pivot grand-total visibility** via `add` (pivot): `grandTotals` accepts `"both"`/`"rows"`/
+  `"columns"`/`"none"` or `{rows, columns}` booleans, written to `rowGrandTotals`/`colGrandTotals`.
+  Omitting it keeps the always-both default byte-identical. `get`/describe report `grandTotals:{rows,
+  columns}`; the flags survive the post-save raw pass.
+
+### Added — pptx
+
+- **Per-slide gradient & image backgrounds**: the slide `background` prop now also accepts
+  `{gradient:{type?, angle?, stops:[{color, at}]}}` or `{image:{src}}` (deck-wide via `set /` /
+  `set /master[1]` / `set /layout[i]` too), reusing the shape-fill builders. Replacing a background
+  prunes the prior image's media part (no orphan). `get` reports `backgroundKind`. The solid-hex path
+  is byte-stable; a gradient/image *string* or an array background still returns `unsupported_feature`.
+
 ## 1.13.0 — document finishing: docx protection · xlsx pivot show-values-as · pptx footers (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three half-implemented capabilities

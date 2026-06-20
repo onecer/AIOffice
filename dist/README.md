@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.s
 Pin a version or install dir:
 
 ```sh
-VERSION=v1.13.0 AIOFFICE_BIN=/usr/local/bin \
+VERSION=v1.14.0 AIOFFICE_BIN=/usr/local/bin \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.sh)"
 ```
 
@@ -54,28 +54,28 @@ brew install onecer/tap/aioffice
 ## Publish checklist (human-only — these need credentials)
 
 The agent built and locally tested everything below but did NOT run any
-outward-facing command. Run these yourself after tagging `v1.13.0`.
+outward-facing command. Run these yourself after tagging `v1.14.0`.
 
-### 1. Cut the v1.13.0 release
+### 1. Cut the v1.14.0 release
 
-Tag `v1.13.0` and upload the 6 binaries + `SHA256SUMS` (your existing release
+Tag `v1.14.0` and upload the 6 binaries + `SHA256SUMS` (your existing release
 flow). The install scripts default to the GitHub "latest" release, so they pick
-up v1.13.0 automatically once it is published.
+up v1.14.0 automatically once it is published.
 
 ### 2. Homebrew tap
 
 1. Create a public repo `onecer/homebrew-tap`.
 2. Copy `dist/Formula/aioffice.rb` into it as `Formula/aioffice.rb`.
-3. Fill the four `sha256` values (each marked `TODO(human)`) from the v1.13.0
+3. Fill the four `sha256` values (each marked `TODO(human)`) from the v1.14.0
    `SHA256SUMS`:
 
    ```sh
-   gh release download v1.13.0 -R onecer/AIOffice -p SHA256SUMS -O - | sort
+   gh release download v1.14.0 -R onecer/AIOffice -p SHA256SUMS -O - | sort
    ```
 
    Map asset → sha256 line (the comment on each formula line names the asset).
    The values currently in the formula are the **v1.5.0** examples — replace
-   them. The formula already has `version "1.13.0"`.
+   them. The formula already has `version "1.14.0"`.
 4. Commit and push the tap repo. Verify with:
 
    ```sh

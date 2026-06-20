@@ -811,6 +811,48 @@ Three half-implemented capabilities are finished.
 
 Agents that target the 1.12.0 surface are byte-for-byte compatible with 1.13.0.
 
+## 7n. 1.14.0 — default → hand-made: cell borders, pivot totals, slide backgrounds (additive, surface 1.0)
+
+Package **1.14.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Three "generated file looks default vs hand-made" gaps are closed, one per format. Each extends an
+existing op with a new prop value; no new verb/tool/op/prop-key, no MCP tool-schema enum growth.
+
+### docx — per-cell table borders
+
+- **`set` on a table cell (`/body/table[i]/tr[r]/tc[c]`) now accepts `borders`** (§4, additive; an
+  unknown cell prop previously returned `unsupported_feature`): an object whose keys are any subset of
+  `{top, bottom, left, right, insideH, insideV, all}`, each value `{color?, widthPt?, style?}` (or the
+  string `"none"` to clear that edge → `w:val=nil`). `all` rewrites the four outer sides. `style` ∈
+  `single|double|thick|dashed|dotted|wave|none` (default `single`); `widthPt` is written through the
+  existing eighths-of-a-point parser as `w:sz`. Writes `w:tcPr/w:tcBorders` — a **cell-level override
+  that coexists with** any table-level `w:tblBorders` (the table borders are untouched). `get` on the
+  cell reports `borders` per edge `{style, color?, widthPt?}` (a cleared edge reports `style:"none"`).
+  Bad edge key / `widthPt` / `style` / color → `invalid_args` with candidates.
+
+### xlsx — pivot grand-total visibility
+
+- **`add` (pivot) now accepts `grandTotals`** (§5, additive; pivots were always created showing both
+  grand totals): the string `"both"|"rows"|"columns"|"none"` **or** the object `{rows:bool, columns:bool}`,
+  written via the pivot's `ShowGrandTotalsRows`/`ShowGrandTotalsColumns` → `rowGrandTotals`/`colGrandTotals`.
+  Omitting the prop is byte-identical to 1.13.0 (always-both). `get`/describe report
+  `grandTotals:{rows, columns}`. The flags survive the post-save raw OOXML pass (calculatedFields/showAs).
+  An unknown string → `invalid_args` (candidates `both, rows, columns, none`); a non-boolean
+  `rows`/`columns` → `invalid_args`.
+
+### pptx — per-slide gradient & image backgrounds
+
+- **The slide `background` prop is widened** (§4, additive; a non-solid background previously returned
+  `unsupported_feature`): besides a solid hex string (the legacy path, byte-stable), `set /slide[i]`
+  (and the deck-wide `set /`, `set /master[1]`, `set /layout[i]`) now accept
+  `{gradient:{type?:linear|radial, angle?, stops:[{color, at}]}}` or `{image:{src, …}}`, reusing the
+  same fill builders shapes use, wrapped in `p:bg/p:bgPr`. Replacing a background **prunes the previous
+  image's media part** (no orphan). `get` reports `backgroundKind` (`solid|gradient|image`) alongside the
+  existing `background` hex. An empty-stops gradient / missing image `src` → `invalid_args`; a `background`
+  **array** is still `unsupported_feature` (only an object is the gradient/image path); a gradient-/image-
+  looking *string* (e.g. `"hero.png"`) is still `unsupported_feature` as in 1.13.0.
+
+Agents that target the 1.13.0 surface are byte-for-byte compatible with 1.14.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:
