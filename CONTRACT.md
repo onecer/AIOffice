@@ -773,6 +773,44 @@ half-implemented capabilities are completed.
 
 Agents that target the 1.11.0 surface are byte-for-byte compatible with 1.12.0.
 
+## 7m. 1.13.0 — document finishing: docx protection, xlsx pivot show-values-as, pptx footers (additive, surface 1.0)
+
+Package **1.13.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Three half-implemented capabilities are finished.
+
+### docx — document protection
+
+- **`set /` now accepts document-level props** (§4, additive; this call previously returned
+  `unsupported_feature`): `protection` (`{edit: readOnly|comments|trackedChanges|forms|none,
+  enforce?: bool=true}` → `w:documentProtection @w:edit @w:enforcement`) and
+  `readOnlyRecommended` (bool → `w:writeProtection @w:recommended`). `get /` reports
+  `{protection:{edit,enforced}, readOnlyRecommended}`. This is enforcement-flag protection —
+  password / strong AES encryption stays out of scope (§10); a `password` is accepted but
+  ignored. NOTE: a docx `set /` carrying NON-protection props (e.g. `{text}`) now returns
+  `invalid_args` (with candidates) instead of `unsupported_feature` — still a hard rejection,
+  nothing written.
+
+### xlsx — pivot show-values-as
+
+- **A pivot value field's `showAs` is now applied** (§5, additive; previously it was silently
+  accepted and ignored — that latent bug is fixed): `normal`, `percentOfTotal`,
+  `percentOfColumn`, `percentOfRow`, `runningTotal` (`baseField`), `differenceFrom` /
+  `percentDifferenceFrom` / `percentOf` (`baseField` + `baseItem`), `index` write the pivot's
+  `showDataAs`. `percentOfParentTotal` / `rankAscending` / `rankDescending` are **rejected**
+  with `unsupported_feature` rather than silently ignored; an UNKNOWN `showAs` → `invalid_args`.
+  Excel computes the displayed percentages on open from the authoritative `showDataAs` attribute
+  (headless body cells are not recomputed). `get` reports the value field's `showAs` (+ base).
+
+### pptx — footer / slide-number / date placeholders
+
+- **New `set /slide[i]` props** (§4, additive): `footer` (string, or `false` to hide),
+  `slideNumber` (bool), `date` (`true|false|"fixed text"`) add/update the slide's
+  `ph type=ftr|sldNum|dt` placeholders + the `p:hf` visibility. A **deck-wide** form —
+  `set /` or `set /master[1]` `{footer, slideNumber, date}` (optional `skipTitle`) — applies
+  them to all slides via the master/layout. `get /slide[i]` and `get /` report the state.
+
+Agents that target the 1.12.0 surface are byte-for-byte compatible with 1.13.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

@@ -4,6 +4,36 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.13.0 — document finishing: docx protection · xlsx pivot show-values-as · pptx footers (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three half-implemented capabilities
+finished with additive props. Agents that target 1.12.0 are byte-for-byte compatible with 1.13.0.
+
+### Fixed
+
+- **xlsx pivot `showAs` is now applied** — it was previously accepted but silently ignored
+  (the pivot still showed raw sums). An unknown `showAs` is now rejected instead of ignored.
+
+### Added — docx
+
+- **Document protection** via `set /`: `protection {edit: readOnly|comments|trackedChanges|
+  forms|none, enforce?}` and `readOnlyRecommended` (enforcement-flag protection; password /
+  strong encryption stays out of scope). `get /` reports it. (`set /` on a docx previously
+  errored; a `set /` with non-protection props now returns `invalid_args` instead of
+  `unsupported_feature`.)
+
+### Added — xlsx
+
+- **Pivot show-values-as**: `showAs` on a value field — `percentOfTotal`/`percentOfColumn`/
+  `percentOfRow`, `runningTotal`, `differenceFrom`/`percentDifferenceFrom`/`percentOf`
+  (`baseField`/`baseItem`), `index`. Excel computes the displayed % on open from the written
+  `showDataAs`; `percentOfParentTotal`/`rank*` are rejected (not expressible) rather than ignored.
+
+### Added — pptx
+
+- **Footer / slide-number / date placeholders**: `set /slide[i] {footer, slideNumber, date}`
+  per slide, or a deck-wide `set /` (optional `skipTitle`) to number a whole deck in one op.
+
 ## 1.12.0 — completion depth: edit-chart-in-place · more docx fields · xlsx autofilter criteria (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three half-implemented capabilities
