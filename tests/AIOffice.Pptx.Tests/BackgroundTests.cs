@@ -227,10 +227,27 @@ public sealed class BackgroundTests : IDisposable
             Assert.Equal("445566", bgPr.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
             Assert.Null(bgPr.GetFirstChild<A.GradientFill>());
             Assert.Null(bgPr.GetFirstChild<A.BlipFill>());
+
+            // The earlier image background's media part was pruned on replace — no orphan left.
+            Assert.Empty(slidePart.ImageParts);
         }
 
-        // The earlier image part is no longer referenced; the package must still validate clean.
+        // The package must still validate clean (repair-free) after the replacements.
         TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetBackground_JsonArray_StaysUnsupportedFeatureLike1_13()
+    {
+        // A JsonArray background was rejected with UnsupportedFeature in 1.13.0 (only a JsonObject
+        // is the new gradient/image path); its error contract must not drift to InvalidArgs.
+        Create();
+        var props = new JsonObject { ["background"] = new JsonArray("0F172A", "112233") };
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"), [TestEnv.Op("set", "/slide[1]", props: props)]);
+
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
+        Assert.Equal(ExitCodes.UnsupportedFeature, envelope.ExitCode);
+        Assert.Contains("solid color", error.Suggestion, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

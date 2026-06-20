@@ -1028,11 +1028,19 @@ internal static class PptxEditor
         OpenXmlPartContainer? host = null,
         Workspace? workspace = null)
     {
+        // Replacing a background must not orphan the prior image's media part — capture the old
+        // p:bg image relationships BEFORE we overwrite it, then prune them once the new background
+        // is in place (mirrors the delete-orphan discipline ApplyRemove uses for chart/media parts).
+        var staleImageRelIds = BackgroundImageRelIds(slideData);
+
         // Legacy solid path FIRST and byte-stable: a non-object value stays a hex → a:solidFill
-        // p:bg, including the gradient-/image-looking STRING guard a 1.13.0 agent relied on.
+        // p:bg, including the gradient-/image-looking STRING guard a 1.13.0 agent relied on. A
+        // JsonArray was rejected with UnsupportedFeature in 1.13.0 and still is — only a JsonObject
+        // is the new gradient/image path — so its error contract is unchanged.
         if (value is not JsonObject background)
         {
-            if (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw))
+            if (value is JsonArray ||
+                (value is JsonValue v && v.TryGetValue<string>(out var raw) && LooksLikeGradientOrImage(raw)))
             {
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
@@ -1046,6 +1054,7 @@ internal static class PptxEditor
                 new P.BackgroundProperties(
                     new A.SolidFill(new A.RgbColorModelHex { Val = hex }),
                     new A.EffectList()));
+            PruneStaleBackgroundImages(host, staleImageRelIds);
             return;
         }
 
@@ -1082,6 +1091,42 @@ internal static class PptxEditor
         }
 
         PptxFill.ApplyToBackground(slideData, fill);
+        PruneStaleBackgroundImages(host, staleImageRelIds);
+    }
+
+    /// <summary>The relationship ids of any image blips the current p:bg references (pruned on replace).</summary>
+    private static List<string> BackgroundImageRelIds(P.CommonSlideData slideData)
+    {
+        var ids = new List<string>();
+        if (slideData.Background is { } bg)
+        {
+            foreach (var blip in bg.Descendants<A.Blip>())
+            {
+                if (blip.Embed?.Value is { Length: > 0 } embed)
+                {
+                    ids.Add(embed);
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>Deletes the now-unreferenced image parts a replaced background used to embed.</summary>
+    private static void PruneStaleBackgroundImages(OpenXmlPartContainer? host, List<string> relIds)
+    {
+        if (host is null)
+        {
+            return;
+        }
+
+        foreach (var relId in relIds)
+        {
+            if (host.Parts.Any(p => p.RelationshipId == relId))
+            {
+                host.DeletePart(relId);
+            }
+        }
     }
 
     /// <summary>A gradient-/image-looking background STRING (kept for the legacy UnsupportedFeature guard).</summary>
