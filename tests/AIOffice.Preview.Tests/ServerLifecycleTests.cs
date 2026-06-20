@@ -87,6 +87,16 @@ public sealed class ServerLifecycleTests : PreviewTestBase
 
         await server.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(File.Exists(server.LockfilePath), "lockfile must be deleted on shutdown");
+
+        // On Windows the listener socket can linger in TIME_WAIT for a moment after the
+        // server stops, so IsPortAlive may still read true right after shutdown. Poll
+        // until the port is actually released (fast on macOS/Linux, a short wait on
+        // Windows) — mirrors the startup-readiness poll the preview server already uses.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (PreviewLock.IsPortAlive(server.Port) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
         Assert.False(PreviewLock.IsPortAlive(server.Port), "port must be released after shutdown");
     }
 
