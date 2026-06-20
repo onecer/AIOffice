@@ -12,7 +12,23 @@ public sealed partial class WordHandler
         ["borders", "borderColor", "borderWidthPt", "shading", "headerRow", "columnWidths", "width", "alignment", "cellPaddingCm", "rtl"];
 
     private static readonly string[] CellProps =
-        ["text", "formula", "numberFormat", "mergeRight", "mergeDown", "shading", "valign"];
+        ["text", "formula", "numberFormat", "mergeRight", "mergeDown", "shading", "valign", "borders"];
+
+    /// <summary>The per-cell border styles we accept, mapped to their w:border value.</summary>
+    private static readonly Dictionary<string, BorderValues> CellBorderStyles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["single"] = BorderValues.Single,
+        ["double"] = BorderValues.Double,
+        ["thick"] = BorderValues.Thick,
+        ["dashed"] = BorderValues.Dashed,
+        ["dotted"] = BorderValues.Dotted,
+        ["wave"] = BorderValues.Wave,
+        ["none"] = BorderValues.Nil,
+    };
+
+    /// <summary>The six edges a per-cell w:tcBorders set can carry, plus the "all" alias for the four outer sides.</summary>
+    private static readonly string[] CellBorderEdges =
+        ["top", "bottom", "left", "right", "insideH", "insideV", "all"];
 
     private const double TwipsPerEmu = 1.0 / 635.0;
 
@@ -196,6 +212,133 @@ public sealed partial class WordHandler
     {
         border.Val = val;
         if (val != BorderValues.None)
+        {
+            border.Size = size;
+            if (color is not null)
+            {
+                border.Color = color;
+            }
+        }
+
+        return border;
+    }
+
+    /// <summary>
+    /// Per-cell w:tcBorders (v1.14.0). <paramref name="borders"/> keys are a subset
+    /// of {top,bottom,left,right,insideH,insideV,all}; each value is an object
+    /// {color?,widthPt?,style?}. "all" rewrites the four outer sides. style defaults
+    /// to "single"; style "none" writes w:val=nil to clear just that edge. Each edge
+    /// is written onto the matching w:tcBorders slot, leaving the others (and the
+    /// rest of the tcPr — shading, valign, merges, text) untouched.
+    /// </summary>
+    private static void ApplyCellBorders(TableCellProperties tcPr, JsonObject borders)
+    {
+        var tcBorders = tcPr.TableCellBorders ??= new TableCellBorders();
+
+        foreach (var (edge, spec) in borders)
+        {
+            if (!CellBorderEdges.Contains(edge, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown cell border edge '{edge}'.",
+                    $"Did you mean '{WordFormatting.Nearest(edge, CellBorderEdges)}'? " +
+                    $"Use a subset of: {string.Join(", ", CellBorderEdges)}.",
+                    candidates: CellBorderEdges);
+            }
+
+            var (val, size, color) = ParseCellBorderEdge(edge, spec);
+            if (edge == "all")
+            {
+                tcBorders.TopBorder = CellBorder(new TopBorder(), val, size, color);
+                tcBorders.BottomBorder = CellBorder(new BottomBorder(), val, size, color);
+                tcBorders.LeftBorder = CellBorder(new LeftBorder(), val, size, color);
+                tcBorders.RightBorder = CellBorder(new RightBorder(), val, size, color);
+                continue;
+            }
+
+            switch (edge)
+            {
+                case "top":
+                    tcBorders.TopBorder = CellBorder(new TopBorder(), val, size, color);
+                    break;
+                case "bottom":
+                    tcBorders.BottomBorder = CellBorder(new BottomBorder(), val, size, color);
+                    break;
+                case "left":
+                    tcBorders.LeftBorder = CellBorder(new LeftBorder(), val, size, color);
+                    break;
+                case "right":
+                    tcBorders.RightBorder = CellBorder(new RightBorder(), val, size, color);
+                    break;
+                case "insideH":
+                    tcBorders.InsideHorizontalBorder = CellBorder(new InsideHorizontalBorder(), val, size, color);
+                    break;
+                case "insideV":
+                    tcBorders.InsideVerticalBorder = CellBorder(new InsideVerticalBorder(), val, size, color);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parses one edge's {color?,widthPt?,style?} into (val,sizeEighths,color). A
+    /// nil val (style "none") clears the edge; sizeEighths comes straight from the
+    /// existing eighths-of-a-point parser so cell and table widths stay consistent.
+    /// </summary>
+    private static (BorderValues Val, uint Size, string? Color) ParseCellBorderEdge(string edge, JsonNode? spec)
+    {
+        // A bare string "none" clears the edge too, mirroring shading/pageBorder.
+        if (spec is JsonValue sv && sv.TryGetValue<string>(out var bare) &&
+            bare.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return (BorderValues.Nil, 0, null);
+        }
+
+        if (spec is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"borders.{edge} must be an object {{color?,widthPt?,style?}} or the string \"none\".",
+                "Example: {\"" + edge + "\":{\"color\":\"C00000\",\"widthPt\":1.5,\"style\":\"single\"}}.");
+        }
+
+        var styleRaw = obj["style"] is { } styleNode ? NodeToString(styleNode).Trim() : "single";
+        if (string.IsNullOrEmpty(styleRaw) || !CellBorderStyles.TryGetValue(styleRaw, out var val))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown border style '{styleRaw}' on borders.{edge}.",
+                $"Use one of: {string.Join(", ", CellBorderStyles.Keys)}.",
+                candidates: [.. CellBorderStyles.Keys]);
+        }
+
+        // style "none"/nil clears the edge: no size or color, like the table "none" kind.
+        if (val == BorderValues.Nil || val == BorderValues.None)
+        {
+            return (BorderValues.Nil, 0, null);
+        }
+
+        var size = obj["widthPt"] is { } widthNode
+            ? ParseBorderWidthEighths(NodeToString(widthNode))
+            : 4u;
+
+        var color = obj["color"] is { } colorNode && NodeToString(colorNode) is { Length: > 0 } colorRaw
+            ? WordFormatting.ParseHexColor(colorRaw)
+            : null;
+
+        return (val, size, color);
+    }
+
+    /// <summary>
+    /// Writes a single tcBorders edge: a nil val clears it (no size/color), any
+    /// other val carries size and optional color, mirroring the table-border helper.
+    /// </summary>
+    private static T CellBorder<T>(T border, BorderValues val, uint size, string? color)
+        where T : BorderType
+    {
+        border.Val = val;
+        if (val != BorderValues.Nil && val != BorderValues.None)
         {
             border.Size = size;
             if (color is not null)
@@ -489,6 +632,14 @@ public sealed partial class WordHandler
                                 candidates: ["top", "center", "bottom"]),
                         },
                     };
+                    break;
+
+                case "borders":
+                    ApplyCellBorders(EnsureTcPr(cell), value as JsonObject ?? throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        "borders must be an object whose keys are a subset of {top,bottom,left,right,insideH,insideV,all}.",
+                        "Example: {\"props\":{\"borders\":{\"bottom\":{\"color\":\"C00000\",\"widthPt\":1.5}}}}; " +
+                        "use \"all\" for the four outer sides and style \"none\" to clear an edge."));
                     break;
 
                 default:
@@ -844,6 +995,7 @@ public sealed partial class WordHandler
             ["rowspan"] = rowspan,
             ["shading"] = tcPr?.Shading?.Fill?.Value,
             ["valign"] = CellValignName(tcPr?.TableCellVerticalAlignment),
+            ["borders"] = CellBordersShape(tcPr?.TableCellBorders),
         };
 
         // A formula cell reports its expression plus the cached computed value
@@ -927,5 +1079,72 @@ public sealed partial class WordHandler
         }
 
         return val == TableVerticalAlignmentValues.Bottom ? "bottom" : "top";
+    }
+
+    /// <summary>
+    /// Per-edge view of w:tcBorders for get: each present edge becomes
+    /// {style,color?,widthPt?}, a nil/none edge reports style "none". Returns null
+    /// when the cell carries no border set, so get stays quiet on plain cells.
+    /// </summary>
+    private static Dictionary<string, object?>? CellBordersShape(TableCellBorders? borders)
+    {
+        if (borders is null)
+        {
+            return null;
+        }
+
+        var edges = new Dictionary<string, object?>();
+        AddCellBorderEdge(edges, "top", borders.TopBorder);
+        AddCellBorderEdge(edges, "bottom", borders.BottomBorder);
+        AddCellBorderEdge(edges, "left", borders.LeftBorder);
+        AddCellBorderEdge(edges, "right", borders.RightBorder);
+        AddCellBorderEdge(edges, "insideH", borders.InsideHorizontalBorder);
+        AddCellBorderEdge(edges, "insideV", borders.InsideVerticalBorder);
+
+        return edges.Count > 0 ? edges : null;
+    }
+
+    private static void AddCellBorderEdge(Dictionary<string, object?> edges, string name, BorderType? border)
+    {
+        if (border?.Val?.Value is not { } val)
+        {
+            return;
+        }
+
+        if (val == BorderValues.Nil || val == BorderValues.None)
+        {
+            edges[name] = new Dictionary<string, object?> { ["style"] = "none" };
+            return;
+        }
+
+        var edge = new Dictionary<string, object?>
+        {
+            ["style"] = CellBorderStyleName(val),
+        };
+        if (border.Color?.Value is { } color)
+        {
+            edge["color"] = color;
+        }
+
+        if (border.Size?.Value is { } size)
+        {
+            edge["widthPt"] = size / 8.0;
+        }
+
+        edges[name] = edge;
+    }
+
+    /// <summary>Inverse of CellBorderStyles for get; unknown values fall back to their raw token.</summary>
+    private static string CellBorderStyleName(BorderValues val)
+    {
+        foreach (var (name, value) in CellBorderStyles)
+        {
+            if (value == val && name != "none")
+            {
+                return name;
+            }
+        }
+
+        return val.ToString();
     }
 }
