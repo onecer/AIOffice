@@ -98,7 +98,11 @@ internal static class PptxEffects
 
     // ---- outline ------------------------------------------------------------
 
-    /// <summary>Sets (or clears, on false) a shape outline (a:ln); a color value is the stroke.</summary>
+    /// <summary>
+    /// Sets (or clears, on false) a shape outline (a:ln). A color value is the stroke; a
+    /// {color?, width?, dash?, compound?} object additionally tunes width, dash pattern and
+    /// compound line type. The bare-string / true / false / null / "" forms are unchanged.
+    /// </summary>
     public static void SetOutline(ShapeView view, JsonNode? value)
     {
         var properties = RequireShapeProperties(view);
@@ -112,11 +116,12 @@ internal static class PptxEffects
             return;
         }
 
-        var hex = ColorOrDefault(value, "000000");
-        var outline = new A.Outline(new A.SolidFill(new A.RgbColorModelHex { Val = hex }))
-        {
-            Width = 12_700, // 1pt
-        };
+        var outline = value is JsonObject obj
+            ? BuildOutline(obj)
+            : new A.Outline(new A.SolidFill(new A.RgbColorModelHex { Val = ColorOrDefault(value, "000000") }))
+            {
+                Width = 12_700, // 1pt
+            };
 
         // a:ln follows the fill / geometry but precedes a:effectLst in spPr.
         var anchor = (OpenXmlElement?)properties.GetFirstChild<A.EffectList>();
@@ -128,6 +133,100 @@ internal static class PptxEffects
         {
             properties.Append(outline);
         }
+    }
+
+    /// <summary>The keys the outline object form accepts.</summary>
+    private static readonly IReadOnlyList<string> OutlineKeys = ["color", "width", "dash", "compound"];
+
+    /// <summary>
+    /// Builds an a:ln from the {color?, width?, dash?, compound?} object form. Child order honors
+    /// the schema: a:solidFill precedes a:prstDash; @w and @cmpd are attributes of a:ln.
+    /// </summary>
+    private static A.Outline BuildOutline(JsonObject obj)
+    {
+        foreach (var (key, _) in obj)
+        {
+            if (!OutlineKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown outline prop '{key}'.",
+                    "outline object props: color, width, dash, compound.",
+                    candidates: OutlineKeys);
+            }
+        }
+
+        var hex = obj.TryGetPropertyValue("color", out var colorNode)
+            ? Units.ParseColorHex("color", colorNode)
+            : "000000";
+        var outline = new A.Outline(new A.SolidFill(new A.RgbColorModelHex { Val = hex }))
+        {
+            Width = obj.TryGetPropertyValue("width", out var widthNode)
+                ? (int)Units.ParseLengthEmu("width", widthNode)
+                : 12_700, // 1pt
+        };
+
+        // a:prstDash follows a:solidFill in the a:ln child order.
+        if (obj.TryGetPropertyValue("dash", out var dashNode))
+        {
+            outline.Append(new A.PresetDash { Val = ParseDashToken(dashNode) });
+        }
+
+        if (obj.TryGetPropertyValue("compound", out var compoundNode))
+        {
+            outline.CompoundLineType = ParseCompoundToken(compoundNode);
+        }
+
+        return outline;
+    }
+
+    /// <summary>The dash tokens the outline object accepts (a:prstDash @val).</summary>
+    private static readonly IReadOnlyList<string> DashTokens =
+        ["solid", "dash", "dot", "dashDot", "dashDotDot", "lgDash", "lgDashDot", "lgDashDotDot"];
+
+    /// <summary>The compound tokens the outline object accepts (a:ln @cmpd).</summary>
+    private static readonly IReadOnlyList<string> CompoundTokens =
+        ["single", "double", "thickThin", "thinThick", "triple"];
+
+    /// <summary>Maps a dash token to its a:prstDash value; throws invalid_args with candidates otherwise.</summary>
+    private static A.PresetLineDashValues ParseDashToken(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "solid" => A.PresetLineDashValues.Solid,
+            "dash" => A.PresetLineDashValues.Dash,
+            "dot" => A.PresetLineDashValues.Dot,
+            "dashDot" => A.PresetLineDashValues.DashDot,
+            "dashDotDot" => A.PresetLineDashValues.SystemDashDotDot,
+            "lgDash" => A.PresetLineDashValues.LargeDash,
+            "lgDashDot" => A.PresetLineDashValues.LargeDashDot,
+            "lgDashDotDot" => A.PresetLineDashValues.LargeDashDotDot,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid outline dash: {node?.ToJsonString() ?? "null"}",
+                "outline dash tokens: solid, dash, dot, dashDot, dashDotDot, lgDash, lgDashDot, lgDashDotDot.",
+                candidates: DashTokens),
+        };
+    }
+
+    /// <summary>Maps a compound token to its a:ln @cmpd value; throws invalid_args with candidates otherwise.</summary>
+    private static A.CompoundLineValues ParseCompoundToken(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "single" => A.CompoundLineValues.Single,
+            "double" => A.CompoundLineValues.Double,
+            "thickThin" => A.CompoundLineValues.ThickThin,
+            "thinThick" => A.CompoundLineValues.ThinThick,
+            "triple" => A.CompoundLineValues.Triple,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid outline compound: {node?.ToJsonString() ?? "null"}",
+                "outline compound tokens: single, double, thickThin, thinThick, triple.",
+                candidates: CompoundTokens),
+        };
     }
 
     // ---- read-back ----------------------------------------------------------
@@ -145,8 +244,7 @@ internal static class PptxEffects
         var shadow = EffectColor(effectList?.GetFirstChild<A.OuterShadow>());
         var glow = EffectColor(effectList?.GetFirstChild<A.Glow>());
         var hasReflection = effectList?.GetFirstChild<A.Reflection>() is not null;
-        var outline = properties.GetFirstChild<A.Outline>()?.GetFirstChild<A.SolidFill>()?
-            .RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+        var outline = ReadOutline(properties.GetFirstChild<A.Outline>());
 
         if (shadow is null && glow is null && !hasReflection && outline is null)
         {
@@ -164,6 +262,80 @@ internal static class PptxEffects
 
     private static string? EffectColor(OpenXmlElement? effect) =>
         effect is null ? null : effect.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant() ?? DefaultEffectColor;
+
+    /// <summary>
+    /// Projects an a:ln as a bare hex color STRING (the legacy shape) when it is a plain 1pt
+    /// solid stroke, or as {color, width?, dash?, compound?} when a non-default width, a:prstDash
+    /// or @cmpd is present. Discriminated by what is set, not a mode flag — so a legacy outline set
+    /// round-trips to the bare string and an object set round-trips to the object.
+    /// </summary>
+    private static object? ReadOutline(A.Outline? outline)
+    {
+        if (outline is null)
+        {
+            return null;
+        }
+
+        var color = outline.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+        var width = outline.Width?.Value;
+        var dash = DashToken(outline.GetFirstChild<A.PresetDash>()?.Val?.Value);
+        var compound = CompoundToken(outline.CompoundLineType?.Value);
+
+        // The legacy/default stroke (1pt, no dash, no compound) projects as the bare hex string.
+        if ((width is null || width == 12_700) && dash is null && compound is null)
+        {
+            return color;
+        }
+
+        return new
+        {
+            Color = color,
+            Width = width is null ? (string?)null : Units.Inv($"{width.Value}emu"),
+            Dash = dash,
+            Compound = compound,
+        };
+    }
+
+    /// <summary>Maps an a:prstDash @val back to its outline dash token; null when absent or unrecognized.</summary>
+    private static string? DashToken(A.PresetLineDashValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.PresetLineDashValues.Solid => "solid",
+            _ when val.Value == A.PresetLineDashValues.Dash => "dash",
+            _ when val.Value == A.PresetLineDashValues.Dot => "dot",
+            _ when val.Value == A.PresetLineDashValues.DashDot => "dashDot",
+            _ when val.Value == A.PresetLineDashValues.SystemDashDotDot => "dashDotDot",
+            _ when val.Value == A.PresetLineDashValues.LargeDash => "lgDash",
+            _ when val.Value == A.PresetLineDashValues.LargeDashDot => "lgDashDot",
+            _ when val.Value == A.PresetLineDashValues.LargeDashDotDot => "lgDashDotDot",
+            _ => null,
+        };
+    }
+
+    /// <summary>Maps an a:ln @cmpd back to its outline compound token; null when absent or unrecognized.</summary>
+    private static string? CompoundToken(A.CompoundLineValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.CompoundLineValues.Single => "single",
+            _ when val.Value == A.CompoundLineValues.Double => "double",
+            _ when val.Value == A.CompoundLineValues.ThickThin => "thickThin",
+            _ when val.Value == A.CompoundLineValues.ThinThick => "thinThick",
+            _ when val.Value == A.CompoundLineValues.Triple => "triple",
+            _ => null,
+        };
+    }
 
     // ---- shared plumbing ----------------------------------------------------
 

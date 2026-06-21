@@ -146,6 +146,195 @@ public sealed class EffectTests : IDisposable
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
+    // ---- outline widening (v1.15.0): {color?, width?, dash?, compound?} object form ----
+
+    [Fact]
+    public void SetOutline_BareString_IsByteStable_AndReadsBackAsString()
+    {
+        // The legacy bare-string form must be UNCHANGED: a:ln @w=12700, a:solidFill, no prstDash, no @cmpd.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("outline", "FF0000"))));
+
+        var outline = SingleShape().ShapeProperties!.GetFirstChild<A.Outline>()!;
+        Assert.Equal(12_700, outline.Width!.Value);
+        Assert.Equal("FF0000", outline.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
+        Assert.Null(outline.GetFirstChild<A.PresetDash>());
+        Assert.Null(outline.CompoundLineType);
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        // Bare-string set round-trips to the bare hex STRING (a JsonValue, not an object).
+        Assert.Equal("FF0000", detail["effects"]!["outline"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutlineFalse_ClearsTheLineEntirely()
+    {
+        // Byte-stable legacy clear form: outline:false removes a:ln (the only clear form on the
+        // baseline — null/"" keep their legacy meaning, asserted separately below).
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("outline", "FF0000"))));
+        Assert.NotNull(SingleShape().ShapeProperties!.GetFirstChild<A.Outline>());
+
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("outline", false))));
+
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.Outline>());
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Null(detail["effects"]);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutlineNull_KeepsLegacyDefaultBlackLine_ByteStable()
+    {
+        // BYTE-STABLE guard: on the baseline, outline:null writes the default 1pt black line (it is
+        // NOT a clear form). The object branch must not change this — null is not a JsonObject.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["outline"] = null }));
+
+        var outline = SingleShape().ShapeProperties!.GetFirstChild<A.Outline>()!;
+        Assert.Equal(12_700, outline.Width!.Value);
+        Assert.Equal("000000", outline.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
+        Assert.Null(outline.GetFirstChild<A.PresetDash>());
+        Assert.Null(outline.CompoundLineType);
+
+        // get projects the default line as the bare hex string (legacy shape).
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Equal("000000", detail["effects"]!["outline"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutline_ObjectWithWidth_WritesEmuWidth()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["outline"] = new JsonObject { ["color"] = "FF0000", ["width"] = "2pt" },
+        }));
+
+        var outline = SingleShape().ShapeProperties!.GetFirstChild<A.Outline>()!;
+        Assert.Equal(25_400, outline.Width!.Value); // 2pt = 25400 EMU
+        Assert.Equal("FF0000", outline.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutline_ObjectWithDash_WritesPresetDash()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["outline"] = new JsonObject { ["color"] = "00FF00", ["dash"] = "dashDot" },
+        }));
+
+        var outline = SingleShape().ShapeProperties!.GetFirstChild<A.Outline>()!;
+        // a:solidFill precedes a:prstDash in the a:ln child order.
+        var children = outline.ChildElements.Select(c => c.LocalName).ToList();
+        Assert.True(children.IndexOf("solidFill") < children.IndexOf("prstDash"));
+        Assert.Equal(A.PresetLineDashValues.DashDot, outline.GetFirstChild<A.PresetDash>()!.Val!.Value);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutline_ObjectWithCompound_WritesCompoundAttribute()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["outline"] = new JsonObject { ["color"] = "0000FF", ["compound"] = "double" },
+        }));
+
+        var outline = SingleShape().ShapeProperties!.GetFirstChild<A.Outline>()!;
+        Assert.Equal(A.CompoundLineValues.Double, outline.CompoundLineType!.Value); // a:ln @cmpd=dbl
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetOutline_FullObject_RoundTripsAsObject_And_LegacyString_RoundTripsAsString()
+    {
+        Create();
+
+        // (a) Full object set -> get returns the full {color, width, dash, compound} object.
+        var pathA = AddShape();
+        Edit(TestEnv.Op("set", pathA, props: new JsonObject
+        {
+            ["outline"] = new JsonObject
+            {
+                ["color"] = "112233",
+                ["width"] = "2pt",
+                ["dash"] = "dashDot",
+                ["compound"] = "double",
+            },
+        }));
+
+        var outlineA = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", pathA))))["effects"]!["outline"]!;
+        var obj = Assert.IsType<JsonObject>(outlineA);
+        Assert.Equal("112233", obj["color"]!.GetValue<string>());
+        Assert.Equal("25400emu", obj["width"]!.GetValue<string>()); // lossless 2pt
+        Assert.Equal("dashDot", obj["dash"]!.GetValue<string>());
+        Assert.Equal("double", obj["compound"]!.GetValue<string>());
+
+        // The projected width round-trips byte-exactly: re-feeding it yields the same object/EMU.
+        Edit(TestEnv.Op("set", pathA, props: new JsonObject
+        {
+            ["outline"] = new JsonObject { ["color"] = "112233", ["width"] = obj["width"]!.DeepClone() },
+        }));
+        var reread = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", pathA))))["effects"]!["outline"]!;
+        Assert.Equal("25400emu", Assert.IsType<JsonObject>(reread)["width"]!.GetValue<string>());
+
+        // (b) Independent shape: legacy string set -> get returns the bare string.
+        var pathB = AddShape();
+        Edit(TestEnv.Op("set", pathB, props: TestEnv.Props(("outline", "445566"))));
+        var outlineB = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", pathB))))["effects"]!["outline"]!;
+        Assert.Equal("445566", outlineB.GetValue<string>());
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Theory]
+    [InlineData("dash", "squiggle")]
+    [InlineData("compound", "quad")]
+    [InlineData("bogus", "anything")]
+    public void SetOutline_BadObjectToken_IsInvalidArgsWithCandidates(string key, string value)
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"), new[]
+        {
+            TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["outline"] = new JsonObject { ["color"] = "FF0000", [key] = value },
+            }),
+        });
+
+        var error = TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+        Assert.NotNull(error.Candidates);
+        Assert.NotEmpty(error.Candidates!);
+    }
+
+    [Fact]
+    public void SetOutline_BadWidth_IsInvalidArgs()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"), new[]
+        {
+            TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["outline"] = new JsonObject { ["color"] = "FF0000", ["width"] = "wide" },
+            }),
+        });
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
+
     [Fact]
     public void Effects_OnPicture_AlsoWork()
     {
