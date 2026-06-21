@@ -28,7 +28,7 @@ internal static class WordFormatting
          "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing"];
 
     /// <summary>1.10 run props that fan out to every run when set on a paragraph (alongside the v1.8 set).</summary>
-    private static readonly string[] RunFanoutProps =
+    public static readonly string[] RunFanoutProps =
         ["bold", "italic", "underline", "color", "fontSize", "font",
          "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing"];
 

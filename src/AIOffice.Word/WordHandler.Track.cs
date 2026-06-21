@@ -203,9 +203,12 @@ public sealed partial class WordHandler
     }
 
     /// <summary>
-    /// Tracked set: only text changes can be tracked in M2 (formatting needs
-    /// w:rPrChange, planned M3). Old runs are wrapped in w:del with w:delText,
-    /// the new text lands in a w:ins — the delete-old + insert-new pattern.
+    /// Tracked set: a text change wraps the old runs in w:del (w:delText) and
+    /// lands the new text in a w:ins — the delete-old + insert-new pattern. A
+    /// formatting change snapshots the prior run/paragraph properties into a
+    /// w:rPrChange / w:pPrChange before applying the new formatting live, so
+    /// accept keeps the new look and reject restores the snapshot. Text and
+    /// formatting in one op do both: the w:rPrChange lands on the inserted run.
     /// </summary>
     private static object ApplyTrackedSet(WordprocessingDocument doc, ResolvedNode node, JsonObject props, EditSession session)
     {
@@ -214,56 +217,168 @@ public sealed partial class WordHandler
         var effective = props.DeepClone().AsObject();
         var author = session.ResolveAuthor(effective);
 
-        if (effective.Select(kv => kv.Key).Any(k => k != "text"))
+        // Tracked formatting is paragraph/run scoped; table cells and other
+        // hosts stay residual negatives (the text path below already throws,
+        // but formatting props would otherwise reach the format branch).
+        if (node.Element is TableCell)
         {
-            var others = string.Join(", ", effective.Select(kv => kv.Key).Where(k => k != "text"));
             throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
-                $"Producing tracked formatting changes (w:rPrChange) is not supported; got: {others}.",
-                "Track text changes only ({\"props\":{\"text\":\"…\"}}), or apply formatting without track:true. " +
-                "Existing formatting revisions can be resolved with accept/reject.");
+                "Tracked set on a table cell is not supported; track the paragraph inside it.",
+                $"Target {node.CanonicalPath}/p[1] instead.");
         }
 
-        if (effective["text"] is not { } textNode)
+        if (node.Element is not (Paragraph or Run))
+        {
+            throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"Tracked set is not supported on '{node.Type}'.",
+                "Track text/formatting on p or run elements, or run the op without track:true.");
+        }
+
+        var hasText = effective.TryGetPropertyValue("text", out var textNode) && textNode is not null;
+        var formatProps = effective.Where(kv => kv.Key != "text").ToList();
+
+        if (!hasText && formatProps.Count == 0)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                "Tracked set needs props.text.",
+                "Tracked set needs props.text or a formatting property.",
                 "Example: {\"op\":\"set\",\"path\":\"/body/p[1]\",\"props\":{\"text\":\"New wording\"}} with track:true.");
         }
 
-        var newText = NodeToString(textNode);
         var date = DateTime.UtcNow;
         var nextId = NextRevisionId(doc);
 
-        switch (node.Element)
+        // ---- text branch (byte-stable; FIRST in code) -----------------------
+        // The inserted runs produced here are the ones any rPrChange lands on.
+        IReadOnlyList<Run> formatTargets;
+        if (hasText)
         {
-            case Paragraph paragraph:
-                TrackedReplaceRuns(paragraph, [.. paragraph.ChildElements.OfType<Run>()], newText, author, date, ref nextId);
-                break;
+            var newText = NodeToString(textNode);
+            formatTargets = node.Element switch
+            {
+                Paragraph paragraph =>
+                    TrackedReplaceRuns(paragraph, [.. paragraph.ChildElements.OfType<Run>()], newText, author, date, ref nextId),
+                _ =>
+                    TrackedReplaceRuns((Paragraph)((Run)node.Element).Parent!, [(Run)node.Element], newText, author, date, ref nextId),
+            };
+        }
+        else
+        {
+            // Format-only: the live run(s) carry the rPrChange.
+            formatTargets = node.Element switch
+            {
+                Paragraph paragraph => [.. paragraph.ChildElements.OfType<Run>()],
+                _ => [(Run)node.Element],
+            };
+        }
 
-            case Run run:
-                TrackedReplaceRuns((Paragraph)run.Parent!, [run], newText, author, date, ref nextId);
-                break;
-
-            case TableCell:
-                throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    "Tracked set on a table cell is not supported; track the paragraph inside it.",
-                    $"Target {node.CanonicalPath}/p[1] instead.");
-
-            default:
-                throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    $"Tracked set is not supported on '{node.Type}'.",
-                    "Track text on p or run elements, or run the op without track:true.");
+        // ---- formatting branch ---------------------------------------------
+        if (formatProps.Count > 0)
+        {
+            ApplyTrackedFormatting(doc, node.Element, formatTargets, formatProps, author, date, ref nextId);
         }
 
         return new { op = "set", path = node.CanonicalPath, type = node.Type, tracked = true, author };
     }
 
-    /// <summary>Wraps the given old runs in one w:del and inserts one w:ins with the new text.</summary>
-    private static void TrackedReplaceRuns(
+    /// <summary>
+    /// Authors w:rPrChange (run formatting) and/or w:pPrChange (paragraph props)
+    /// for the given formatting props: snapshot the CURRENT properties, apply the
+    /// new ones live, then wrap the snapshot in the change marker carrying
+    /// Id/Author/Date. Run props fan out to every target run; paragraph props
+    /// (style/spacing/alignment/…) snapshot the paragraph's base pPr.
+    /// </summary>
+    private static void ApplyTrackedFormatting(
+        WordprocessingDocument doc,
+        OpenXmlElement target,
+        IReadOnlyList<Run> runs,
+        IReadOnlyList<KeyValuePair<string, JsonNode?>> formatProps,
+        string author,
+        DateTime date,
+        ref int nextId)
+    {
+        // Partition: run-level props (rPr) vs paragraph-level props (pPr). On a
+        // run target everything is a run prop; on a paragraph, text-run props fan
+        // out to runs (w:rPrChange each) and the rest is paragraph (w:pPrChange).
+        var paragraph = target as Paragraph;
+        var runProps = new List<(string Name, string Value)>();
+        var paraProps = new List<(string Name, string Value)>();
+        foreach (var (name, valueNode) in formatProps)
+        {
+            var value = NodeToString(valueNode);
+            if (paragraph is null || IsTrackedRunProp(name))
+            {
+                runProps.Add((name, value));
+            }
+            else
+            {
+                paraProps.Add((name, value));
+            }
+        }
+
+        // Run formatting: snapshot each run's CURRENT rPr, apply, wrap the prior
+        // state in a w:rPrChange (one per run, sharing the batch id sequence).
+        if (runProps.Count > 0)
+        {
+            foreach (var run in runs)
+            {
+                var previous = run.RunProperties?.CloneNode(true) as RunProperties;
+                foreach (var (name, value) in runProps)
+                {
+                    WordFormatting.SetRunProp(run, name, value);
+                }
+
+                var rPr = run.RunProperties ??= new RunProperties();
+                var change = NewTrackChange(new RunPropertiesChange(), author, date, nextId++);
+                change.PreviousRunProperties = previous is null
+                    ? new PreviousRunProperties()
+                    : new PreviousRunProperties(previous.ChildElements.Select(c => c.CloneNode(true)));
+                rPr.AppendChild(change);
+            }
+        }
+
+        // Paragraph formatting: snapshot the base pPr (the props that live before
+        // the paragraph-mark rPr / sectPr), apply, wrap the snapshot in w:pPrChange.
+        if (paraProps.Count > 0 && paragraph is not null)
+        {
+            var snapshot = new ParagraphPropertiesExtended();
+            if (paragraph.ParagraphProperties is { } existing)
+            {
+                foreach (var child in existing.ChildElements
+                    .Where(c => c is not (ParagraphMarkRunProperties or SectionProperties or ParagraphPropertiesChange)))
+                {
+                    snapshot.AppendChild(child.CloneNode(true));
+                }
+            }
+
+            foreach (var (name, value) in paraProps)
+            {
+                if (name == "style")
+                {
+                    EnsureStyleDefined(doc, value);
+                }
+
+                WordFormatting.SetParagraphProp(paragraph, name, value);
+            }
+
+            var pPr = paragraph.ParagraphProperties ??= new ParagraphProperties();
+            var change = NewTrackChange(new ParagraphPropertiesChange { ParagraphPropertiesExtended = snapshot }, author, date, nextId++);
+            pPr.AppendChild(change);
+        }
+    }
+
+    /// <summary>True for props that live in a run's rPr (so they fan out to runs as w:rPrChange).</summary>
+    private static bool IsTrackedRunProp(string name) =>
+        WordFormatting.RunFanoutProps.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Wraps the given old runs in one w:del and inserts one w:ins with the new
+    /// text. Returns the freshly inserted run so a same-op formatting change can
+    /// land its w:rPrChange on it.
+    /// </summary>
+    private static IReadOnlyList<Run> TrackedReplaceRuns(
         Paragraph paragraph, IReadOnlyList<Run> oldRuns, string newText, string author, DateTime date, ref int nextId)
     {
         var keepFormatting = oldRuns.FirstOrDefault()?.RunProperties?.CloneNode(true) as RunProperties;
@@ -300,6 +415,8 @@ public sealed partial class WordHandler
         {
             paragraph.AppendChild(ins);
         }
+
+        return [insertedRun];
     }
 
     /// <summary>

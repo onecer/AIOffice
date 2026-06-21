@@ -206,15 +206,209 @@ public sealed class TrackedChangesTests : WordTestBase
     // --------------------------------------------------------------- honesty
 
     [Fact]
-    public void Tracked_formatting_change_is_unsupported_until_m3()
+    public void Tracked_formatting_set_in_a_header_is_still_unsupported()
     {
-        var file = CreateDoc(title: "Styled");
+        var file = CreateDoc(title: "Heads");
+        Edit(file, """[{"op":"add","path":"/header[1]","type":"header","props":{"text":"H"}}]""");
 
         var ex = Assert.Throws<AiofficeException>(() =>
-            Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""", Track()));
+            Edit(file, """[{"op":"set","path":"/header[1]/p[1]","props":{"bold":true}}]""", Track()));
 
         Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
-        Assert.Contains("track", ex.Suggestion, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Tracked_formatting_set_on_a_table_cell_is_still_unsupported()
+    {
+        var file = CreateDoc(title: "Cells");
+        Edit(file, """[{"op":"add","path":"/body","type":"table","props":{"rows":2,"columns":2}}]""");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"set","path":"/body/table[1]/tr[1]/tc[1]","props":{"bold":true}}]""", Track()));
+
+        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
+        Assert.Contains("table cell", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ------------------------------------------ authored formatting revisions
+
+    [Fact]
+    public void Tracked_text_set_stays_on_the_byte_stable_del_ins_path()
+    {
+        // The text-only branch is first-in-code and untouched: a tracked text set
+        // must still produce ONLY w:del + w:ins with no formatting markers, and
+        // the body XML must match a control edit modulo the wall-clock w:date.
+        var baseline = CreateDoc("baseline.docx", title: "Original");
+        var widened = CreateDoc("widened.docx", title: "Original");
+
+        Edit(baseline, """[{"op":"set","path":"/body/p[1]","props":{"text":"New"}}]""", Track());
+        Edit(widened, """[{"op":"set","path":"/body/p[1]","props":{"text":"New"}}]""", Track());
+
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(widened, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            Assert.Single(body.Descendants<DeletedRun>());
+            Assert.Single(body.Descendants<InsertedRun>());
+            Assert.Empty(body.Descendants<RunPropertiesChange>());
+            Assert.Empty(body.Descendants<ParagraphPropertiesChange>());
+        }
+
+        // Identical document XML once the per-edit timestamps are normalized.
+        Assert.Equal(BodyXmlSansDate(baseline), BodyXmlSansDate(widened));
+        AssertValidatesClean(widened);
+    }
+
+    /// <summary>The main document XML with every w:date attribute stripped (so two edits compare).</summary>
+    private static string BodyXmlSansDate(string file)
+    {
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false);
+        var xml = doc.MainDocumentPart!.Document!.OuterXml;
+        return System.Text.RegularExpressions.Regex.Replace(xml, "w:date=\"[^\"]*\"", string.Empty);
+    }
+
+    [Fact]
+    public void Tracked_bold_set_authors_an_rPrChange_with_previous_state()
+    {
+        var file = CreateDoc(title: "Plain");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""", Track(author: "Reviewer"));
+
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("format", revision!["kind"]!.GetValue<string>());
+        Assert.Equal("Reviewer", revision["author"]!.GetValue<string>());
+        Assert.True(revision["id"]!.GetValue<int>() > 0);
+        Assert.NotNull(revision["date"]!.GetValue<string>());
+
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+            Assert.NotNull(run.RunProperties?.Bold); // live run carries w:b
+            var change = Assert.Single(run.RunProperties!.Elements<RunPropertiesChange>());
+            Assert.NotNull(change.Id);
+            Assert.Equal("Reviewer", change.Author?.Value);
+            Assert.NotNull(change.Date);
+            // PreviousRunProperties holds the prior (unbold) state.
+            Assert.Null(change.PreviousRunProperties?.GetFirstChild<Bold>());
+        }
+
+        // Reopen round-trips the authored change cleanly.
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_text_and_formatting_together_produce_del_ins_and_rPrChange_on_the_inserted_run()
+    {
+        var file = CreateDoc(title: "Before");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"New","bold":true,"fontSize":14}}]""", Track());
+
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        Assert.Single(body.Descendants<DeletedRun>()); // old text deleted
+        var ins = Assert.Single(body.Descendants<InsertedRun>());
+        var insertedRun = ins.Elements<Run>().First();
+
+        Assert.NotNull(insertedRun.RunProperties?.Bold);
+        Assert.Equal("28", insertedRun.RunProperties?.FontSize?.Val?.Value); // 14pt -> 28 half-points
+        // The rPrChange lives on the INSERTED run, snapshotting the pre-format state.
+        var change = Assert.Single(insertedRun.RunProperties!.Elements<RunPropertiesChange>());
+        Assert.Null(change.PreviousRunProperties?.GetFirstChild<Bold>());
+        Assert.Null(change.PreviousRunProperties?.GetFirstChild<FontSize>());
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_style_set_authors_a_pPrChange_reading_as_format()
+    {
+        var file = CreateDoc(title: "Body text");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"style":"Heading1"}}]""", Track());
+
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("format", revision!["kind"]!.GetValue<string>());
+
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+            var pPr = paragraph.ParagraphProperties!;
+            Assert.Equal("Heading1", pPr.ParagraphStyleId?.Val?.Value); // live style applied
+            var change = Assert.Single(pPr.Elements<ParagraphPropertiesChange>());
+            Assert.NotNull(change.ParagraphPropertiesExtended); // snapshot present
+            Assert.NotNull(change.Id);
+            Assert.NotNull(change.Author);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Authored_rPrChange_accepts_to_new_and_rejects_to_previous()
+    {
+        var fileAccept = CreateDoc("accept.docx", title: "Plain");
+        Edit(fileAccept, """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""", Track());
+        var id = Revisions(fileAccept).First()!["id"]!.GetValue<int>();
+
+        Edit(fileAccept, $$"""[{"op":"accept","path":"/revision[@id={{id}}]"}]""");
+        Assert.Empty(Revisions(fileAccept));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileAccept, isEditable: false))
+        {
+            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+            Assert.NotNull(run.RunProperties?.Bold); // accept keeps the new bold
+            Assert.Empty(doc.MainDocumentPart.Document.Body.Descendants<RunPropertiesChange>());
+        }
+
+        AssertValidatesClean(fileAccept);
+
+        var fileReject = CreateDoc("reject.docx", title: "Plain");
+        Edit(fileReject, """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""", Track());
+        var rejectId = Revisions(fileReject).First()!["id"]!.GetValue<int>();
+
+        Edit(fileReject, $$"""[{"op":"reject","path":"/revision[@id={{rejectId}}]"}]""");
+        Assert.Empty(Revisions(fileReject));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileReject, isEditable: false))
+        {
+            var run = doc.MainDocumentPart!.Document!.Body!.Descendants<Run>().First();
+            Assert.Null(run.RunProperties?.Bold); // reject restores the unbold previous state
+        }
+
+        AssertValidatesClean(fileReject);
+    }
+
+    [Fact]
+    public void Authored_pPrChange_rejects_to_previous_paragraph_props()
+    {
+        // The title paragraph is Heading1; add a plain (unstyled) paragraph and
+        // track a style change on it so reject restores the no-style state.
+        var file = CreateDoc(title: "Normal");
+        Edit(file, """[{"op":"add","path":"/body","props":{"text":"Plain"}}]""");
+
+        Edit(file, """[{"op":"set","path":"/body/p[2]","props":{"style":"Heading1"}}]""", Track());
+        var id = Revisions(file).First()!["id"]!.GetValue<int>();
+
+        Edit(file, $$"""[{"op":"reject","path":"/revision[@id={{id}}]"}]""");
+
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().ElementAt(1);
+            // The added paragraph had no explicit style; reject restores that (no Heading1).
+            Assert.Null(paragraph.ParagraphProperties?.ParagraphStyleId);
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Untracked_formatting_set_produces_no_revision()
+    {
+        var file = CreateDoc(title: "Plain");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""");
+
+        Assert.Empty(Revisions(file));
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<RunPropertiesChange>());
     }
 
     /// <summary>Plants a Word-authored w:rPrChange: run is now bold, was previously unformatted.</summary>
