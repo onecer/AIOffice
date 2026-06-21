@@ -235,6 +235,48 @@ internal static class ExcelStatisticalFunctions
         return numbers[lower] + (fraction * (numbers[lower + 1] - numbers[lower]));
     }
 
+    /// <summary>
+    /// The exclusive-method percentile (PERCENTILE.EXC) of a numeric list. Unlike the
+    /// inclusive twin this interpolates at the 1-based position k*(n+1) and is valid
+    /// only for k in the OPEN interval (1/(n+1), n/(n+1)); anything outside (including
+    /// k=0 and k=1) is <c>#NUM!</c>.
+    /// </summary>
+    private static XLCellValue PercentileExc(List<double> numbers, double k)
+    {
+        var n = numbers.Count;
+        if (n == 0 || k <= 1.0 / (n + 1) || k >= (double)n / (n + 1))
+        {
+            return XLError.NumberInvalid; // #NUM!
+        }
+
+        numbers.Sort();
+        var position = k * (n + 1); // 1-based; the open range guarantees 1 < position < n
+        var lower = (int)Math.Floor(position);
+        var fraction = position - lower;
+        return numbers[lower - 1] + (fraction * (numbers[lower] - numbers[lower - 1]));
+    }
+
+    /// <summary>
+    /// MODE.SNGL — the smallest value among the equally-most-frequent. When every value
+    /// is unique (no repeats) or the list is empty, Excel returns <c>#N/A</c>.
+    /// </summary>
+    private static XLCellValue ModeSngl(List<double> numbers)
+    {
+        var bestValue = 0d;
+        var bestCount = 0;
+        foreach (var group in numbers.GroupBy(v => v))
+        {
+            var count = group.Count();
+            if (count > bestCount || (count == bestCount && group.Key < bestValue))
+            {
+                bestValue = group.Key;
+                bestCount = count;
+            }
+        }
+
+        return bestCount < 2 ? XLError.NoValueAvailable : bestValue; // #N/A when no value repeats
+    }
+
     // ----- CHOOSE ------------------------------------------------------------
 
     /// <summary>
@@ -419,8 +461,15 @@ internal static class ExcelStatisticalFunctions
             case 17:
                 var q = (int)Math.Floor(K());
                 return q is < 0 or > 4 ? XLError.NumberInvalid : PercentileInc(numbers, q / 4.0);
+            case 13: return ModeSngl(numbers);
+            case 18: return PercentileExc(numbers, K());
+            case 19:
+                var qExc = (int)Math.Floor(K());
+                // EXC quartile: only q in {1,2,3} is valid — q=0 and q=4 are #NUM!
+                // (the EXC-specific guard, NOT the inclusive 0..4 range used by 17).
+                return qExc is < 1 or > 3 ? XLError.NumberInvalid : PercentileExc(numbers, qExc / 4.0);
             default:
-                // 13 MODE.SNGL, 18/19 EXC variants, and any out-of-range func_num:
+                // Any out-of-range func_num (e.g. 20) and the dynamic/array form
                 // stay honestly unevaluated (the cell keeps formula_not_evaluated).
                 throw new NameNotRecognizedException();
         }
