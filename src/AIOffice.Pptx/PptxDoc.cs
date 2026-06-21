@@ -29,6 +29,19 @@ internal readonly record struct GeometryEmu(long X, long Y, long Cx, long Cy);
 /// </summary>
 internal sealed record AutofitInfo(string Mode, double? FontScale, double? LineSpaceReduction);
 
+/// <summary>
+/// The text-frame anchoring read back from a shape's a:bodyPr: vertical alignment
+/// (anchor), text direction (vert) and the internal margins (lIns/rIns/tIns/bIns,
+/// EMU -> cm). Each field is null when the bodyPr omits the matching attribute.
+/// </summary>
+internal sealed record TextFrameInfo(
+    string? VAlign,
+    string? TextDirection,
+    double? MarginLeft,
+    double? MarginRight,
+    double? MarginTop,
+    double? MarginBottom);
+
 /// <summary>Package plumbing shared by every pptx verb: open, enumerate, resolve, extract.</summary>
 internal static class PptxDoc
 {
@@ -553,6 +566,30 @@ internal static class PptxDoc
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The text-frame anchoring (vAlign/textDirection/internal margins) of a shape's
+    /// a:bodyPr — the bodyPr attributes that bring a text shape to parity with a table
+    /// cell. Returns null when the shape has no text body; within the record each field
+    /// is null when its attribute is absent, so a shape that never set these projects an
+    /// all-null record and legacy get output is unchanged.
+    /// </summary>
+    public static TextFrameInfo? TextFrame(OpenXmlCompositeElement element)
+    {
+        var bodyPr = (element as P.Shape)?.TextBody?.GetFirstChild<A.BodyProperties>();
+        if (bodyPr is null)
+        {
+            return null;
+        }
+
+        return new TextFrameInfo(
+            PptxTables.VAlignToken(bodyPr.Anchor?.Value),
+            PptxTables.TextDirectionToken(bodyPr.Vertical?.Value),
+            bodyPr.LeftInset is { } li ? Units.EmuToCm(li) : (double?)null,
+            bodyPr.RightInset is { } ri ? Units.EmuToCm(ri) : (double?)null,
+            bodyPr.TopInset is { } ti ? Units.EmuToCm(ti) : (double?)null,
+            bodyPr.BottomInset is { } bi ? Units.EmuToCm(bi) : (double?)null);
     }
 
     public static GeometryEmu? Geometry(OpenXmlCompositeElement element)

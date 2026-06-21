@@ -734,7 +734,7 @@ internal static class PptxTables
         cell.TableCellProperties ??= cell.AppendChild(new A.TableCellProperties());
 
     /// <summary>Parses valign top/middle/bottom into the a:tcPr anchor (TextAnchoringType).</summary>
-    private static A.TextAnchoringTypeValues ParseVAlign(JsonNode? value)
+    internal static A.TextAnchoringTypeValues ParseVAlign(JsonNode? value)
     {
         var token = J.ScalarText(value ?? string.Empty).Trim().ToLowerInvariant();
         return token switch
@@ -751,7 +751,7 @@ internal static class PptxTables
     }
 
     /// <summary>Parses textDirection horizontal/vertical into the a:tcPr vert (TextVertical).</summary>
-    private static A.TextVerticalValues ParseTextDirection(JsonNode? value)
+    internal static A.TextVerticalValues ParseTextDirection(JsonNode? value)
     {
         var token = J.ScalarText(value ?? string.Empty).Trim().ToLowerInvariant();
         return token switch
@@ -768,7 +768,7 @@ internal static class PptxTables
     }
 
     /// <summary>Parses a cell-margin length into EMU (the a:tcPr margin attributes are Int32 EMU).</summary>
-    private static int ParseMarginEmu(string key, JsonNode? value)
+    internal static int ParseMarginEmu(string key, JsonNode? value)
     {
         var emu = Units.ParseLengthEmu(key, value);
         if (emu < 0 || emu > int.MaxValue)
@@ -1274,7 +1274,7 @@ internal static class PptxTables
         };
     }
 
-    private static string? VAlignToken(A.TextAnchoringTypeValues? anchor)
+    internal static string? VAlignToken(A.TextAnchoringTypeValues? anchor)
     {
         if (anchor is null)
         {
@@ -1294,7 +1294,7 @@ internal static class PptxTables
         return anchor == A.TextAnchoringTypeValues.Bottom ? "bottom" : null;
     }
 
-    private static string? TextDirectionToken(A.TextVerticalValues? vert)
+    internal static string? TextDirectionToken(A.TextVerticalValues? vert)
     {
         if (vert is null)
         {

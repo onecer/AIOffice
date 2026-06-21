@@ -586,6 +586,7 @@ internal static class PptxQueryEngine
 
         var geometry = PptxDoc.Geometry(view.Element);
         var firstParagraph = (view.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
+        var textFrame = PptxDoc.TextFrame(view.Element);
         var chartIndex = PptxCharts.IndexOf(slidePart, view.Element);
         var tableIndex = PptxTables.IndexOf(slidePart, view.Element);
         var smartArtIndex = PptxSmartArt.IndexOf(slidePart, view.Element);
@@ -617,6 +618,12 @@ internal static class PptxQueryEngine
             Hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
             Autofit = PptxDoc.Autofit(view.Element),
+            VAlign = textFrame?.VAlign,
+            TextDirection = textFrame?.TextDirection,
+            MarginLeft = textFrame?.MarginLeft,
+            MarginRight = textFrame?.MarginRight,
+            MarginTop = textFrame?.MarginTop,
+            MarginBottom = textFrame?.MarginBottom,
             Chart = PptxCharts.Summary(slidePart, view.Element),
             Effects = PptxEffects.Read(view.Element),
             Media = view.Element is P.Picture picture && PptxMedia.MediaKindOf(picture) is { } mediaKind
@@ -655,6 +662,7 @@ internal static class PptxQueryEngine
             var child = PptxGroups.ResolveChild(group, address);
             var childGeometry = PptxDoc.Geometry(child.Element);
             var childParagraph = (child.Element as P.Shape)?.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
+            var childTextFrame = PptxDoc.TextFrame(child.Element);
             return new
             {
                 Path = Units.Inv($"{address.CanonicalGroupPath}/shape[@id={child.Id}]"),
@@ -674,6 +682,12 @@ internal static class PptxQueryEngine
                 Fill = PptxDoc.FillHex(child.Element),
                 Font = childParagraph is null ? null : FontInfo(childParagraph),
                 Autofit = PptxDoc.Autofit(child.Element),
+                VAlign = childTextFrame?.VAlign,
+                TextDirection = childTextFrame?.TextDirection,
+                MarginLeft = childTextFrame?.MarginLeft,
+                MarginRight = childTextFrame?.MarginRight,
+                MarginTop = childTextFrame?.MarginTop,
+                MarginBottom = childTextFrame?.MarginBottom,
             };
         }
 

@@ -32,7 +32,8 @@ internal static class PptxEditor
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "gradient", "image", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
-         "shadow", "glow", "reflection", "outline", "autofit"];
+         "shadow", "glow", "reflection", "outline", "autofit",
+         "vAlign", "textDirection", "marginLeft", "marginRight", "marginTop", "marginBottom"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
     private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
@@ -1819,6 +1820,37 @@ internal static class PptxEditor
             ApplyAutofit(shape, autofitNode);
         }
 
+        // vAlign/textDirection/margins are bodyPr attributes, set on the same bodyPr.
+        if (props.TryGetPropertyValue("vAlign", out var vAlignNode))
+        {
+            EnsureBodyProperties(shape).Anchor = PptxTables.ParseVAlign(vAlignNode);
+        }
+
+        if (props.TryGetPropertyValue("textDirection", out var textDirNode))
+        {
+            EnsureBodyProperties(shape).Vertical = PptxTables.ParseTextDirection(textDirNode);
+        }
+
+        if (props.TryGetPropertyValue("marginLeft", out var marginLeftNode))
+        {
+            EnsureBodyProperties(shape).LeftInset = PptxTables.ParseMarginEmu("marginLeft", marginLeftNode);
+        }
+
+        if (props.TryGetPropertyValue("marginRight", out var marginRightNode))
+        {
+            EnsureBodyProperties(shape).RightInset = PptxTables.ParseMarginEmu("marginRight", marginRightNode);
+        }
+
+        if (props.TryGetPropertyValue("marginTop", out var marginTopNode))
+        {
+            EnsureBodyProperties(shape).TopInset = PptxTables.ParseMarginEmu("marginTop", marginTopNode);
+        }
+
+        if (props.TryGetPropertyValue("marginBottom", out var marginBottomNode))
+        {
+            EnsureBodyProperties(shape).BottomInset = PptxTables.ParseMarginEmu("marginBottom", marginBottomNode);
+        }
+
         tree.Append(shape);
         return id;
     }
@@ -2002,6 +2034,24 @@ internal static class PptxEditor
                 case "autofit" when view.Element is P.Shape autofitShape:
                     ApplyAutofit(autofitShape, value);
                     break;
+                case "vAlign" when view.Element is P.Shape vAlignShape:
+                    EnsureBodyProperties(vAlignShape).Anchor = PptxTables.ParseVAlign(value);
+                    break;
+                case "textDirection" when view.Element is P.Shape textDirShape:
+                    EnsureBodyProperties(textDirShape).Vertical = PptxTables.ParseTextDirection(value);
+                    break;
+                case "marginLeft" when view.Element is P.Shape marginLeftShape:
+                    EnsureBodyProperties(marginLeftShape).LeftInset = PptxTables.ParseMarginEmu(key, value);
+                    break;
+                case "marginRight" when view.Element is P.Shape marginRightShape:
+                    EnsureBodyProperties(marginRightShape).RightInset = PptxTables.ParseMarginEmu(key, value);
+                    break;
+                case "marginTop" when view.Element is P.Shape marginTopShape:
+                    EnsureBodyProperties(marginTopShape).TopInset = PptxTables.ParseMarginEmu(key, value);
+                    break;
+                case "marginBottom" when view.Element is P.Shape marginBottomShape:
+                    EnsureBodyProperties(marginBottomShape).BottomInset = PptxTables.ParseMarginEmu(key, value);
+                    break;
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
@@ -2153,7 +2203,13 @@ internal static class PptxEditor
     /// (90 -> "90000"); a bare "shrink" leaves them off so PowerPoint computes the
     /// scale when the deck opens.
     /// </summary>
-    internal static void ApplyAutofit(P.Shape shape, JsonNode? value)
+    /// <summary>
+    /// Returns the shape's a:bodyPr, creating the a:txBody (with a:lstStyle) and the
+    /// a:bodyPr (first child) when absent — the same ensure pattern the autofit case
+    /// uses. anchor/vert/inset are bodyPr attributes, so callers set them directly with
+    /// no element-ordering concern.
+    /// </summary>
+    internal static A.BodyProperties EnsureBodyProperties(P.Shape shape)
     {
         var body = shape.TextBody;
         if (body is null)
@@ -2169,6 +2225,12 @@ internal static class PptxEditor
             body.InsertAt(bodyPr, 0);
         }
 
+        return bodyPr;
+    }
+
+    internal static void ApplyAutofit(P.Shape shape, JsonNode? value)
+    {
+        var bodyPr = EnsureBodyProperties(shape);
         var autofit = BuildAutofit(value);
 
         // A bodyPr has at most one autofit; drop any existing one before inserting.
