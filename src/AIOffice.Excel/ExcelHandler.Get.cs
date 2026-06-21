@@ -297,6 +297,22 @@ public sealed partial class ExcelHandler
     {
         var format = ExcelConditionalFormats.Find(target);
         var index = target.ConditionalFormatIndex!.Value;
+
+        // dataBar thresholds + showValue are read raw (ClosedXML does not surface
+        // the cfvo content type/value the way get needs), mirroring the
+        // aboveBelowAverage enrichment below.
+        if (format.ConditionalFormatType == ClosedXML.Excel.XLConditionalFormatType.DataBar)
+        {
+            IReadOnlyDictionary<int, ExcelConditionalFormats.DataBarThresholdDetail> dataBars;
+            using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+            {
+                dataBars = ExcelConditionalFormats.ReadDataBarThresholds(document, target.Sheet.Name);
+            }
+
+            dataBars.TryGetValue(index, out var dataBarDetail);
+            return ExcelConditionalFormats.Describe(target.Sheet, format, index, dataBarDetail: dataBarDetail);
+        }
+
         if (format.ConditionalFormatType != ClosedXML.Excel.XLConditionalFormatType.AboveAverage)
         {
             return ExcelConditionalFormats.Describe(target.Sheet, format, index);

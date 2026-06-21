@@ -4,6 +4,7 @@ using DocumentFormat.OpenXml.Packaging;
 using Xunit;
 using S = DocumentFormat.OpenXml.Spreadsheet;
 using X14 = DocumentFormat.OpenXml.Office2010.Excel;
+using Xm = DocumentFormat.OpenXml.Office.Excel;
 
 namespace AIOffice.Excel.Tests;
 
@@ -16,9 +17,12 @@ namespace AIOffice.Excel.Tests;
 public sealed class ConditionalFormatTests : ExcelTestBase
 {
     /// <summary>Numbers 1..30 in A1:C10 plus status text in D1:D3.</summary>
-    private string CreateDataWorkbook()
+    private string CreateDataWorkbook() => CreateDataWorkbookNamed("book.xlsx");
+
+    /// <summary>As <see cref="CreateDataWorkbook"/> but with a caller-chosen file name.</summary>
+    private string CreateDataWorkbookNamed(string name)
     {
-        var file = CreateWorkbook();
+        var file = CreateWorkbook(name);
         var grid = new JsonArray();
         for (var r = 0; r < 10; r++)
         {
@@ -387,5 +391,250 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
         Assert.Equal("dataBar", data["cfKind"]!.GetValue<string>());
         Assert.Equal("638EC6", data["color"]!.GetValue<string>());
+    }
+
+    // ----- data-bar thresholds + showValue (v1.15) --------------------------------
+
+    /// <summary>The base dataBar element of the first cfRule on the first sheet.</summary>
+    private static S.DataBar FirstDataBar(SpreadsheetDocument document) =>
+        RawRules(document).Select(r => r.GetFirstChild<S.DataBar>()).First(b => b is not null)!;
+
+    /// <summary>The single x14 dataBar twin on the first sheet (null when absent).</summary>
+    private static X14.DataBar? FirstX14DataBar(SpreadsheetDocument document)
+    {
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook!.Descendants<S.Sheet>().First();
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!.Value!);
+        return worksheetPart.Worksheet!.Descendants<X14.ConditionalFormattingRule>()
+            .Select(r => r.GetFirstChild<X14.DataBar>())
+            .FirstOrDefault(b => b is not null);
+    }
+
+    [Fact]
+    public void DataBar_no_threshold_props_keeps_the_v114_auto_cfvo_byte_stable()
+    {
+        // Two files, identical except the second names the byte-stable default
+        // path explicitly is impossible (there is no v1.14 binary here), so prove
+        // the SHAPE instead: auto min/max cfvo, showValue="1", and no raw rewrite.
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "FF0000"))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var bar = FirstDataBar(document);
+        var cfvos = bar.Elements<S.ConditionalFormatValueObject>().ToList();
+        Assert.Equal(["min", "max"], cfvos.Select(c => c.Type!.InnerText));
+        Assert.Equal(["0", "0"], cfvos.Select(c => c.Val!.Value));
+        // The default leaves ClosedXML's showValue="1" untouched (never "0").
+        Assert.Equal("1", bar.ShowValue!.Value ? "1" : "0");
+        Assert.Equal("FFFF0000", bar.GetFirstChild<S.Color>()!.Rgb!.Value);
+
+        // get reports the bar as an auto bar with the value shown.
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("auto", data["minType"]!.GetValue<string>());
+        Assert.Equal("auto", data["maxType"]!.GetValue<string>());
+        Assert.True(data["showValue"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void DataBar_fixed_min_percentile_max_writes_both_cfvo_and_roundtrips()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"),
+            ("minType", "fixed"), ("minValue", 0),
+            ("maxType", "percentile"), ("maxValue", 90),
+            ("showValue", false))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var bar = FirstDataBar(document);
+            var cfvos = bar.Elements<S.ConditionalFormatValueObject>().ToList();
+            Assert.Equal(["num", "percentile"], cfvos.Select(c => c.Type!.InnerText));
+            Assert.Equal(["0", "90"], cfvos.Select(c => c.Val!.Value));
+            Assert.False(bar.ShowValue!.Value);
+
+            // The x14 twin (authoritative for Excel) carries the same endpoints.
+            var x14 = FirstX14DataBar(document)!;
+            var x14cfvos = x14.Elements<X14.ConditionalFormattingValueObject>().ToList();
+            Assert.Equal(["num", "percentile"], x14cfvos.Select(c => c.Type!.InnerText));
+            Assert.Equal(["0", "90"], x14cfvos.Select(c => c.GetFirstChild<Xm.Formula>()!.Text));
+            Assert.False(x14.ShowValue!.Value);
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("fixed", data["minType"]!.GetValue<string>());
+        Assert.Equal("0", data["minValue"]!.GetValue<string>());
+        Assert.Equal("percentile", data["maxType"]!.GetValue<string>());
+        Assert.Equal("90", data["maxValue"]!.GetValue<string>());
+        Assert.False(data["showValue"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void DataBar_showValue_false_writes_zero_omitted_keeps_default()
+    {
+        var off = CreateDataWorkbookNamed("off.xlsx");
+        Assert.True(EditOps(off, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), ("showValue", false))).IsOk);
+        AssertValidatorClean(off);
+        using (var document = SpreadsheetDocument.Open(off, isEditable: false))
+        {
+            Assert.False(FirstDataBar(document).ShowValue!.Value);
+            // showValue-only is still a pure auto bar (min/max cfvo untouched).
+            Assert.Equal(["min", "max"],
+                FirstDataBar(document).Elements<S.ConditionalFormatValueObject>().Select(c => c.Type!.InnerText));
+        }
+
+        var on = CreateDataWorkbookNamed("on.xlsx");
+        Assert.True(EditOps(on, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"))).IsOk);
+        using (var document = SpreadsheetDocument.Open(on, isEditable: false))
+        {
+            // Omitted -> ClosedXML's showValue="1", never "0".
+            Assert.True(FirstDataBar(document).ShowValue!.Value);
+        }
+    }
+
+    [Fact]
+    public void DataBar_formula_min_writes_formula_cfvo()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"),
+            ("minType", "formula"), ("minValue", "$A$1"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var min = FirstDataBar(document).Elements<S.ConditionalFormatValueObject>().First();
+            Assert.Equal("formula", min.Type!.InnerText);
+            Assert.Equal("$A$1", min.Val!.Value);
+
+            var x14min = FirstX14DataBar(document)!.Elements<X14.ConditionalFormattingValueObject>().First();
+            Assert.Equal("formula", x14min.Type!.InnerText);
+            Assert.Equal("$A$1", x14min.GetFirstChild<Xm.Formula>()!.Text);
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("formula", data["minType"]!.GetValue<string>());
+        Assert.Equal("$A$1", data["minValue"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DataBar_leading_equals_formula_is_normalized()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"),
+            ("maxType", "formula"), ("maxValue", "=$B$1"))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var max = FirstDataBar(document).Elements<S.ConditionalFormatValueObject>().Last();
+        Assert.Equal("formula", max.Type!.InnerText);
+        Assert.Equal("$B$1", max.Val!.Value); // leading '=' stripped, like the formula kind
+    }
+
+    [Theory]
+    [InlineData("minType")]
+    [InlineData("maxType")]
+    public void DataBar_invalid_bound_type_is_invalid_args_with_candidates(string typeKey)
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), (typeKey, "invalid")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Equal(["auto", "fixed", "percent", "percentile", "formula"], envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void DataBar_formula_without_value_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), ("minType", "formula")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("formula", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DataBar_non_numeric_fixed_value_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), ("minType", "fixed"), ("minValue", "abc")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("number", envelope.Error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("percent", 150)]
+    [InlineData("percentile", -5)]
+    public void DataBar_percent_out_of_range_is_invalid_args(string type, int value)
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), ("minType", type), ("minValue", value)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("between 0 and 100", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DataBar_value_without_type_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"), ("minValue", 5)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("minType", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DataBar_thresholds_survive_save_reopen_and_a_later_edit()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "dataBar"), ("color", "638EC6"),
+            ("minType", "fixed"), ("minValue", 10),
+            ("maxType", "percent"), ("maxValue", 80))).IsOk);
+
+        // A later unrelated edit reopens with ClosedXML, strips/re-saves the model
+        // and re-runs every post-save pass (including the data-bar fix-up that
+        // drops orphaned x14 dataBars). The authored thresholds must survive.
+        Assert.True(EditOps(file, SetOp("/Sheet1/F1", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var cfvos = FirstDataBar(document).Elements<S.ConditionalFormatValueObject>().ToList();
+            Assert.Equal(["num", "percent"], cfvos.Select(c => c.Type!.InnerText));
+            Assert.Equal(["10", "80"], cfvos.Select(c => c.Val!.Value));
+
+            // The x14 twin still pairs and still carries the endpoints.
+            var x14 = FirstX14DataBar(document);
+            Assert.NotNull(x14);
+            Assert.Equal(["num", "percent"],
+                x14!.Elements<X14.ConditionalFormattingValueObject>().Select(c => c.Type!.InnerText));
+            Assert.Equal(["10", "80"],
+                x14.Elements<X14.ConditionalFormattingValueObject>().Select(c => c.GetFirstChild<Xm.Formula>()!.Text));
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("fixed", data["minType"]!.GetValue<string>());
+        Assert.Equal("10", data["minValue"]!.GetValue<string>());
+        Assert.Equal("percent", data["maxType"]!.GetValue<string>());
+        Assert.Equal("80", data["maxValue"]!.GetValue<string>());
     }
 }

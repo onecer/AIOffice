@@ -295,6 +295,15 @@ public sealed partial class ExcelHandler
                 ExcelConditionalFormats.ApplyAverageRules(file, post.AverageRules);
             }
 
+            // (1.15) Rewrite the queued data-bar thresholds + showValue on the
+            // saved bytes. Runs before the data-bar fix-up so the cfvo are
+            // complete when that scan reads them; the rewrite never touches the
+            // pairing ids, so the rule is not orphaned by that pass.
+            if (post.DataBarRules.Count > 0)
+            {
+                ExcelConditionalFormats.ApplyDataBarThresholds(file, post.DataBarRules);
+            }
+
             // Apply the chart-polish edits (v1.3): a set on a chart path adjusts
             // existing chart XML ClosedXML cannot see. Runs after chart adds so a
             // batch can add a chart and immediately polish it.
@@ -460,6 +469,14 @@ public sealed partial class ExcelHandler
         /// directly on the saved bytes.
         /// </summary>
         public List<ExcelConditionalFormats.AverageRuleSpec> AverageRules { get; } = [];
+
+        /// <summary>
+        /// (1.15) Data-bar threshold rules queued for the post-save raw pass.
+        /// ClosedXML 0.105 always writes auto lowest/highest cfvo and showValue=1,
+        /// so a caller-controlled min/max endpoint (or showValue:false) is authored
+        /// raw on the saved bytes, rewriting the base and x14 cfvo + @showValue.
+        /// </summary>
+        public List<ExcelConditionalFormats.DataBarThresholdSpec> DataBarRules { get; } = [];
 
         /// <summary>
         /// Chart-polish edits queued for the post-save raw pass (v1.3). A <c>set</c>
@@ -1973,7 +1990,8 @@ public sealed partial class ExcelHandler
                 AddPivot(workbook, op, index, details, post);
                 break;
             case "conditionalFormat":
-                details.Add(ExcelConditionalFormats.Add(ExcelPaths.Resolve(workbook, op.Path), op, index, post.AverageRules));
+                details.Add(ExcelConditionalFormats.Add(
+                    ExcelPaths.Resolve(workbook, op.Path), op, index, post.AverageRules, post.DataBarRules));
                 break;
             case "dataValidation":
                 details.Add(ExcelDataValidations.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));

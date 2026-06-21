@@ -8,6 +8,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using S = DocumentFormat.OpenXml.Spreadsheet;
 using X14 = DocumentFormat.OpenXml.Office2010.Excel;
+using Xm = DocumentFormat.OpenXml.Office.Excel;
 
 namespace AIOffice.Excel;
 
@@ -60,7 +61,18 @@ internal static partial class ExcelConditionalFormats
 
     private static readonly IReadOnlyList<string> ColorScaleProps = ["kind", "minColor", "midColor", "maxColor"];
 
-    private static readonly IReadOnlyList<string> DataBarProps = ["kind", "color"];
+    private static readonly IReadOnlyList<string> DataBarProps =
+        ["kind", "color", "minType", "minValue", "maxType", "maxValue", "showValue"];
+
+    /// <summary>
+    /// The data-bar threshold content types a caller can set on the min/max
+    /// endpoint. <c>auto</c> keeps Excel's automatic lowest/highest scaling
+    /// (the v1.14 default); the rest pin the endpoint to a fixed number, a
+    /// percent/percentile of the range, or a formula. The wire name IS the OOXML
+    /// <c>cfvo@type</c> spelling for the pinned types (fixed → <c>num</c>).
+    /// </summary>
+    private static readonly IReadOnlyList<string> DataBarBoundTypes =
+        ["auto", "fixed", "percent", "percentile", "formula"];
 
     private static readonly IReadOnlyList<string> ContainsTextProps = ["kind", "text", "fill", "color", "bold"];
 
@@ -114,7 +126,12 @@ internal static partial class ExcelConditionalFormats
     /// validated here and queued on <paramref name="averageRules"/> for the raw
     /// post-save authoring pass (<see cref="ApplyAverageRules"/>).
     /// </summary>
-    public static object Add(ExcelTarget target, EditOp op, int opIndex, List<AverageRuleSpec> averageRules)
+    public static object Add(
+        ExcelTarget target,
+        EditOp op,
+        int opIndex,
+        List<AverageRuleSpec> averageRules,
+        List<DataBarThresholdSpec> dataBarRules)
     {
         var range = target.Kind switch
         {
@@ -151,7 +168,7 @@ internal static partial class ExcelConditionalFormats
                 AddColorScale(range, props, opIndex);
                 break;
             case "dataBar":
-                AddDataBar(range, props, opIndex);
+                AddDataBar(target.Sheet.Name, range, props, opIndex, dataBarRules);
                 break;
             case "containsText":
                 AddContainsText(range, props, opIndex);
@@ -270,11 +287,156 @@ internal static partial class ExcelConditionalFormats
         }
     }
 
-    private static void AddDataBar(IXLRange range, JsonObject props, int opIndex)
+    /// <summary>
+    /// Adds a data-bar rule. By default (no threshold/showValue prop) the bar
+    /// auto-scales lowest→highest with the value shown — the byte-stable v1.14
+    /// path. When any of <c>minType</c>/<c>maxType</c>/<c>minValue</c>/
+    /// <c>maxValue</c>/<c>showValue</c> is supplied, the rule is still created
+    /// through ClosedXML (so its base/x14 pairing is valid), then queued for a
+    /// raw post-save pass that rewrites the two cfvo (<c>minType/maxType</c>) and
+    /// the <c>@showValue</c> — ClosedXML 0.105 cannot author those endpoints.
+    /// </summary>
+    private static void AddDataBar(
+        string sheetName, IXLRange range, JsonObject props, int opIndex, List<DataBarThresholdSpec> dataBarRules)
     {
         GuardProps(props, DataBarProps, opIndex);
         var color = ParseColor(RequiredColorText(props, "color", opIndex), opIndex);
+
+        // The default path is byte-identical to v1.14: auto min/max cfvo, value
+        // shown, no raw rewrite. It MUST stay first-in-code and untouched.
+        var threshold = ParseDataBarThreshold(sheetName, range, props, opIndex);
+        if (threshold is null)
+        {
+            range.AddConditionalFormat().DataBar(color, showBarOnly: false).LowestValue().HighestValue();
+            return;
+        }
+
+        // Create the same ClosedXML rule (valid base/x14 twin); the post-save
+        // pass rewrites its cfvo + @showValue from the queued spec.
         range.AddConditionalFormat().DataBar(color, showBarOnly: false).LowestValue().HighestValue();
+        dataBarRules.Add(threshold);
+    }
+
+    /// <summary>
+    /// Parses (and validates) the optional caller-controlled data-bar endpoints.
+    /// Returns null when no threshold/showValue prop is supplied (the byte-stable
+    /// default). When present, each endpoint is an (type, value) pair: <c>auto</c>
+    /// carries no value (Excel's lowest/highest), <c>fixed</c>/<c>percent</c>/
+    /// <c>percentile</c> carry a number, and <c>formula</c> carries an expression
+    /// string. <c>showValue</c> toggles the cell value's visibility (default on).
+    /// </summary>
+    private static DataBarThresholdSpec? ParseDataBarThreshold(
+        string sheetName, IXLRange range, JsonObject props, int opIndex)
+    {
+        var hasMinType = props.ContainsKey("minType");
+        var hasMaxType = props.ContainsKey("maxType");
+        var hasMinValue = props.ContainsKey("minValue");
+        var hasMaxValue = props.ContainsKey("maxValue");
+        var showValue = OptionalBool(props, "showValue");
+        if (!hasMinType && !hasMaxType && !hasMinValue && !hasMaxValue && showValue is null)
+        {
+            return null;
+        }
+
+        // A bare value without its type is ambiguous (auto endpoints take no
+        // value); require the type so the endpoint is unambiguous.
+        if (hasMinValue && !hasMinType)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'minValue' needs a 'minType' (auto, fixed, percent, percentile or formula).",
+                "Pass e.g. {\"minType\":\"fixed\",\"minValue\":0}.",
+                candidates: DataBarBoundTypes);
+        }
+
+        if (hasMaxValue && !hasMaxType)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: 'maxValue' needs a 'maxType' (auto, fixed, percent, percentile or formula).",
+                "Pass e.g. {\"maxType\":\"percentile\",\"maxValue\":90}.",
+                candidates: DataBarBoundTypes);
+        }
+
+        var min = ParseDataBarBound(props, "minType", "minValue", hasMinType, opIndex);
+        var max = ParseDataBarBound(props, "maxType", "maxValue", hasMaxType, opIndex);
+        return new DataBarThresholdSpec(
+            sheetName, range.RangeAddress.ToString()!, NormalizeArgb(ParseColor(RequiredColorText(props, "color", opIndex), opIndex)), min, max, showValue);
+    }
+
+    /// <summary>
+    /// Parses one data-bar endpoint (min or max). When the type key is absent the
+    /// endpoint keeps Excel's automatic scaling (<see cref="DataBarBound.Auto"/>).
+    /// </summary>
+    private static DataBarBound ParseDataBarBound(
+        JsonObject props, string typeKey, string valueKey, bool hasType, int opIndex)
+    {
+        if (!hasType)
+        {
+            // No type on this endpoint: keep the default auto (lowest/highest).
+            // A value without a type was already rejected by the caller.
+            return DataBarBound.Auto;
+        }
+
+        var type = OptionalString(props, typeKey);
+        if (type is null || !DataBarBoundTypes.Contains(type, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown data-bar '{typeKey}' '{type}'.",
+                "Supported types: " + string.Join(", ", DataBarBoundTypes) + ".",
+                candidates: DataBarBoundTypes);
+        }
+
+        if (type == "auto")
+        {
+            if (props.ContainsKey(valueKey))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: '{typeKey}' is auto, so '{valueKey}' must be omitted.",
+                    "Drop the value for an auto endpoint, or switch the type to fixed/percent/percentile/formula.");
+            }
+
+            return DataBarBound.Auto;
+        }
+
+        if (type == "formula")
+        {
+            var formula = OptionalString(props, valueKey);
+            if (string.IsNullOrWhiteSpace(formula))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: '{typeKey}' is formula, so '{valueKey}' must be a non-empty formula string.",
+                    "Pass e.g. {\"" + typeKey + "\":\"formula\",\"" + valueKey + "\":\"$A$1\"}.");
+            }
+
+            // Excel's cfvo/@val holds the formula WITHOUT the leading '='.
+            var expression = formula.StartsWith('=') ? formula[1..] : formula;
+            return new DataBarBound(type, expression, null);
+        }
+
+        // fixed / percent / percentile: a number.
+        var number = OptionalNumber(props, valueKey, opIndex);
+        if (number is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: '{typeKey}' is {type}, so '{valueKey}' must be a number.",
+                "Pass e.g. {\"" + typeKey + "\":\"" + type + "\",\"" + valueKey + "\":50}.");
+        }
+
+        if ((type == "percent" || type == "percentile") && (number < 0 || number > 100))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a {type} '{valueKey}' must be between 0 and 100.",
+                "Pass e.g. {\"" + typeKey + "\":\"" + type + "\",\"" + valueKey + "\":90}.");
+        }
+
+        return new DataBarBound(
+            type, number.Value.ToString(CultureInfo.InvariantCulture), number.Value);
     }
 
     private static void AddContainsText(IXLRange range, JsonObject props, int opIndex)
@@ -592,10 +754,15 @@ internal static partial class ExcelConditionalFormats
 
     /// <summary>One rule as agents see it (get and read --view structure).</summary>
     public static object Describe(
-        IXLWorksheet sheet, IXLConditionalFormat format, int index, AverageRuleDetail? averageDetail = null)
+        IXLWorksheet sheet,
+        IXLConditionalFormat format,
+        int index,
+        AverageRuleDetail? averageDetail = null,
+        DataBarThresholdDetail? dataBarDetail = null)
     {
         var kind = KindName(format.ConditionalFormatType);
         var isTop10 = format.ConditionalFormatType == XLConditionalFormatType.Top10;
+        var isDataBar = format.ConditionalFormatType == XLConditionalFormatType.DataBar;
         return new
         {
             path = ExcelPaths.ConditionalFormatPath(sheet, index),
@@ -639,7 +806,13 @@ internal static partial class ExcelConditionalFormats
                 : (bool?)null,
             showValue = format.ConditionalFormatType == XLConditionalFormatType.IconSet
                 ? !format.ShowIconOnly
-                : (bool?)null,
+                : isDataBar ? dataBarDetail?.ShowValue : (bool?)null,
+            // dataBar thresholds (read raw): the caller-controlled endpoints, or
+            // auto for a default bar. Null on every non-dataBar kind.
+            minType = isDataBar ? dataBarDetail?.MinType : null,
+            minValue = isDataBar ? dataBarDetail?.MinValue : null,
+            maxType = isDataBar ? dataBarDetail?.MaxType : null,
+            maxValue = isDataBar ? dataBarDetail?.MaxValue : null,
         };
     }
 
@@ -650,6 +823,16 @@ internal static partial class ExcelConditionalFormats
     /// flags into the wire mode; <c>StdDev</c> is the standard-deviation count.
     /// </summary>
     public sealed record AverageRuleDetail(string Mode, int StdDev);
+
+    /// <summary>
+    /// The data-bar threshold endpoints + showValue read raw from a saved
+    /// <c>cfRule[@type=dataBar]</c> (ClosedXML's data-bar reader does not surface
+    /// the cfvo content type/value the way <c>get</c> needs). Keyed by 1-based
+    /// sheet rule index (priority order). <c>MinType</c>/<c>MaxType</c> are the
+    /// wire spelling (auto for min/max cfvo); the matching value is null for auto.
+    /// </summary>
+    public sealed record DataBarThresholdDetail(
+        string MinType, string? MinValue, string MaxType, string? MaxValue, bool ShowValue);
 
     /// <summary>
     /// Reads the aboveAverage rules on a sheet (priority order) so the get handler
@@ -695,6 +878,64 @@ internal static partial class ExcelConditionalFormats
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Reads the data-bar threshold endpoints + showValue on a sheet (priority
+    /// order, the same 1-based index ClosedXML surfaces) so the get handler can
+    /// report the caller-controlled endpoints. The base cfRule's two cfvo (MIN
+    /// then MAX) carry the wire type; <c>num</c> reads back as <c>fixed</c>; auto
+    /// (<c>min</c>/<c>max</c>) reports a null value. Keyed by 1-based rule index.
+    /// </summary>
+    public static IReadOnlyDictionary<int, DataBarThresholdDetail> ReadDataBarThresholds(
+        SpreadsheetDocument document, string sheetName)
+    {
+        var result = new Dictionary<int, DataBarThresholdDetail>();
+        var workbookPart = document.WorkbookPart;
+        var sheet = workbookPart?.Workbook?.Descendants<S.Sheet>()
+            .FirstOrDefault(s => string.Equals(s.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        if (sheet?.Id?.Value is not { } relationshipId ||
+            workbookPart!.GetPartById(relationshipId) is not WorksheetPart { Worksheet: { } worksheet })
+        {
+            return result;
+        }
+
+        var rules = worksheet.Descendants<S.ConditionalFormattingRule>()
+            .OrderBy(r => r.Priority?.Value ?? int.MaxValue)
+            .ToList();
+        for (var i = 0; i < rules.Count; i++)
+        {
+            if (rules[i].GetFirstChild<S.DataBar>() is not { } dataBar)
+            {
+                continue;
+            }
+
+            var cfvos = dataBar.Elements<S.ConditionalFormatValueObject>().ToList();
+            var (minType, minValue) = cfvos.Count >= 1 ? ReadCfvo(cfvos[0]) : ("auto", (string?)null);
+            var (maxType, maxValue) = cfvos.Count >= 2 ? ReadCfvo(cfvos[1]) : ("auto", (string?)null);
+            // ClosedXML always writes showValue="1"; @showValue="0" only when set.
+            var showValue = dataBar.ShowValue?.Value ?? true;
+            result[i + 1] = new DataBarThresholdDetail(minType, minValue, maxType, maxValue, showValue);
+        }
+
+        return result;
+    }
+
+    /// <summary>Wire (type, value) of a base data-bar cfvo (min/max → auto, num → fixed).</summary>
+    private static (string Type, string? Value) ReadCfvo(S.ConditionalFormatValueObject cfvo)
+    {
+        var type = cfvo.Type?.Value;
+        if (type == S.ConditionalFormatValueObjectValues.Min || type == S.ConditionalFormatValueObjectValues.Max)
+        {
+            return ("auto", null);
+        }
+
+        var wire = type == S.ConditionalFormatValueObjectValues.Number ? "fixed"
+            : type == S.ConditionalFormatValueObjectValues.Percent ? "percent"
+            : type == S.ConditionalFormatValueObjectValues.Percentile ? "percentile"
+            : type == S.ConditionalFormatValueObjectValues.Formula ? "formula"
+            : "auto";
+        return (wire, cfvo.Val?.Value);
     }
 
     /// <summary>Wire name of a rule type (the supported kinds keep their op-prop spelling).</summary>
@@ -884,6 +1125,35 @@ internal static partial class ExcelConditionalFormats
         bool? Bold);
 
     /// <summary>
+    /// One data-bar endpoint (a cfvo). <c>Type</c> is the wire spelling
+    /// (auto/fixed/percent/percentile/formula); <c>RawValue</c> is the cfvo
+    /// <c>@val</c> text (a number's invariant string, or the formula without its
+    /// leading <c>=</c>); <c>Number</c> is the parsed numeric value for the
+    /// number-typed endpoints (null for auto and formula). The static
+    /// <see cref="Auto"/> instance is the byte-stable lowest/highest default.
+    /// </summary>
+    internal sealed record DataBarBound(string Type, string? RawValue, double? Number)
+    {
+        public static readonly DataBarBound Auto = new("auto", null, null);
+    }
+
+    /// <summary>
+    /// A data-bar rule whose caller-supplied thresholds and/or showValue must be
+    /// authored raw after the save (ClosedXML 0.105 always writes auto
+    /// lowest/highest cfvo and showValue=1). Matched to the saved cfRule by sheet,
+    /// sqref and bar color, in creation order. <c>Color</c> is 8-digit ARGB (the
+    /// dataBar/color the ClosedXML rule carries); <c>ShowValue</c> is null when
+    /// the caller left it at Excel's default (the value stays shown).
+    /// </summary>
+    internal sealed record DataBarThresholdSpec(
+        string SheetName,
+        string Sqref,
+        string Color,
+        DataBarBound Min,
+        DataBarBound Max,
+        bool? ShowValue);
+
+    /// <summary>
     /// Authors the queued aboveBelowAverage rules on the saved file. ClosedXML
     /// 0.105 cannot serialize the <c>aboveAverage</c> rule type, so each rule's
     /// differential format (dxf) is appended to the styles part and a
@@ -1040,6 +1310,192 @@ internal static partial class ExcelConditionalFormats
             ErrorCodes.InternalError,
             $"Sheet '{sheetName}' disappeared between validation and the conditional-format write pass.",
             "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+    }
+
+    // ----- data-bar threshold raw authoring (v1.15) -------------------------------
+
+    /// <summary>
+    /// Rewrites the cfvo endpoints and <c>@showValue</c> of the queued data-bar
+    /// rules on the saved file. ClosedXML 0.105 always writes auto lowest/highest
+    /// cfvo (<c>type=min/max</c> in the base rule, <c>type=num</c> with a 0
+    /// formula in the x14 twin) and <c>showValue=1</c>; this pass replaces both
+    /// the base and the x14 cfvo from the caller's spec so Excel honors the
+    /// thresholds (Excel reads the x14 twin as authoritative when present).
+    ///
+    /// Specs are matched to the saved cfRules per sheet, by sqref and bar color,
+    /// in creation order — a default (no-threshold) data bar is never queued, so
+    /// only the caller-controlled rules are touched. Runs before
+    /// <see cref="FixUpAfterSave"/>; the rewrite never changes the pairing ids, so
+    /// the authored rule survives that pass's orphan-drop (it is not orphaned).
+    /// </summary>
+    public static void ApplyDataBarThresholds(string file, IReadOnlyList<DataBarThresholdSpec> rules)
+    {
+        if (rules.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart is null)
+        {
+            return;
+        }
+
+        foreach (var sheetRules in rules.GroupBy(r => r.SheetName, StringComparer.OrdinalIgnoreCase))
+        {
+            var worksheet = WorksheetFor(workbookPart, sheetRules.Key);
+
+            // The saved base dataBar cfRules and their x14 twins, both in document
+            // order, keyed for matching by sqref + bar color.
+            var baseBars = worksheet.Descendants<S.ConditionalFormatting>()
+                .SelectMany(cf => cf.Elements<S.ConditionalFormattingRule>()
+                    .Where(r => r.Type?.Value == S.ConditionalFormatValues.DataBar)
+                    .Select(r => (Cf: cf, Rule: r)))
+                .ToList();
+            var x14Bars = worksheet.Descendants<X14.ConditionalFormattingRule>()
+                .Where(r => r.Type?.Value == S.ConditionalFormatValues.DataBar)
+                .ToList();
+
+            var consumed = new HashSet<S.ConditionalFormattingRule>();
+            foreach (var spec in sheetRules)
+            {
+                var match = baseBars.FirstOrDefault(b =>
+                    !consumed.Contains(b.Rule) &&
+                    string.Equals(b.Cf.SequenceOfReferences?.InnerText, spec.Sqref, StringComparison.Ordinal) &&
+                    BarColorMatches(b.Rule, spec.Color));
+                if (match.Rule is null)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InternalError,
+                        $"The data-bar rule on '{spec.SheetName}!{spec.Sqref}' vanished before its thresholds could be written.",
+                        "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+                }
+
+                consumed.Add(match.Rule);
+                RewriteBaseDataBar(match.Rule, spec);
+                RewriteX14DataBar(match.Rule, x14Bars, spec);
+            }
+
+            worksheet.Save();
+        }
+    }
+
+    /// <summary>True when a base dataBar cfRule's bar color matches the spec's ARGB hex.</summary>
+    private static bool BarColorMatches(S.ConditionalFormattingRule rule, string argb)
+    {
+        var rgb = rule.GetFirstChild<S.DataBar>()?.GetFirstChild<S.Color>()?.Rgb?.Value;
+        return string.Equals(rgb, argb, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Rewrites the base (downlevel) dataBar: its two cfvo (MIN before MAX) and
+    /// the <c>@showValue</c>. An auto endpoint keeps ClosedXML's min/max cfvo
+    /// untouched; a pinned endpoint becomes the matching <c>num/percent/
+    /// percentile/formula</c> cfvo with the spec value.
+    /// </summary>
+    private static void RewriteBaseDataBar(S.ConditionalFormattingRule rule, DataBarThresholdSpec spec)
+    {
+        var dataBar = rule.GetFirstChild<S.DataBar>();
+        if (dataBar is null)
+        {
+            return;
+        }
+
+        var cfvos = dataBar.Elements<S.ConditionalFormatValueObject>().ToList();
+        if (cfvos.Count >= 2)
+        {
+            ApplyBaseCfvo(cfvos[0], spec.Min, isMin: true);
+            ApplyBaseCfvo(cfvos[1], spec.Max, isMin: false);
+        }
+
+        // showValue: ClosedXML writes "1"; honor an explicit false, and leave the
+        // default ("1") byte-identical when the caller did not set it.
+        if (spec.ShowValue == false)
+        {
+            dataBar.ShowValue = false;
+        }
+    }
+
+    /// <summary>Sets one base cfvo to the spec endpoint (auto keeps min/max with no value).</summary>
+    private static void ApplyBaseCfvo(S.ConditionalFormatValueObject cfvo, DataBarBound bound, bool isMin)
+    {
+        cfvo.Type = bound.Type switch
+        {
+            "fixed" => S.ConditionalFormatValueObjectValues.Number,
+            "percent" => S.ConditionalFormatValueObjectValues.Percent,
+            "percentile" => S.ConditionalFormatValueObjectValues.Percentile,
+            "formula" => S.ConditionalFormatValueObjectValues.Formula,
+            _ => isMin ? S.ConditionalFormatValueObjectValues.Min : S.ConditionalFormatValueObjectValues.Max,
+        };
+        if (bound.Type == "auto")
+        {
+            // Excel's auto endpoints carry val="0" (ClosedXML's default); keep it.
+            cfvo.Val = "0";
+        }
+        else
+        {
+            cfvo.Val = bound.RawValue;
+        }
+    }
+
+    /// <summary>
+    /// Rewrites the x14 twin's two cfvo (the authoritative endpoints Excel reads)
+    /// and <c>@showValue</c>. The x14 cfvo carries its value in a child
+    /// <c>xm:f</c>; auto endpoints use <c>min/max</c> with no formula.
+    /// </summary>
+    private static void RewriteX14DataBar(
+        S.ConditionalFormattingRule baseRule, IReadOnlyList<X14.ConditionalFormattingRule> x14Bars, DataBarThresholdSpec spec)
+    {
+        var id = baseRule.Descendants<X14.Id>().FirstOrDefault()?.Text;
+        if (id is null)
+        {
+            return;
+        }
+
+        // The base id and the twin id pair (case-insensitively; FixUpAfterSave
+        // uppercases both later).
+        var twin = x14Bars.FirstOrDefault(r =>
+            string.Equals(r.Id?.Value, id, StringComparison.OrdinalIgnoreCase));
+        var dataBar = twin?.GetFirstChild<X14.DataBar>();
+        if (dataBar is null)
+        {
+            return;
+        }
+
+        var cfvos = dataBar.Elements<X14.ConditionalFormattingValueObject>().ToList();
+        if (cfvos.Count >= 2)
+        {
+            ApplyX14Cfvo(cfvos[0], spec.Min, isMin: true);
+            ApplyX14Cfvo(cfvos[1], spec.Max, isMin: false);
+        }
+
+        if (spec.ShowValue == false)
+        {
+            dataBar.ShowValue = false;
+        }
+    }
+
+    /// <summary>Sets one x14 cfvo to the spec endpoint (auto keeps min/max with no formula).</summary>
+    private static void ApplyX14Cfvo(X14.ConditionalFormattingValueObject cfvo, DataBarBound bound, bool isMin)
+    {
+        cfvo.Type = bound.Type switch
+        {
+            "fixed" => X14.ConditionalFormattingValueObjectTypeValues.Numeric,
+            "percent" => X14.ConditionalFormattingValueObjectTypeValues.Percent,
+            "percentile" => X14.ConditionalFormattingValueObjectTypeValues.Percentile,
+            "formula" => X14.ConditionalFormattingValueObjectTypeValues.Formula,
+            _ => isMin
+                ? X14.ConditionalFormattingValueObjectTypeValues.Min
+                : X14.ConditionalFormattingValueObjectTypeValues.Max,
+        };
+
+        // The x14 cfvo value lives in a child xm:f. Auto/min/max carry none.
+        cfvo.RemoveAllChildren<Xm.Formula>();
+        if (bound.Type != "auto" && bound.RawValue is { } raw)
+        {
+            cfvo.AppendChild(new Xm.Formula(raw));
+        }
     }
 
     // ----- aboveAverage round-trip preservation (v1.3) ----------------------------
