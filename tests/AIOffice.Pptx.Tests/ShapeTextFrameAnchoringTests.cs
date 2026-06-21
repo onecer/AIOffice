@@ -208,7 +208,8 @@ public sealed class ShapeTextFrameAnchoringTests : IDisposable
         var envelope = _handler.Edit(_ws.Ctx("deck.pptx"),
             [TestEnv.Op("set", path, props: TestEnv.Props(("vAlign", JsonValue.Create(bad))))]);
 
-        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        Assert.Equal(new[] { "top", "middle", "bottom" }, error.Candidates);
     }
 
     [Theory]
@@ -222,7 +223,8 @@ public sealed class ShapeTextFrameAnchoringTests : IDisposable
         var envelope = _handler.Edit(_ws.Ctx("deck.pptx"),
             [TestEnv.Op("set", path, props: TestEnv.Props(("textDirection", JsonValue.Create(bad))))]);
 
-        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        var error = TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+        Assert.Equal(new[] { "horizontal", "vertical" }, error.Candidates);
     }
 
     [Fact]
@@ -235,6 +237,47 @@ public sealed class ShapeTextFrameAnchoringTests : IDisposable
             [TestEnv.Op("set", path, props: TestEnv.Props(("marginLeft", JsonValue.Create("-0.2cm"))))]);
 
         TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void OverRangeMargin_IsRejectedWithInvalidArgs()
+    {
+        // The second half of ParseMarginEmu's guard: an EMU value past int.MaxValue
+        // (100000cm = 3.6e10 EMU >> 2.1e9) is rejected, not silently truncated.
+        Create();
+        var path = AddShape();
+
+        var envelope = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: TestEnv.Props(("marginTop", JsonValue.Create("100000cm"))))]);
+
+        TestEnv.AssertFail(envelope, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void GroupChildShape_RoundTripsAnchoringProps_ThroughGet()
+    {
+        // The read side does NOT auto-mirror table cells, so the group-child projection
+        // (GroupDetail child) must be verified, not assumed-symmetric: set anchoring on a
+        // shape INSIDE a group via the group-child path, then get it back.
+        var file = Create();
+        var childId = AddShape("Inner").Split("@id=")[1].TrimEnd(']');
+        var siblingId = AddShape("Sibling").Split("@id=")[1].TrimEnd(']'); // a group needs >= 2 shapes
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group", props: TestEnv.Props(
+            ("shapes", new JsonArray("@" + childId, "@" + siblingId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+        var inGroupPath = $"{groupPath}/shape[@id={childId}]";
+
+        Edit(TestEnv.Op("set", inGroupPath, props: TestEnv.Props(
+            ("vAlign", JsonValue.Create("middle")),
+            ("textDirection", JsonValue.Create("vertical270")),
+            ("marginLeft", JsonValue.Create("0.2cm")))));
+
+        var detail = Get(inGroupPath);
+        Assert.Equal("middle", detail["vAlign"]!.GetValue<string>());
+        Assert.Equal("vertical270", detail["textDirection"]!.GetValue<string>());
+        Assert.Equal(0.2, detail["marginLeft"]!.GetValue<double>());
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
     [Fact]

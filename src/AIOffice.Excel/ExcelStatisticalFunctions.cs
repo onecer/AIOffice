@@ -244,14 +244,21 @@ internal static class ExcelStatisticalFunctions
     private static XLCellValue PercentileExc(List<double> numbers, double k)
     {
         var n = numbers.Count;
-        if (n == 0 || k <= 1.0 / (n + 1) || k >= (double)n / (n + 1))
+        // Excel's exclusive percentile is #NUM! only OUTSIDE [1/(n+1), n/(n+1)] — the
+        // endpoints themselves are valid (k=1/(n+1) -> the min, k=n/(n+1) -> the max).
+        if (n == 0 || k < 1.0 / (n + 1) || k > (double)n / (n + 1))
         {
             return XLError.NumberInvalid; // #NUM!
         }
 
         numbers.Sort();
-        var position = k * (n + 1); // 1-based; the open range guarantees 1 < position < n
+        var position = k * (n + 1); // 1-based, in [1, n]
         var lower = (int)Math.Floor(position);
+        if (lower >= n)
+        {
+            return numbers[n - 1]; // position == n (the upper endpoint): the max, no run past the array
+        }
+
         var fraction = position - lower;
         return numbers[lower - 1] + (fraction * (numbers[lower] - numbers[lower - 1]));
     }
@@ -395,11 +402,11 @@ internal static class ExcelStatisticalFunctions
     /// =AGGREGATE(function_num, options, ref1, [k]) — an aggregate that can ignore
     /// errors and hidden rows. Supported function_num: 1 AVERAGE, 2 COUNT, 3 COUNTA,
     /// 4 MAX, 5 MIN, 6 PRODUCT, 7 STDEV.S, 8 STDEV.P, 9 SUM, 10 VAR.S, 11 VAR.P,
-    /// 12 MEDIAN, 14 LARGE, 15 SMALL, 16 PERCENTILE.INC, 17 QUARTILE.INC. options
-    /// 0-7 are accepted; this evaluator always ignores errors and blank cells
-    /// (matching the options that ignore errors). The EXC variants (18
-    /// PERCENTILE.EXC, 19 QUARTILE.EXC), MODE.SNGL (13), and the array form are
-    /// deferred — they fall through to the honest formula_not_evaluated warning.
+    /// 12 MEDIAN, 13 MODE.SNGL, 14 LARGE, 15 SMALL, 16 PERCENTILE.INC, 17 QUARTILE.INC,
+    /// 18 PERCENTILE.EXC, 19 QUARTILE.EXC. options 0-7 are accepted; 2/3/6/7 ignore
+    /// error values, 0/1/4/5 propagate them (the hidden-row distinction is not modeled
+    /// headlessly). Only the array form is deferred — it falls through to the honest
+    /// formula_not_evaluated warning.
     /// </summary>
     private static XLCellValue AggregateFn(IXLWorksheet sheet, IReadOnlyList<string> args)
     {

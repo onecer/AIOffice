@@ -523,6 +523,33 @@ public sealed class StatisticalFunctionTests : ExcelTestBase
     }
 
     [Fact]
+    public void Aggregate_percentile_exc_endpoints_are_inclusive_like_excel()
+    {
+        // The valid range endpoints 1/(n+1) and n/(n+1) are VALID in Excel (not #NUM!):
+        // they resolve to the min and the max. n=3 makes them exactly representable
+        // (1/4 and 3/4); sorted {2,5,9} -> min 2, max 9.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(new JsonArray(5), new JsonArray(2), new JsonArray(9)))),
+            SetOp("/Sheet1/C1", ("value", "=AGGREGATE(18,6,A1:A3,0.25)")),  // k = 1/(n+1) -> min
+            SetOp("/Sheet1/C2", ("value", "=AGGREGATE(18,6,A1:A3,0.75)"))).IsOk); // k = n/(n+1) -> max
+        Assert.Equal(2.0, GetCached(file, "C1"), 6);
+        Assert.Equal(9.0, GetCached(file, "C2"), 6);
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Aggregate_percentile_exc_missing_k_is_value_error()
+    {
+        // PERCENTILE.EXC needs the 4th (k) arg; omitting it is #VALUE! (matches Excel).
+        var file = SeedColumn();
+        Assert.True(EditOps(file, SetOp("/Sheet1/C1", ("value", "=AGGREGATE(18,6,A1:A5)"))).IsOk);
+        Assert.Equal("#VALUE!", CellValueString(file, "C1"));
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
     public void Aggregate_quartile_exc_matches_percentile_exc()
     {
         var file = SeedColumn();

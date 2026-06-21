@@ -2058,7 +2058,7 @@ internal static class PptxEditor
                         $"Prop '{key}' does not apply to a '{view.Kind}'.",
                         "Pictures, charts, lines and groups take x, y, w, h, name, altText, altTitle, shadow, glow, " +
                         "reflection and outline (lines also fill for the stroke color); text and styling props " +
-                        "(including autofit) target text shapes.");
+                        "(including autofit, vAlign, textDirection and marginLeft/Right/Top/Bottom) target text shapes.");
             }
         }
 
@@ -2195,15 +2195,6 @@ internal static class PptxEditor
     }
 
     /// <summary>
-    /// Sets the text-autofit behaviour on a shape's a:bodyPr. A bodyPr holds exactly
-    /// one autofit child, so this replaces any existing one. Accepts a bare mode token
-    /// ("shrink" -> a:normAutofit, "resize" -> a:spAutoFit, "none" -> a:noAutofit) or,
-    /// for "shrink", an object {mode:"shrink", fontScale:90, lineSpaceReduction:10}
-    /// that writes the explicit a:normAutofit @fontScale/@lnSpcReduction percentages
-    /// (90 -> "90000"); a bare "shrink" leaves them off so PowerPoint computes the
-    /// scale when the deck opens.
-    /// </summary>
-    /// <summary>
     /// Returns the shape's a:bodyPr, creating the a:txBody (with a:lstStyle) and the
     /// a:bodyPr (first child) when absent — the same ensure pattern the autofit case
     /// uses. anchor/vert/inset are bodyPr attributes, so callers set them directly with
@@ -2228,6 +2219,15 @@ internal static class PptxEditor
         return bodyPr;
     }
 
+    /// <summary>
+    /// Sets the text-autofit behaviour on a shape's a:bodyPr. A bodyPr holds exactly
+    /// one autofit child, so this replaces any existing one. Accepts a bare mode token
+    /// ("shrink" -> a:normAutofit, "resize" -> a:spAutoFit, "none" -> a:noAutofit) or,
+    /// for "shrink", an object {mode:"shrink", fontScale:90, lineSpaceReduction:10}
+    /// that writes the explicit a:normAutofit @fontScale/@lnSpcReduction percentages
+    /// (90 -> "90000"); a bare "shrink" leaves them off so PowerPoint computes the
+    /// scale when the deck opens.
+    /// </summary>
     internal static void ApplyAutofit(P.Shape shape, JsonNode? value)
     {
         var bodyPr = EnsureBodyProperties(shape);
