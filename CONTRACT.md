@@ -853,6 +853,48 @@ existing op with a new prop value; no new verb/tool/op/prop-key, no MCP tool-sch
 
 Agents that target the 1.13.0 surface are byte-for-byte compatible with 1.14.0.
 
+## 7o. 1.15.0 — styling depth + tracked authoring: outline styling, data-bar thresholds, tracked formatting (additive, surface 1.0)
+
+Package **1.15.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Three existing props are **widened** in the value shapes they accept; the legacy form of each stays
+first-in-code and byte-identical, and no MCP tool-schema enum grows (tokens validate at runtime).
+
+### pptx — shape outline styling depth
+
+- **The shape `outline` prop now also accepts an object** (§4, additive; it previously took only a
+  bare hex string or `false`): `{color?, width?, dash?, compound?}` writes `a:ln` with `@w` (width),
+  a child `a:prstDash @val` and `@cmpd`. `dash` ∈ `solid|dash|dot|dashDot|dashDotDot|lgDash|lgDashDot|
+  lgDashDotDot`; `compound` ∈ `single|double|thickThin|thinThick|triple`; `width` is a length
+  (`"2pt"`, `"25400emu"`, …). The **bare-string / `false` / `null` form is unchanged** (a hex still
+  writes the 1pt solid line; `false` clears `a:ln`). `get` reports `outline` as the object when a
+  non-default width / dash / compound is present, and as a bare hex string otherwise. An unknown
+  dash/compound token or sub-key → `invalid_args` with candidates.
+
+### xlsx — data-bar thresholds + show-value
+
+- **The `dataBar` conditional format now accepts threshold + show-value props** (§5, additive; it
+  previously took only `{kind, color}` and always auto-scaled): `minType`/`maxType` ∈ `auto|fixed|
+  percent|percentile|formula`, `minValue`/`maxValue` (a number for fixed/percent/percentile; a
+  formula string like `"$A$1"` for formula), and `showValue` (bool, default true). With **no**
+  threshold/show-value prop the bar is byte-identical to 1.14 (auto lowest→highest). Thresholds are
+  written to the rule's two `cfvo` (and the x14 twin) via a post-save pass and **survive** the
+  workbook fix-up; `get` reports them. Bad type / missing formula value / non-numeric fixed value /
+  percent out of 0–100 → `invalid_args`.
+
+### docx — tracked formatting-change authoring
+
+- **A tracked `set` (`track:true`) on a body paragraph/run now AUTHORS formatting revisions** (§4,
+  additive; it previously returned `unsupported_feature` for any non-`text` prop): run props
+  (`bold`/`italic`/`underline`/`color`/`fontSize`/`font`/`highlight`/`strike`/`smallCaps`/`superscript`/
+  …) write a `w:rPrChange` snapshotting the prior run properties; paragraph props (`style`/spacing/…)
+  write a `w:pPrChange`. `text` + formatting in one op produces `w:del`+`w:ins` for the text **and** a
+  `w:rPrChange` on the inserted run. These read back as `kind:"format"` and `accept`/`reject` already
+  resolve them (accept keeps the new formatting, reject restores the previous). The **text-only**
+  tracked path is unchanged; tracked formatting outside the body (header/footer) and on a table cell
+  still returns `unsupported_feature`; an untracked `set` still produces no revision.
+
+Agents that target the 1.14.0 surface are byte-for-byte compatible with 1.15.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

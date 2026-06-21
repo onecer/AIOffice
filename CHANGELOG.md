@@ -4,6 +4,37 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.15.0 — styling depth + tracked authoring: pptx outline styling · xlsx data-bar thresholds · docx tracked formatting (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three existing props are widened in the value
+shapes they accept, each legacy form byte-stable. Agents that target 1.14.0 are byte-for-byte
+compatible with 1.15.0.
+
+### Added — pptx
+
+- **Shape outline styling depth**: the `outline` prop now also accepts `{color?, width?, dash?,
+  compound?}` (writing `a:ln @w` + `a:prstDash @val` + `@cmpd`) beyond the bare hex string that always
+  drew a 1pt solid line. `dash` ∈ solid/dash/dot/dashDot/dashDotDot/lgDash/lgDashDot/lgDashDotDot;
+  `compound` ∈ single/double/thickThin/thinThick/triple. The bare-string/`false` form is unchanged;
+  `get` reports the object when a non-default width/dash/compound is present, a bare hex otherwise.
+
+### Added — xlsx
+
+- **Data-bar thresholds + show-value**: the `dataBar` conditional format now accepts `minType`/`maxType`
+  (auto/fixed/percent/percentile/formula), `minValue`/`maxValue`, and `showValue`, replacing the
+  always-auto lowest→highest scaling. Omitting them is byte-identical to 1.14. Thresholds are authored
+  into the rule's `cfvo` (+ x14 twin) via a post-save pass and survive the workbook fix-up; `get`
+  reports them.
+
+### Added — docx
+
+- **Tracked formatting-change authoring**: a tracked `set` (`track:true`) on a body paragraph/run now
+  produces `w:rPrChange` (run formatting: bold/italic/underline/color/fontSize/…) and `w:pPrChange`
+  (paragraph style/props) instead of returning `unsupported_feature`. `text`+formatting in one op makes
+  `w:del`+`w:ins` plus a `w:rPrChange` on the inserted run. The changes read back as `kind:"format"` and
+  the existing accept/reject resolve them. Text-only tracked edits, header/table-cell scope, and
+  untracked sets are unchanged.
+
 ## 1.14.0 — default → hand-made: docx cell borders · xlsx pivot grand-totals · pptx slide backgrounds (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three "looks default vs hand-made" gaps closed,
