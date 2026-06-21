@@ -51,37 +51,37 @@ Homebrew (once the tap exists):
 brew install onecer/tap/aioffice
 ```
 
-## Publish checklist (human-only — these need credentials)
+## Release automation (what runs on a `v*` tag)
 
-The agent built and locally tested everything below but did NOT run any
-outward-facing command. Run these yourself after tagging `v1.14.0`.
+Tagging `vX.Y.Z` fans out to three workflows — no manual outward-facing step is
+needed once the two publish secrets exist:
 
-### 1. Cut the v1.14.0 release
+| Workflow | Does | Secret |
+| --- | --- | --- |
+| `release.yml`      | builds the 6 binaries + `SHA256SUMS`, creates the GitHub release | `GITHUB_TOKEN` (built in) |
+| `npm-publish.yml`  | waits for `SHA256SUMS`, publishes the `aioffice` npm shim     | `NPM_TOKEN` (automation token) |
+| `homebrew-tap.yml` | waits for `SHA256SUMS`, rewrites the formula's version + 4 sha256s and pushes `Formula/aioffice.rb` to the tap, then syncs `dist/Formula/aioffice.rb` back to `main` | `HOMEBREW_TAP_TOKEN` (PAT, push to the tap) |
 
-Tag `v1.14.0` and upload the 6 binaries + `SHA256SUMS` (your existing release
-flow). The install scripts default to the GitHub "latest" release, so they pick
-up v1.14.0 automatically once it is published.
+Each publish workflow is **gated on its secret**: absent the secret (forks, or
+before setup) it logs a skip and stays green. The install scripts default to the
+GitHub "latest" release, so they pick up the new version automatically.
 
-### 2. Homebrew tap
+`scripts/update-formula.py` is the formula rewriter (version + per-platform
+sha256 from `SHA256SUMS`, anchored by each line's `# asset:` comment). To refresh
+the tap **by hand** if the automation is ever off:
 
-1. Create a public repo `onecer/homebrew-tap`.
-2. Copy `dist/Formula/aioffice.rb` into it as `Formula/aioffice.rb`.
-3. Fill the four `sha256` values (each marked `TODO(human)`) from the v1.14.0
-   `SHA256SUMS`:
+```sh
+gh release download vX.Y.Z -R onecer/AIOffice -p SHA256SUMS
+python3 scripts/update-formula.py --version X.Y.Z --sums SHA256SUMS --formula dist/Formula/aioffice.rb
+# then commit dist/Formula/aioffice.rb and copy it into onecer/homebrew-tap as Formula/aioffice.rb
+```
 
-   ```sh
-   gh release download v1.14.0 -R onecer/AIOffice -p SHA256SUMS -O - | sort
-   ```
+Verify either way with:
 
-   Map asset → sha256 line (the comment on each formula line names the asset).
-   The values currently in the formula are the **v1.5.0** examples — replace
-   them. The formula already has `version "1.14.0"`.
-4. Commit and push the tap repo. Verify with:
-
-   ```sh
-   brew install onecer/tap/aioffice
-   aioffice version
-   ```
+```sh
+brew install onecer/tap/aioffice
+aioffice version
+```
 
 ### 3. Make `releases/download/...` URLs publicly resolvable
 

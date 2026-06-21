@@ -1,0 +1,163 @@
+name: homebrew-tap
+
+# Auto-updates the Homebrew tap formula (onecer/homebrew-tap, Formula/aioffice.rb)
+# when a release tag (v*) is pushed — replacing the manual per-release SHA refresh.
+# Mirrors npm-publish.yml: it WAITS for the release SHA256SUMS, rewrites the
+# formula's version + 4 platform sha256s (scripts/update-formula.py), pushes it to
+# the tap, and syncs the in-repo source copy (dist/Formula/aioffice.rb) back to the
+# default branch.
+#
+# HUMAN SETUP REQUIRED: add a repository secret named HOMEBREW_TAP_TOKEN — a PAT with
+# push rights to the tap repo (fine-grained: Contents read/write on
+# onecer/homebrew-tap; or classic with public_repo). Until that secret exists this
+# workflow runs but SKIPS the update with a clear log line (it never fails the
+# pipeline, so forks and pre-setup tags stay green).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # GITHUB_TOKEN syncs dist/Formula back to the default branch
+
+env:
+  TAP_REPO: onecer/homebrew-tap
+  TAP_FORMULA_PATH: Formula/aioffice.rb
+  DEFAULT_BRANCH: main
+
+jobs:
+  homebrew-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gate everything on HOMEBREW_TAP_TOKEN. If it's absent (forks, or before the
+      # human adds the secret), skip cleanly so the pipeline stays green.
+      - name: Detect HOMEBREW_TAP_TOKEN
+        id: gate
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "have_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::HOMEBREW_TAP_TOKEN secret is not set — skipping the tap update. Add it to enable auto-publishing the formula."
+          fi
+
+      # Fail early (only when we'd actually publish) if the source formula's version
+      # disagrees with the pushed tag — they must match.
+      - name: Check formula version matches the tag
+        if: steps.gate.outputs.have_token == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          FORMULA_VERSION="$(sed -nE 's/^[[:space:]]*version "([^"]+)".*/\1/p' dist/Formula/aioffice.rb | head -1)"
+          if [ "v${FORMULA_VERSION}" != "${TAG}" ]; then
+            echo "::error::dist/Formula/aioffice.rb version (${FORMULA_VERSION}) does not match tag ${TAG}. Bump the formula version to ${TAG#v} before tagging."
+            exit 1
+          fi
+          echo "formula version ${FORMULA_VERSION} matches tag ${TAG}."
+
+      # The release job (release.yml) runs on the same tag and uploads the binaries +
+      # SHA256SUMS. Wait until SHA256SUMS is downloadable before we read checksums.
+      - name: Wait for release assets (SHA256SUMS)
+        if: steps.gate.outputs.have_token == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          SUMS_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/SHA256SUMS"
+          echo "Waiting for ${SUMS_URL} ..."
+          for i in $(seq 1 60); do
+            code="$(curl -sSL -o /dev/null -w '%{http_code}' "${SUMS_URL}")"
+            if [ "${code}" = "200" ]; then
+              echo "SHA256SUMS is available (attempt ${i})."
+              exit 0
+            fi
+            echo "attempt ${i}/60: HTTP ${code}; release assets not ready, sleeping 30s..."
+            sleep 30
+          done
+          echo "::error::Release assets for ${TAG} did not appear within ~30 min. Re-run this job after release.yml finishes."
+          exit 1
+
+      - name: Download SHA256SUMS
+        if: steps.gate.outputs.have_token == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          curl -fsSL -o SHA256SUMS "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/SHA256SUMS"
+          echo "---- SHA256SUMS ----"; cat SHA256SUMS
+
+      - name: Rewrite the formula (version + sha256s)
+        if: steps.gate.outputs.have_token == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/update-formula.py \
+            --version "${GITHUB_REF_NAME#v}" \
+            --sums SHA256SUMS \
+            --formula dist/Formula/aioffice.rb
+          echo "---- updated formula (24-55) ----"; sed -n '24,55p' dist/Formula/aioffice.rb
+
+      - name: Push the formula to the tap
+        if: steps.gate.outputs.have_token == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          tapdir="$(mktemp -d)"
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" "$tapdir"
+          mkdir -p "$tapdir/$(dirname "${TAP_FORMULA_PATH}")"
+          cp dist/Formula/aioffice.rb "$tapdir/${TAP_FORMULA_PATH}"
+          cd "$tapdir"
+          if git diff --quiet; then
+            echo "::notice::tap formula already up to date for ${TAG} — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${TAP_FORMULA_PATH}"
+          git commit -m "aioffice ${TAG}: refresh formula version + SHA256s"
+          git push origin HEAD
+          echo "Pushed ${TAP_FORMULA_PATH} for ${TAG} to ${TAP_REPO}."
+
+      # Keep the in-repo source-of-truth copy in sync. The tap push above is the
+      # authoritative artifact brew reads; this just stops dist/Formula from drifting.
+      # Best-effort: a failure here (e.g. branch protection) only warns.
+      - name: Sync the formula back to the default branch
+        if: steps.gate.outputs.have_token == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          maindir="$(mktemp -d)"
+          git clone --depth 1 --branch "${DEFAULT_BRANCH}" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$maindir"
+          cp SHA256SUMS "$maindir/SHA256SUMS"
+          cd "$maindir"
+          python3 scripts/update-formula.py \
+            --version "${GITHUB_REF_NAME#v}" --sums SHA256SUMS --formula dist/Formula/aioffice.rb
+          rm -f SHA256SUMS
+          if git diff --quiet -- dist/Formula/aioffice.rb; then
+            echo "${DEFAULT_BRANCH} already in sync — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/Formula/aioffice.rb
+          git commit -m "homebrew: sync formula SHA256s for ${GITHUB_REF_NAME} [skip ci]"
+          git push origin "HEAD:${DEFAULT_BRANCH}" \
+            || echo "::warning::could not push formula sync to ${DEFAULT_BRANCH} (it may have moved); the tap was updated — reconcile dist/Formula manually if it drifted."
+
+      - name: Skipped (no HOMEBREW_TAP_TOKEN)
+        if: steps.gate.outputs.have_token != 'true'
+        shell: bash
+        run: |
+          echo "homebrew tap update skipped: HOMEBREW_TAP_TOKEN secret absent. Expected on forks and before the human configures the tap PAT."
