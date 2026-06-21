@@ -895,6 +895,44 @@ first-in-code and byte-identical, and no MCP tool-schema enum grows (tokens vali
 
 Agents that target the 1.14.0 surface are byte-for-byte compatible with 1.15.0.
 
+## 7p. 1.16.0 — completion & parity: tracked notes, AGGREGATE EXC/mode, shape text-frame anchoring (additive, surface 1.0)
+
+Package **1.16.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Three explicitly-deferred threads are finished, one per format; each relaxes a guard or adds
+computation/read-fields on an existing op, with the legacy branch first-in-code and byte-stable.
+
+### docx — tracked footnote / endnote insertion
+
+- **`add type:footnote` / `add type:endnote` now work under `track:true`** (§4, additive; they
+  previously returned `unsupported_feature` when tracking was on), completing v1.15's tracked-authoring.
+  Only the newly-inserted **reference run** is wrapped in a `w:ins` (id from the revision counter,
+  author + date) — the pre-existing paragraph text and the paragraph mark are **not** flagged. The note
+  part content is created exactly as in the untracked path. `read --view revisions` reports it as
+  `kind:"insert"`; `accept` keeps the note, `reject` removes the reference run (the unreferenced note
+  part is benign). Untracked add is unchanged. Tracked **link/field** inserts still return
+  `unsupported_feature` (a `w:hyperlink` cannot nest in `w:ins`); tracked-out-of-body still refused.
+
+### xlsx — AGGREGATE MODE.SNGL / PERCENTILE.EXC / QUARTILE.EXC
+
+- **`AGGREGATE` now evaluates function numbers 13, 18, 19 at write time** (§5, additive; they previously
+  stayed `formula_not_evaluated`), completing v1.11's headless eval (1–12, 14–17): **13** MODE.SNGL
+  (smallest most-frequent; `#N/A` when all-unique), **18** PERCENTILE.EXC (exclusive interpolation at
+  `k·(n+1)`, valid for `1/(n+1) ≤ k ≤ n/(n+1)` — endpoints inclusive, matching Excel; outside →
+  `#NUM!`), **19** QUARTILE.EXC (`q∈{1,2,3}`; `q=0`/`q=4`/other → `#NUM!`). The `options` error-handling
+  (2/3/6/7 ignore errors, 0/1/4/5 propagate) applies. Only the dynamic/array form stays unevaluated.
+
+### pptx — text-frame anchoring on shapes (parity with table cells)
+
+- **A text shape's `set`/`add` now accept `vAlign` / `textDirection` / `marginLeft|Right|Top|Bottom`**
+  (§4, additive), bringing text shapes to parity with table cells. `vAlign` ∈ `top|middle|bottom` →
+  `a:bodyPr @anchor`; `textDirection` ∈ `horizontal|vertical|vertical270` → `@vert`; the margins are
+  lengths → the `lIns/tIns/rIns/bIns` EMU insets. These are bodyPr **attributes** (no element-ordering
+  concern) and do not disturb an existing autofit child. `get` projects them (and on group children) as
+  nullable fields (`null` when absent). Invalid tokens / out-of-range margins → `invalid_args` with
+  candidates; these props on a non-text shape (picture/chart/group) still return `unsupported_feature`.
+
+Agents that target the 1.15.0 surface are byte-for-byte compatible with 1.16.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

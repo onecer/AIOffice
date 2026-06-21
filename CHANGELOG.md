@@ -4,6 +4,35 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.16.0 — completion & parity: docx tracked notes · xlsx AGGREGATE EXC/mode · pptx text-frame anchoring (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three explicitly-deferred threads finished, one
+per format, each byte-stable on its legacy path. Agents that target 1.15.0 are byte-for-byte compatible
+with 1.16.0.
+
+### Added — docx
+
+- **Tracked footnote / endnote insertion**: `add type:footnote`/`type:endnote` now works under
+  `track:true` (previously `unsupported_feature`), completing v1.15's tracked authoring. Only the
+  inserted reference run is wrapped in `w:ins`; `read --view revisions` reports `kind:"insert"`; accept
+  keeps the note, reject removes the reference. Untracked add is unchanged; tracked link/field inserts
+  stay unsupported.
+
+### Added — xlsx
+
+- **AGGREGATE 13 / 18 / 19**: `MODE.SNGL`, `PERCENTILE.EXC`, `QUARTILE.EXC` now evaluate at write time
+  (previously `formula_not_evaluated`), completing v1.11's headless eval. PERCENTILE.EXC endpoints are
+  inclusive like Excel; QUARTILE.EXC accepts `q∈{1,2,3}` (0/4 → `#NUM!`). The `options` error-handling
+  applies; only the array form stays deferred.
+
+### Added — pptx
+
+- **Text-frame anchoring on shapes**: a text shape's `set`/`add` accept `vAlign` (top/middle/bottom →
+  `a:bodyPr @anchor`), `textDirection` (horizontal/vertical/vertical270 → `@vert`), and
+  `marginLeft/Right/Top/Bottom` (→ EMU insets), at parity with table cells. `get` projects them as
+  nullable fields (incl. group children). These bodyPr attributes don't disturb autofit; invalid
+  tokens/over-range margins → `invalid_args`.
+
 ## 1.15.0 — styling depth + tracked authoring: pptx outline styling · xlsx data-bar thresholds · docx tracked formatting (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three existing props are widened in the value
