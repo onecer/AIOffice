@@ -400,6 +400,29 @@ public sealed class TrackedChangesTests : WordTestBase
     }
 
     [Fact]
+    public void Authored_pPrChange_accepts_to_new_paragraph_style()
+    {
+        // Accept of an authored w:pPrChange must drop the marker and KEEP the new style.
+        var file = CreateDoc(title: "Normal");
+        Edit(file, """[{"op":"add","path":"/body","props":{"text":"Plain"}}]""");
+
+        Edit(file, """[{"op":"set","path":"/body/p[2]","props":{"style":"Heading1"}}]""", Track());
+        var id = Revisions(file).First()!["id"]!.GetValue<int>();
+
+        Edit(file, $$"""[{"op":"accept","path":"/revision[@id={{id}}]"}]""");
+
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().ElementAt(1);
+            Assert.Equal("Heading1", paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value); // accept keeps the new style
+            Assert.Empty(paragraph.Descendants<ParagraphPropertiesChange>()); // marker gone
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
     public void Untracked_formatting_set_produces_no_revision()
     {
         var file = CreateDoc(title: "Plain");
