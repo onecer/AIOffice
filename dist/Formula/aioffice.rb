@@ -32,12 +32,12 @@ class Aioffice < Formula
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-arm64"
       # asset: aioffice-mac-arm64 (v1.16.0 SHA256SUMS)
-      sha256 "85e5665871fcde4488816f6042fb2cb6cc484d5d1c90dc297dd58beade15d41f"
+      sha256 "097a54f4c7f560cc37be1c183eec2a3fec7bee7450de824542ba3c337156b1e0"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-x64"
       # asset: aioffice-mac-x64 (v1.16.0 SHA256SUMS)
-      sha256 "5748ecae1799cfe8efd0189dfd0b4311c606e9c0918ae596f020432111a055ac"
+      sha256 "be04443cac6729d26b083276ae7e103a331a04cf3990119028d5aaa3b6356a1f"
     end
   end
 
@@ -45,12 +45,12 @@ class Aioffice < Formula
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-arm64"
       # asset: aioffice-linux-arm64 (v1.16.0 SHA256SUMS)
-      sha256 "547e14b12710f255634b2c28d1e90ebbb8be2f7f87e217edf1e84c1695214922"
+      sha256 "b895deef3860abd3c88797494da7e017ec2c91d83c55c9f8c32e27404530c67b"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-x64"
       # asset: aioffice-linux-x64 (v1.16.0 SHA256SUMS)
-      sha256 "aa9368992cf3e0e86412d94d6144a3a3945bb1f6746ecb6fd57fc29750bd6657"
+      sha256 "db771df2b1b55aa8559f2fe9bce7a1ee5bd5ed1e313722d4b10450987cfded67"
     end
   end
 
