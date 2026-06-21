@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AIOffice.Core;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Xunit;
@@ -142,4 +143,150 @@ public sealed class FootnoteTests : WordTestBase
         Assert.Equal(ErrorCodes.InvalidPath, ex.Code);
         Assert.Contains("/footnote[@id=1]", ex.Candidates!);
     }
+
+    // -------------------------------------------------------------- tracked
+
+    [Fact]
+    public void Untracked_footnote_add_is_byte_stable_no_track_markup()
+    {
+        // The untracked append-Run path is first-in-code and timestamp-free. The
+        // resulting document/footnotes XML is deterministic, so the same op on two
+        // identical docs yields byte-identical PARTS (the OPC zip carries wall-clock
+        // entry timestamps, so we compare part bytes, not the whole package) — proof
+        // the v1.15 behaviour is unchanged by the new session-threaded gate.
+        var a = CreateDoc("a.docx", title: "Same input");
+        var b = CreateDoc("b.docx", title: "Same input");
+        const string op = """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"Footnote body."}}]""";
+
+        var envelope = Edit(a, op);
+        Edit(b, op);
+
+        // Existing return shape unchanged: {op,type,path,anchor}, no "tracked".
+        var added = Data(envelope)["ops"]!.AsArray()[0]!;
+        Assert.Equal("add", added["op"]!.GetValue<string>());
+        Assert.Equal("footnote", added["type"]!.GetValue<string>());
+        Assert.Equal("/footnote[@id=1]", added["path"]!.GetValue<string>());
+        Assert.Equal("/body/p[1]", added["anchor"]!.GetValue<string>());
+        Assert.Null(added["tracked"]);
+
+        Assert.Equal(DocumentPartXml(a), DocumentPartXml(b));
+        Assert.Equal(FootnotesPartXml(a), FootnotesPartXml(b));
+
+        // And no tracked markup leaked into the untracked package.
+        using var doc = WordprocessingDocument.Open(a, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<InsertedRun>());
+    }
+
+    private static string DocumentPartXml(string file)
+    {
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        return doc.MainDocumentPart!.Document!.OuterXml;
+    }
+
+    private static string FootnotesPartXml(string file)
+    {
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        return doc.MainDocumentPart!.FootnotesPart!.Footnotes!.OuterXml;
+    }
+
+    [Fact]
+    public void Tracked_footnote_add_wraps_only_the_reference_run_in_an_insertion()
+    {
+        var file = CreateDoc(title: "Pre-existing body text");
+
+        // Pre-seed a tracked formatting set so the revision counter is already past 1
+        // (the rPrChange takes id 1) while leaving the title run live and in place.
+        // The footnote's own @w:id space restarts at 1, so the resulting w:ins @w:id
+        // (2) is provably NOT the footnote @w:id (1): the two id spaces are independent.
+        Edit(
+            file,
+            """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""",
+            new JsonObject { ["track"] = true });
+
+        Edit(
+            file,
+            """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"Tracked note."}}]""",
+            new JsonObject { ["track"] = true });
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+
+        // Exactly one w:ins, and it wraps the FootnoteReference run only.
+        var ins = Assert.Single(paragraph.Descendants<InsertedRun>());
+        var reference = Assert.Single(ins.Descendants<FootnoteReference>());
+        Assert.Equal(1, reference.Id!.Value);
+
+        // w:ins carries id (NextRevisionId) + author + date.
+        var (insId, author, date) = TrackAttributes(ins);
+        Assert.True(insId > 1); // advanced past the seed's rPrChange
+        Assert.Equal("AIOffice", author);
+        Assert.False(string.IsNullOrEmpty(date));
+
+        // Distinct id spaces: the w:ins @w:id is NOT the footnote @w:id.
+        Assert.NotEqual(reference.Id!.Value, insId);
+
+        // The author's pre-existing title run is NOT inside the w:ins, and the
+        // paragraph mark is NOT flagged inserted.
+        Assert.Contains(
+            paragraph.Elements<Run>(),
+            r => r.InnerText.Contains("Pre-existing body text", StringComparison.Ordinal));
+        Assert.Empty(ParagraphMarkInsertions(paragraph));
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_footnote_add_outside_body_stays_refused()
+    {
+        var file = CreateDoc(title: "Headed");
+        Edit(file, """[{"op":"add","path":"/header[1]","type":"header","props":{"text":"H"}}]""");
+
+        var ex = Assert.Throws<AiofficeException>(() => Edit(
+            file,
+            """[{"op":"add","path":"/header[1]/p[1]","type":"footnote","props":{"text":"x"}}]""",
+            new JsonObject { ["track"] = true }));
+
+        // The /body guard inside ApplyAddFootnote refuses it before any w:ins.
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+    }
+
+    [Fact]
+    public void Tracked_footnote_removal_is_structural_not_a_tracked_deletion()
+    {
+        // Removing a footnote drops the part entry + every reference run; it is a
+        // structural delete that ignores track (a w:del cannot host a note-part
+        // removal). This pre-existing behaviour is untouched: no w:del is authored.
+        var file = CreateDoc(title: "Noted");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"only"}}]""");
+
+        Edit(file, """[{"op":"remove","path":"/footnote[@id=1]"}]""", new JsonObject { ["track"] = true });
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        Assert.Empty(body.Descendants<FootnoteReference>());
+        Assert.Empty(body.Descendants<DeletedRun>()); // not a tracked deletion
+        AssertValidatesClean(file);
+    }
+
+    /// <summary>w:id / w:author / w:date off a track-change element.</summary>
+    internal static (int Id, string? Author, string? Date) TrackAttributes(OpenXmlElement element)
+    {
+        string? id = null, author = null, date = null;
+        foreach (var attribute in element.GetAttributes())
+        {
+            switch (attribute.LocalName)
+            {
+                case "id": id = attribute.Value; break;
+                case "author": author = attribute.Value; break;
+                case "date": date = attribute.Value; break;
+                default: break;
+            }
+        }
+
+        return (int.TryParse(id, out var n) ? n : 0, author, date);
+    }
+
+    /// <summary>Any w:ins flagged on the paragraph mark's run properties.</summary>
+    internal static IEnumerable<Inserted> ParagraphMarkInsertions(Paragraph paragraph) =>
+        paragraph.ParagraphProperties?.ParagraphMarkRunProperties?.Elements<Inserted>() ?? [];
 }

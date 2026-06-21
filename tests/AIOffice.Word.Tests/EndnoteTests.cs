@@ -162,15 +162,64 @@ public sealed class EndnoteTests : WordTestBase
     }
 
     [Fact]
-    public void Tracked_endnote_add_is_unsupported()
+    public void Tracked_endnote_add_wraps_only_the_reference_run_in_a_rejectable_insertion()
     {
-        var file = CreateDoc(title: "Tracked");
+        // v1.15 refused this with unsupported_feature; v1.16 authors a tracked
+        // insertion wrapping only the EndnoteReference run.
+        var file = CreateDoc(title: "Pre-existing body text");
 
-        var ex = Assert.Throws<AiofficeException>(() => Edit(
+        // Seed a tracked formatting set (rPrChange id 1) so the w:ins @w:id (2)
+        // provably differs from the endnote @w:id (1): independent id spaces.
+        Edit(
             file,
-            """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"x"}}]""",
-            new JsonObject { ["track"] = true }));
+            """[{"op":"set","path":"/body/p[1]","props":{"bold":true}}]""",
+            new JsonObject { ["track"] = true });
 
-        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
+        Edit(
+            file,
+            """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"Tracked note."}}]""",
+            new JsonObject { ["track"] = true });
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+
+            var ins = Assert.Single(paragraph.Descendants<InsertedRun>());
+            var reference = Assert.Single(ins.Descendants<EndnoteReference>());
+            Assert.Equal(1, reference.Id!.Value);
+
+            var (insId, author, date) = FootnoteTests.TrackAttributes(ins);
+            Assert.True(insId > 1);
+            Assert.Equal("AIOffice", author);
+            Assert.False(string.IsNullOrEmpty(date));
+
+            // Distinct id space: w:ins @w:id != endnote @w:id.
+            Assert.NotEqual(reference.Id!.Value, insId);
+
+            // Pre-existing title run + paragraph mark are NOT flagged inserted.
+            Assert.Contains(
+                paragraph.Elements<Run>(),
+                r => r.InnerText.Contains("Pre-existing body text", StringComparison.Ordinal));
+            Assert.Empty(FootnoteTests.ParagraphMarkInsertions(paragraph));
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_endnote_removal_is_structural_not_a_tracked_deletion()
+    {
+        // Same as footnotes: endnote removal is a structural part-and-ref delete
+        // that ignores track; no w:del is authored. Pre-existing behaviour kept.
+        var file = CreateDoc(title: "Noted");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"only"}}]""");
+
+        Edit(file, """[{"op":"remove","path":"/endnote[@id=1]"}]""", new JsonObject { ["track"] = true });
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        Assert.Empty(body.Descendants<EndnoteReference>());
+        Assert.Empty(body.Descendants<DeletedRun>());
+        AssertValidatesClean(file);
     }
 }

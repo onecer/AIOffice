@@ -624,4 +624,91 @@ public sealed class TrackedChangesTests : WordTestBase
         Assert.Equal("Persist me", string.Concat(del.Descendants<DeletedText>().Select(t => t.Text)));
         Assert.Empty(del.Descendants<Text>()); // w:t must become w:delText inside w:del
     }
+
+    // ---------------------------------------------- tracked footnote/endnote
+
+    [Fact]
+    public void Tracked_footnote_add_reports_one_insert_and_no_spurious_revision()
+    {
+        var file = CreateDoc(title: "Body stays clean");
+
+        Edit(
+            file,
+            """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"Note."}}]""",
+            Track());
+
+        // Exactly one insert entry, anchored at the body paragraph; the
+        // pre-existing title text produces NO revision of its own.
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("insert", revision!["kind"]!.GetValue<string>());
+        Assert.Equal("/body/p[1]", revision["at"]!.GetValue<string>());
+        Assert.Null(revision["mark"]); // not a paragraph-mark insertion
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_endnote_add_reports_one_insert_and_no_spurious_revision()
+    {
+        var file = CreateDoc(title: "Body stays clean");
+
+        Edit(
+            file,
+            """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"Note."}}]""",
+            Track());
+
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("insert", revision!["kind"]!.GetValue<string>());
+        Assert.Equal("/body/p[1]", revision["at"]!.GetValue<string>());
+        Assert.Null(revision["mark"]);
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_footnote_add_accepts_to_kept_reference_and_rejects_to_gone()
+    {
+        var fileAccept = CreateDoc("accept.docx", title: "Keep");
+        Edit(fileAccept, """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"Kept."}}]""", Track());
+        Edit(fileAccept, """[{"op":"accept","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileAccept));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileAccept, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            Assert.Empty(body.Descendants<InsertedRun>());
+            // Accept keeps the reference run and the note part content.
+            Assert.Single(body.Descendants<FootnoteReference>());
+            Assert.Contains("Kept.", doc.MainDocumentPart.FootnotesPart!.Footnotes!.InnerText, StringComparison.Ordinal);
+        }
+
+        AssertValidatesClean(fileAccept);
+
+        var fileReject = CreateDoc("reject.docx", title: "Keep");
+        Edit(fileReject, """[{"op":"add","path":"/body/p[1]","type":"footnote","props":{"text":"Dropped."}}]""", Track());
+        Edit(fileReject, """[{"op":"reject","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileReject));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileReject, isEditable: false))
+        {
+            // Reject drops the reference run; the orphan note part is benign.
+            Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<FootnoteReference>());
+        }
+
+        AssertValidatesClean(fileReject); // still validates clean despite the orphan note
+    }
+
+    [Fact]
+    public void Tracked_endnote_add_rejects_to_gone_and_validates_clean()
+    {
+        var file = CreateDoc(title: "Keep");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"endnote","props":{"text":"Dropped."}}]""", Track());
+        Edit(file, """[{"op":"reject","path":"/body"}]""");
+
+        Assert.Empty(Revisions(file));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false))
+        {
+            Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<EndnoteReference>());
+        }
+
+        AssertValidatesClean(file);
+    }
 }

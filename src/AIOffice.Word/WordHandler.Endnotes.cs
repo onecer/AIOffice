@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using AIOffice.Core;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -19,9 +20,12 @@ public sealed partial class WordHandler
     /// target paragraph — the same surface as footnotes, rendered at the end of
     /// the document instead of the bottom of the page.
     /// </summary>
-    private static object ApplyAddEndnote(WordprocessingDocument doc, EditOp op)
+    private static object ApplyAddEndnote(WordprocessingDocument doc, EditOp op, EditSession session)
     {
-        var text = op.Props?["text"] is { } textNode ? NodeToString(textNode) : null;
+        var props = op.Props?.DeepClone().AsObject();
+        var author = session.ResolveAuthor(props);
+
+        var text = props?["text"] is { } textNode ? NodeToString(textNode) : null;
         if (string.IsNullOrEmpty(text))
         {
             throw new AiofficeException(
@@ -54,9 +58,22 @@ public sealed partial class WordHandler
             Id = id,
         });
 
-        paragraph.AppendChild(new Run(
+        var referenceRun = new Run(
             new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
-            new EndnoteReference { Id = id }));
+            new EndnoteReference { Id = id });
+        paragraph.AppendChild(referenceRun);
+
+        // Tracked: wrap ONLY the newly-appended reference run in a w:ins (whose @w:id
+        // comes from NextRevisionId — a separate id space from the endnote's @w:id).
+        // We deliberately do NOT MarkParagraphInserted: the anchor's pre-existing runs
+        // and paragraph mark are the author's, not part of this insertion.
+        if (session.Track)
+        {
+            var ins = NewTrackChange(new InsertedRun(), author, DateTime.UtcNow, NextRevisionId(doc));
+            referenceRun.InsertBeforeSelf(ins);
+            referenceRun.Remove();
+            ins.AppendChild(referenceRun);
+        }
 
         return new { op = "add", type = "endnote", path = EndnotePath(id), anchor = anchor.CanonicalPath };
     }

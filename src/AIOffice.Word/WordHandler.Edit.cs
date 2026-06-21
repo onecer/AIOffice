@@ -160,11 +160,12 @@ public sealed partial class WordHandler
             "add" when op.Type == "field" && session.Track => throw TrackedStructureUnsupported("field"),
             "add" when op.Type == "field" => ApplyAddField(doc, file, op),
             "add" when op.Type == "bookmark" => ApplyAddBookmark(doc, op),
-            "add" when op.Type == "footnote" && session.Track => throw TrackedStructureUnsupported("footnote"),
-            "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op),
+            // Footnote/endnote references are body-paragraph runs, so a tracked add
+            // wraps the appended ref run in w:ins (the /body guard inside refuses the
+            // header/footer/cell cases). Pass the session so the add can author the w:ins.
+            "add" when op.Type == "footnote" => ApplyAddFootnote(doc, op, session),
             // Endnotes are real since M4 (the M3 unsupported_feature refusal is gone).
-            "add" when op.Type == "endnote" && session.Track => throw TrackedStructureUnsupported("endnote"),
-            "add" when op.Type == "endnote" => ApplyAddEndnote(doc, op),
+            "add" when op.Type == "endnote" => ApplyAddEndnote(doc, op, session),
             "add" when op.Type == "toc" && session.Track => throw TrackedStructureUnsupported("toc"),
             "add" when op.Type == "toc" => ApplyAddToc(doc, file, op, session),
             "add" when op.Type == "tableOfFigures" && session.Track => throw TrackedStructureUnsupported("tableOfFigures"),
