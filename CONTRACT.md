@@ -933,6 +933,45 @@ computation/read-fields on an existing op, with the legacy branch first-in-code 
 
 Agents that target the 1.15.0 surface are byte-for-byte compatible with 1.16.0.
 
+## 7q. 1.17.0 — table & tracked depth: pptx cell borders, docx tracked cross-refs, xlsx totals editing (additive, surface 1.0)
+
+Package **1.17.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each adds a prop or relaxes a guard on an existing op, with the legacy branch first-in-code and byte-stable.
+
+### pptx — table-cell per-edge borders
+
+- **`set` on a table cell (`/slide[i]/table[k]/tr[r]/tc[c]`) now accepts `borders`** (§4, additive),
+  mirroring the v1.14 docx tc-borders shape: an object whose keys are any subset of `{top, bottom, left,
+  right, all}`, each `{color?, widthPt?, style?}` (or the string `"none"` to clear that edge). `style` ∈
+  `single|double|dotted|dashed|none` (→ `a:lnL/lnR/lnT/lnB` on `a:tcPr`, with `@cmpd=dbl` for double and
+  `a:prstDash` for dotted/dashed); `widthPt` → EMU at 12700/pt. The four `a:ln*` edges are written at the
+  **front** of `a:tcPr` (before the fill, per DrawingML order); setting `borders` twice replaces. The
+  **preset-look** (light/medium/dark) borders are unchanged. `get` reports the per-edge borders (null when
+  a cell has no explicit `a:ln*`). Bad edge / style / widthPt → `invalid_args` with candidates.
+
+### docx — tracked cross-reference insertion
+
+- **`add type:crossRef` now works under `track:true`** (§4, additive; it previously returned
+  `unsupported_feature`), extending v1.16's tracked structural authoring. Only the newly-inserted
+  complex-field runs (and any leading-text run) are wrapped in a `w:ins`; the anchor paragraph's existing
+  content is untouched. `read --view revisions` reports `kind:"insert"`; accept keeps the REF/PAGEREF
+  field, reject removes it. Caption resolution still validates the target. Untracked add is unchanged.
+  Tracked **link / field / caption** inserts still return `unsupported_feature` (a `w:hyperlink` and a
+  bare field aren't `CT_Ins` children; a caption needs a fresh paragraph).
+
+### xlsx — table totals-row editing
+
+- **`set` on a table (`/Sheet1/table[@name=T]`) now accepts `totals`** (§5, additive; a table-target set
+  previously returned `unsupported_feature`): an object mapping column name → `{function?, label?}`. The
+  guard is relaxed **only** for a totals-only set — any other table-set prop still returns
+  `unsupported_feature`. `function` ∈ the totals-function names (`sum`/`average`/`count`/…; `none` clears
+  it); `label` sets a custom total label (`""` clears it). A totals cell holds **either** a function
+  **or** a custom label (Excel's own model) — setting both on one column lets the **label win**; the
+  totals row is turned on. `get` reports `totalsFunction` / `totalsLabel` per column. Unknown column /
+  function, a non-string function/label, or an empty `{}` → `invalid_args`.
+
+Agents that target the 1.16.0 surface are byte-for-byte compatible with 1.17.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

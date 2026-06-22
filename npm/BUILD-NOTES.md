@@ -9,7 +9,7 @@ only Node builtins (`https`, `fs`, `path`, `crypto`).
 
 | File             | Role                                                                 |
 | ---------------- | -------------------------------------------------------------------- |
-| `package.json`   | name `aioffice`, version `1.16.0`, `bin`, `postinstall`, `files`.     |
+| `package.json`   | name `aioffice`, version `1.17.0`, `bin`, `postinstall`, `files`.     |
 | `platform.js`    | Single source of truth: platform/arch -> release asset + local name. |
 | `install.js`     | Postinstall: download + SHA256-verify + chmod the binary into `bin/`.|
 | `bin/aioffice.js`| Thin launcher: lazy-installs if needed, spawns binary, stdio pass-through. |
@@ -27,14 +27,14 @@ README install commands); nothing else needs to change.
 
 ## Versioning
 
-`package.json` is at `1.16.0`. On install, `install.js` downloads release
-`v{package.version}` = **`v1.16.0`** by default. That tag does not exist yet — the
+`package.json` is at `1.17.0`. On install, `install.js` downloads release
+`v{package.version}` = **`v1.17.0`** by default. That tag does not exist yet — the
 human tags it (with its 6 binaries + `SHA256SUMS`) as part of this release. Once
 tagged, `npm install -g aioffice` will Just Work with no env overrides.
 
 ## How it was tested locally (against the existing v1.5.0 release)
 
-Because `v1.16.0` is not tagged yet, and because the `onecer/AIOffice` repo is
+Because `v1.17.0` is not tagged yet, and because the `onecer/AIOffice` repo is
 **private** (anonymous `https://github.com/.../releases/download/...` returns
 404 — a real public release will not), testing used the real **v1.5.0** assets
 served from a local HTTPS mirror:
@@ -75,8 +75,8 @@ Results — all green:
   verified the binary, linked the `aioffice` bin; `aioffice doctor` and a real
   `create demo.docx` + `read` round-trip both succeeded.
 
-When the real `v1.16.0` tag exists, the **same flow runs with no env overrides**:
-`install.js` downloads `https://github.com/onecer/AIOffice/releases/download/v1.16.0/<asset>`
+When the real `v1.17.0` tag exists, the **same flow runs with no env overrides**:
+`install.js` downloads `https://github.com/onecer/AIOffice/releases/download/v1.17.0/<asset>`
 and the sibling `SHA256SUMS`.
 
 ## Publishing (for the human to run — NOT done here)
@@ -86,7 +86,7 @@ These are intentionally **not** executed by the build (no credentials are used).
 ```sh
 cd npm
 
-# 0. Make sure the v1.16.0 GitHub release exists with all 6 binaries + SHA256SUMS.
+# 0. Make sure the v1.17.0 GitHub release exists with all 6 binaries + SHA256SUMS.
 
 # 1. Sanity-check what will be published.
 npm pack --dry-run         # should list exactly: README.md, bin/aioffice.js,

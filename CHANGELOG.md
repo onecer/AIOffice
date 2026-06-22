@@ -4,6 +4,32 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## 1.17.0 — table & tracked depth: pptx cell borders · docx tracked cross-refs · xlsx totals editing (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each adds a prop or relaxes a guard on an existing
+op, byte-stable on its legacy path. Agents that target 1.16.0 are byte-for-byte compatible with 1.17.0.
+
+### Added — pptx
+
+- **Table-cell per-edge borders**: `set` on a table cell accepts `borders` (`{top/bottom/left/right/all}`,
+  each `{color?, widthPt?, style?}`, or `"none"` to clear), writing `a:lnL/lnR/lnT/lnB` at the front of
+  `a:tcPr` (style ∈ single/double/dotted/dashed/none; widthPt → EMU at 12700/pt). The preset light/medium/
+  dark look is byte-stable; `get` reports the per-edge borders.
+
+### Added — docx
+
+- **Tracked cross-reference insertion**: `add type:crossRef` now works under `track:true` (previously
+  `unsupported_feature`), wrapping only the new complex-field runs in `w:ins`. `read --view revisions`
+  reports `kind:"insert"`; accept keeps the REF field, reject removes it. Tracked link/field/caption stay
+  unsupported (CT_Ins constraints).
+
+### Added — xlsx
+
+- **Table totals-row editing**: `set` on a table accepts `totals` (column → `{function?, label?}`),
+  relaxing the table-set guard for totals-only sets. Function and label are mutually exclusive per column
+  (Excel's model; label wins when both given); `function:"none"` / empty label clear. `get` reports
+  `totalsFunction`/`totalsLabel`. Non-string or empty settings → `invalid_args`.
+
 ## 1.16.0 — completion & parity: docx tracked notes · xlsx AGGREGATE EXC/mode · pptx text-frame anchoring (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three explicitly-deferred threads finished, one
