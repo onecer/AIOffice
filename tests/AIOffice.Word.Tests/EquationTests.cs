@@ -302,11 +302,15 @@ public sealed class EquationTests : WordTestBase
         AddNumberedEquation(file, "a = b", "(1.1)");
         AddNumberedEquation(file, "c = d", "(1.2)");
 
-        // Address by the full label and by the bare number; both resolve.
-        var byLabel = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/equation[@num=1.2]" })))["properties"]!;
+        // Address by the verbatim label "(1.2)" and by the bare number "1.2"; both resolve.
+        var byLabel = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/equation[@num=(1.2)]" })))["properties"]!;
         Assert.Equal("(1.2)", byLabel["number"]!.GetValue<string>());
         Assert.Equal("c = d", byLabel["latex"]!.GetValue<string>());
         Assert.EndsWith("/omath[1]", byLabel["path"]!.GetValue<string>());
+
+        var byBareNumber = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/equation[@num=1.2]" })))["properties"]!;
+        Assert.Equal("(1.2)", byBareNumber["number"]!.GetValue<string>());
+        Assert.Equal("c = d", byBareNumber["latex"]!.GetValue<string>());
     }
 
     [Fact]
