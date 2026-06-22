@@ -4,7 +4,7 @@ using ModelContextProtocol.Protocol;
 namespace AIOffice.Mcp;
 
 /// <summary>
-/// The 17 MCP tools, mirroring the CLI verbs 1:1 (docs/MCP.md is the spec).
+/// The 19 MCP tools (17 verb-tools + preview_mark/preview_goto), mirroring the CLI verbs (docs/MCP.md is the spec).
 /// M9 added <c>office_convert</c> (the 17th tool); M8 added <c>office_diff</c>;
 /// M7 added <c>office_audit</c>; M1 added <c>preview_open</c> / <c>preview_selection</c>.
 /// <para>
@@ -185,18 +185,32 @@ public static class ToolCatalog
             """),
         Make(
             "preview_open",
-            "Open a live localhost preview where a human clicks elements to select them; returns the url. Survives this session.",
+            "Live localhost preview (click=select, dblclick=edit, auto-reloads on change). Returns url; survives this session.",
             """
             {"type":"object","properties":{
               "file":{"type":"string"},
-              "port":{"type":"integer","description":"Fixed port (default: auto-pick in 26500-26600)"}},
+              "port":{"type":"integer","description":"Fixed port (default: auto in 26500-26600)"}},
              "required":["file"]}
             """),
         Make(
             "preview_selection",
-            "Read the canonical paths the human clicked in the live preview; they feed office_get/office_edit directly.",
+            "The canonical paths the human clicked; feed to office_get/office_edit.",
             """
             {"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}
+            """),
+        Make(
+            "preview_mark",
+            "Highlight a preview element (advisory; no doc edit). path may be 'selected'.",
+            """
+            {"type":"object","properties":{
+              "file":{"type":"string"},"path":{"type":"string"},"note":{"type":"string"},"toFix":{"type":"boolean"}},
+             "required":["file","path"]}
+            """),
+        Make(
+            "preview_goto",
+            "Scroll every preview viewer to an element and flash it.",
+            """
+            {"type":"object","properties":{"file":{"type":"string"},"path":{"type":"string"}},"required":["file","path"]}
             """),
     ];
 

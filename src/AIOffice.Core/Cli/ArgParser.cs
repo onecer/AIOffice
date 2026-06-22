@@ -37,6 +37,8 @@ public static class ArgParser
         "json", "pretty", "quiet", "dry-run", "track", "force",
         // find/replace sugar modifiers (M4): never eat the next token.
         "regex", "match-case", "whole-word",
+        // preview mark/unmark flags.
+        "tofix", "all",
     };
 
     public static ParsedArgs Parse(IReadOnlyList<string> argv)

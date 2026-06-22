@@ -9,11 +9,11 @@ public sealed class ServerBootTests
         "office_create", "office_read", "office_query", "office_get",
         "office_edit", "office_render", "office_validate", "office_audit", "office_diff", "office_template",
         "office_convert", "file_snapshot", "office_status", "office_help", "office_schema",
-        "preview_open", "preview_selection",
+        "preview_open", "preview_selection", "preview_mark", "preview_goto",
     ];
 
     [Fact]
-    public async Task Boot_AdvertisesAioffice_AndExactlyTheSeventeenTools()
+    public async Task Boot_AdvertisesAioffice_AndExactlyTheNineteenTools()
     {
         using var ws = new TempWorkspace();
         await using var srv = await McpTestServer.StartAsync(ws.NewService(new FakeDocxHandler()));
@@ -22,7 +22,7 @@ public sealed class ServerBootTests
 
         var tools = await srv.Client.ListToolsAsync();
         Assert.Equal(ExpectedTools.Length, tools.Count);
-        Assert.Equal(17, tools.Count); // + preview_open/selection (M1), office_audit (M7), office_diff (M8), office_convert (M9)
+        Assert.Equal(19, tools.Count); // 17 verb-tools + preview_mark/preview_goto (preview watch parity)
         Assert.Equal(ExpectedTools.ToHashSet(StringComparer.Ordinal),
             tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal));
 

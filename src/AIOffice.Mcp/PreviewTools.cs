@@ -210,12 +210,50 @@ internal static class PreviewTools
             new Meta { File = resolved, Rev = snapshot.Rev });
     }
 
+    // ---------------------------------------------------------- preview_mark
+
+    public static Envelope Mark(Workspace workspace, JsonObject args)
+    {
+        var file = RequireFileArg(args, "Pass the previewed document, e.g. report.docx.");
+        var path = RequireStringArg(args, "path", "Pass the path to mark, or 'selected'.");
+        var resolved = workspace.Resolve(file);
+        var snapshot = PreviewClient.AddMark(
+            resolved,
+            path,
+            OptionalString(args, "color"),
+            OptionalString(args, "note"),
+            OptionalString(args, "find"),
+            args["toFix"] is JsonValue v && v.GetValueKind() == JsonValueKind.True);
+        return Envelope.Ok(
+            new { marks = snapshot.Marks, rev = snapshot.Rev, updatedAt = snapshot.UpdatedAt },
+            new Meta { File = resolved, Rev = snapshot.Rev });
+    }
+
+    // ---------------------------------------------------------- preview_goto
+
+    public static Envelope Goto(Workspace workspace, JsonObject args)
+    {
+        var file = RequireFileArg(args, "Pass the previewed document, e.g. report.docx.");
+        var path = RequireStringArg(args, "path", "Pass the path to scroll to, e.g. /body/p[12].");
+        var resolved = workspace.Resolve(file);
+        PreviewClient.Goto(resolved, path);
+        return Envelope.Ok(new { scrolledTo = path }, new Meta { File = resolved });
+    }
+
     // -------------------------------------------------------------- plumbing
 
     private static string RequireFileArg(JsonObject args, string suggestion) =>
         args["file"] is JsonValue value && value.TryGetValue<string>(out var s) && s.Length > 0
             ? s
             : throw new AiofficeException(ErrorCodes.InvalidArgs, "'file' is required.", suggestion);
+
+    private static string RequireStringArg(JsonObject args, string key, string suggestion) =>
+        args[key] is JsonValue value && value.TryGetValue<string>(out var s) && s.Length > 0
+            ? s
+            : throw new AiofficeException(ErrorCodes.InvalidArgs, $"'{key}' is required.", suggestion);
+
+    private static string? OptionalString(JsonObject args, string key) =>
+        args[key] is JsonValue value && value.TryGetValue<string>(out var s) && s.Length > 0 ? s : null;
 
     private static int OptionalPort(JsonObject args)
     {

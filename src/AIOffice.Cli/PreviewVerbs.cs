@@ -14,7 +14,7 @@ namespace AIOffice.Cli;
 /// </summary>
 internal static class PreviewVerbs
 {
-    private static readonly string[] Actions = ["open", "selection", "close"];
+    private static readonly string[] Actions = ["open", "selection", "close", "mark", "unmark", "marks", "goto"];
 
     /// <summary>Dispatches one preview action; returns the process exit code.</summary>
     public static int Run(ParsedArgs args, Workspace workspace, Stopwatch stopwatch, Func<Envelope, int> print)
@@ -29,10 +29,14 @@ internal static class PreviewVerbs
                 "open" => Open(args, workspace, file, stopwatch, print),
                 "selection" => Selection(workspace, file, stopwatch, print),
                 "close" => Close(workspace, file, stopwatch, print),
+                "mark" => Mark(args, workspace, file, stopwatch, print),
+                "unmark" => Unmark(args, workspace, file, stopwatch, print),
+                "marks" => Marks(workspace, file, stopwatch, print),
+                "goto" => Goto(args, workspace, file, stopwatch, print),
                 _ => throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown preview action: '{action}'.",
-                    "Use 'aioffice preview open <file>', 'preview selection <file>' or 'preview close <file>'.",
+                    "Use open/selection/close/mark/unmark/marks/goto, e.g. 'aioffice preview mark report.docx /body/p[3] --note overflows'.",
                     candidates: Actions),
             };
         }
@@ -86,6 +90,47 @@ internal static class PreviewVerbs
         return print(Envelope.Ok(new { closed = true }, MetaFor(resolved, stopwatch)));
     }
 
+    private static int Mark(ParsedArgs args, Workspace workspace, string file, Stopwatch stopwatch, Func<Envelope, int> print)
+    {
+        var path = Positional(args, 2, "path");
+        var resolved = workspace.Resolve(file);
+        var snapshot = PreviewClient.AddMark(
+            resolved, path, args.GetOption("color"), args.GetOption("note"), args.GetOption("find"), args.HasFlag("tofix"));
+        return print(Envelope.Ok(MarksData(snapshot), MetaFor(resolved, stopwatch)));
+    }
+
+    private static int Unmark(ParsedArgs args, Workspace workspace, string file, Stopwatch stopwatch, Func<Envelope, int> print)
+    {
+        var resolved = workspace.Resolve(file);
+        var path = args.Positionals.Count > 2 ? args.Positionals[2] : null;
+        var snapshot = args.HasFlag("all")
+            ? PreviewClient.ClearMarks(resolved)
+            : PreviewClient.RemoveMark(
+                resolved,
+                path ?? throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "Pass a <path> or --all.",
+                    "e.g. 'aioffice preview unmark report.docx /body/p[3]', or '--all' to clear every mark."));
+        return print(Envelope.Ok(MarksData(snapshot), MetaFor(resolved, stopwatch)));
+    }
+
+    private static int Marks(Workspace workspace, string file, Stopwatch stopwatch, Func<Envelope, int> print)
+    {
+        var resolved = workspace.Resolve(file);
+        return print(Envelope.Ok(MarksData(PreviewClient.GetMarks(resolved)), MetaFor(resolved, stopwatch)));
+    }
+
+    private static int Goto(ParsedArgs args, Workspace workspace, string file, Stopwatch stopwatch, Func<Envelope, int> print)
+    {
+        var path = Positional(args, 2, "path");
+        var resolved = workspace.Resolve(file);
+        PreviewClient.Goto(resolved, path);
+        return print(Envelope.Ok(new { scrolledTo = path }, MetaFor(resolved, stopwatch)));
+    }
+
+    private static object MarksData(MarksSnapshot snapshot) =>
+        new { marks = snapshot.Marks, rev = snapshot.Rev, updatedAt = snapshot.UpdatedAt };
+
     private static int ParsePort(ParsedArgs args)
     {
         var text = args.GetOption("port");
@@ -113,7 +158,7 @@ internal static class PreviewVerbs
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
                 $"Missing required argument: <{name}>.",
-                "Usage: aioffice preview <open|selection|close> <file> [--port N].",
+                "Usage: aioffice preview <open|selection|close|mark|unmark|marks|goto> <file> [<path>] [--port N].",
                 candidates: index == 0 ? Actions : null);
         }
 

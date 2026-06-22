@@ -385,10 +385,11 @@ internal static partial class PreviewRenderer
         .Replace("\"", "&quot;", StringComparison.Ordinal);
 
     /// <summary>
-    /// The page shell: minimal styling plus the click-to-select and live-reload
-    /// layer. Elements with data-aio-path are clickable (click = select one,
-    /// shift/cmd-click = toggle), selection auto-POSTs to /selection, and
-    /// /events reloads the page when the file changes on disk.
+    /// The page shell: styling plus the full interactive layer — click /
+    /// box-drag select (auto-POSTed to /selection), agent-pushed mark highlights
+    /// and goto-scroll over SSE, double-click inline edit (POST /api/edit), and a
+    /// soft per-path live reload that swaps only the changed nodes when the file
+    /// changes on disk (preserving scroll, selection, marks and the SSE stream).
     /// </summary>
     private static string Shell(string title, string content) => $$"""
         <!DOCTYPE html>
@@ -408,6 +409,15 @@ internal static partial class PreviewRenderer
         .aio-selected { outline: 2px solid #2563eb !important; outline-offset: 1px; }
         g.aio-selected rect { stroke: #2563eb; stroke-width: 2; }
         .aio-truncated { color: #6b7280; font-style: italic; }
+        .aio-mark { outline: 3px solid var(--aio-mark-color, #ffeb3b) !important; outline-offset: 1px; position: relative; }
+        .aio-mark.aio-tofix { outline-style: dashed !important; }
+        .aio-mark[data-aio-note]:hover::after { content: attr(data-aio-note); position: absolute; left: 0; top: -1.7em; background: #111827; color: #fff; font-size: 11px; line-height: 1.4; padding: 2px 6px; border-radius: 4px; white-space: nowrap; z-index: 20; pointer-events: none; }
+        .aio-flash { animation: aio-flash 1.3s ease-out; }
+        @keyframes aio-flash { 0% { background: #fde68a; } 100% { background: transparent; } }
+        #aio-dragbox { position: fixed; border: 1px solid #2563eb; background: rgba(37,99,235,0.12); pointer-events: none; z-index: 30; display: none; }
+        [data-aio-path][contenteditable="true"] { outline: 2px solid #059669 !important; background: #ecfdf5; cursor: text; }
+        .aio-toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #111827; color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 12px; z-index: 40; opacity: 0; transition: opacity .2s; }
+        .aio-toast.show { opacity: 1; }
         </style>
         </head>
         <body>
@@ -418,37 +428,149 @@ internal static partial class PreviewRenderer
         (() => {
           "use strict";
           const selected = new Set();
-          const apply = () => {
+          let marks = [];
+          let suppressClick = false;
+
+          const esc = (p) => (window.CSS && CSS.escape) ? CSS.escape(p) : p.replace(/["\\]/g, "\\$&");
+          const byPath = (p) => document.querySelector('[data-aio-path="' + esc(p) + '"]');
+          const toast = (msg) => { let t = document.querySelector(".aio-toast"); if (!t) { t = document.createElement("div"); t.className = "aio-toast"; document.body.appendChild(t); } t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); };
+
+          const applySelection = () => {
             document.querySelectorAll("[data-aio-path]").forEach((el) => {
               el.classList.toggle("aio-selected", selected.has(el.getAttribute("data-aio-path")));
             });
           };
-          const push = () => {
-            fetch("/selection", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ paths: Array.from(selected) })
-            }).catch(() => {});
+          const pushSelection = () => {
+            fetch("/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths: Array.from(selected) }) }).catch(() => {});
           };
+
+          const applyMarks = () => {
+            document.querySelectorAll(".aio-mark").forEach((el) => {
+              el.classList.remove("aio-mark", "aio-tofix");
+              el.removeAttribute("data-aio-note");
+              el.style.removeProperty("--aio-mark-color");
+            });
+            marks.forEach((m) => {
+              const el = byPath(m.path); if (!el) return;
+              el.classList.add("aio-mark");
+              if (m.toFix) el.classList.add("aio-tofix");
+              if (m.color) el.style.setProperty("--aio-mark-color", m.color);
+              const note = [m.note, m.find ? ("find: " + m.find) : null, m.toFix ? "⚑ fix" : null].filter(Boolean).join("  ·  ");
+              if (note) el.setAttribute("data-aio-note", note);
+            });
+          };
+
+          // Compare a decorated live node against a fresh one: strip our injected
+          // classes/attrs so only real content changes count as a diff.
+          const cleanHtml = (el) => {
+            const c = el.cloneNode(true);
+            c.classList.remove("aio-selected", "aio-mark", "aio-tofix", "aio-flash");
+            c.removeAttribute("data-aio-note");
+            c.style.removeProperty("--aio-mark-color");
+            if (!c.getAttribute("style")) c.removeAttribute("style");
+            if (c.getAttribute("class") === "") c.removeAttribute("class");
+            return c.outerHTML;
+          };
+
+          // Soft live reload: fetch fresh content, replace only changed nodes
+          // (no location.reload) — scroll, selection, marks and SSE all survive.
+          const softReload = async () => {
+            let html; try { html = await (await fetch("/content")).text(); } catch { return; }
+            const main = document.querySelector("main"); if (!main) return;
+            const tmp = document.createElement("div"); tmp.innerHTML = html;
+            const oldNodes = new Map(); main.querySelectorAll("[data-aio-path]").forEach((e) => oldNodes.set(e.getAttribute("data-aio-path"), e));
+            const newNodes = new Map(); tmp.querySelectorAll("[data-aio-path]").forEach((e) => newNodes.set(e.getAttribute("data-aio-path"), e));
+            const sameKeys = oldNodes.size === newNodes.size && [...oldNodes.keys()].every((k) => newNodes.has(k));
+            if (!sameKeys) {
+              main.innerHTML = html;
+            } else {
+              oldNodes.forEach((oldEl, p) => { const ne = newNodes.get(p); if (ne && cleanHtml(oldEl) !== ne.outerHTML) oldEl.replaceWith(ne); });
+            }
+            applySelection(); applyMarks();
+          };
+
+          // ---- click select ----
           document.addEventListener("click", (ev) => {
+            if (suppressClick) { suppressClick = false; return; }
             const el = ev.target instanceof Element ? ev.target.closest("[data-aio-path]") : null;
-            if (!el) return;
+            if (!el || el.getAttribute("contenteditable") === "true") return;
             ev.preventDefault();
             const path = el.getAttribute("data-aio-path");
-            if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
-              if (!selected.delete(path)) selected.add(path);
-            } else {
-              selected.clear();
-              selected.add(path);
-            }
-            apply();
-            push();
+            if (ev.shiftKey || ev.metaKey || ev.ctrlKey) { if (!selected.delete(path)) selected.add(path); }
+            else { selected.clear(); selected.add(path); }
+            applySelection(); pushSelection();
           });
-          fetch("/selection").then((r) => r.json()).then((s) => {
-            (s.paths || []).forEach((p) => selected.add(p));
-            apply();
-          }).catch(() => {});
-          new EventSource("/events").addEventListener("reload", () => location.reload());
+
+          // ---- box-drag (rubber-band) multi-select ----
+          let drag = null;
+          const box = document.createElement("div"); box.id = "aio-dragbox"; document.body.appendChild(box);
+          document.addEventListener("mousedown", (ev) => {
+            if (ev.button !== 0 || (ev.target instanceof Element && ev.target.closest("[contenteditable='true']"))) return;
+            drag = { x: ev.clientX, y: ev.clientY, moved: false, add: ev.shiftKey || ev.metaKey || ev.ctrlKey };
+          });
+          document.addEventListener("mousemove", (ev) => {
+            if (!drag) return;
+            if (!drag.moved && Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) < 6) return;
+            drag.moved = true;
+            box.style.display = "block";
+            box.style.left = Math.min(ev.clientX, drag.x) + "px";
+            box.style.top = Math.min(ev.clientY, drag.y) + "px";
+            box.style.width = Math.abs(ev.clientX - drag.x) + "px";
+            box.style.height = Math.abs(ev.clientY - drag.y) + "px";
+          });
+          document.addEventListener("mouseup", (ev) => {
+            if (!drag) return;
+            const d = drag; drag = null; box.style.display = "none";
+            if (!d.moved) return;
+            suppressClick = true;
+            const x1 = Math.min(ev.clientX, d.x), y1 = Math.min(ev.clientY, d.y), x2 = Math.max(ev.clientX, d.x), y2 = Math.max(ev.clientY, d.y);
+            if (!d.add) selected.clear();
+            document.querySelectorAll("[data-aio-path]").forEach((el) => {
+              const b = el.getBoundingClientRect();
+              if (b.left < x2 && b.right > x1 && b.top < y2 && b.bottom > y1) selected.add(el.getAttribute("data-aio-path"));
+            });
+            applySelection(); pushSelection();
+          });
+
+          // ---- inline edit (double-click an xlsx cell or docx paragraph) ----
+          document.addEventListener("dblclick", (ev) => {
+            const el = ev.target instanceof Element ? ev.target.closest("[data-aio-path]") : null;
+            if (!el) return;
+            const path = el.getAttribute("data-aio-path");
+            const editable = /\/[^/]+\/[A-Z]{1,3}[0-9]{1,7}$/.test(path) || /^\/body\/p\[[0-9]+\]$/.test(path);
+            if (!editable) return;
+            ev.preventDefault();
+            const original = el.textContent;
+            let done = false;
+            el.setAttribute("contenteditable", "true"); el.focus();
+            const sel = window.getSelection(); sel.removeAllRanges();
+            const rg = document.createRange(); rg.selectNodeContents(el); sel.addRange(rg);
+            const finish = (commit) => {
+              if (done) return; done = true;
+              el.removeAttribute("contenteditable");
+              const text = el.textContent;
+              if (!commit || text === original) { el.textContent = original; return; }
+              const props = path.startsWith("/body/") ? { text: text } : { value: text };
+              fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "set", path: path, props: props }) })
+                .then((r) => { if (!r.ok) { el.textContent = original; toast("Edit rejected"); } })
+                .catch(() => { el.textContent = original; });
+            };
+            el.addEventListener("keydown", (k) => { if (k.key === "Enter") { k.preventDefault(); finish(true); } else if (k.key === "Escape") { finish(false); } });
+            el.addEventListener("blur", () => finish(true), { once: true });
+          });
+
+          // ---- initial state + SSE wiring ----
+          fetch("/selection").then((r) => r.json()).then((s) => { (s.paths || []).forEach((p) => selected.add(p)); applySelection(); }).catch(() => {});
+          fetch("/marks").then((r) => r.json()).then((s) => { marks = s.marks || []; applyMarks(); }).catch(() => {});
+          const es = new EventSource("/events");
+          es.addEventListener("reload", softReload);
+          es.addEventListener("marks", (e) => { try { marks = JSON.parse(e.data).marks || []; applyMarks(); } catch (_) {} });
+          es.addEventListener("scroll", (e) => {
+            try {
+              const el = byPath(JSON.parse(e.data).path);
+              if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("aio-flash"); setTimeout(() => el.classList.remove("aio-flash"), 1300); }
+            } catch (_) {}
+          });
         })();
         </script>
         </body>

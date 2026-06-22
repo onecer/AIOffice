@@ -204,7 +204,7 @@ public sealed class BridgeTests : IDisposable
         await using var srv = await McpTestServer.StartAsync(_service);
 
         var tools = await srv.Client.ListToolsAsync();
-        Assert.Equal(17, tools.Count); // the bridge adds args, never tools
+        Assert.Equal(19, tools.Count); // the bridge adds args, never tools
         var createSchema = tools.First(t => t.Name == "office_create").JsonSchema.GetRawText();
         Assert.Contains("\"from\"", createSchema, StringComparison.Ordinal);
 
@@ -254,7 +254,7 @@ public sealed class BridgeTests : IDisposable
     {
         await using var srv = await McpTestServer.StartAsync(_service);
 
-        Assert.Equal(17, (await srv.Client.ListToolsAsync()).Count);
+        Assert.Equal(19, (await srv.Client.ListToolsAsync()).Count);
 
         EnvelopeAssert.Ok(await srv.CallAsync("office_create", new Dictionary<string, object?>
         {

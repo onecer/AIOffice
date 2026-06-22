@@ -53,6 +53,8 @@ internal static class ToolRouter
         "office_schema" => service.Schema(args),
         "preview_open" => service.PreviewOpen(args),
         "preview_selection" => service.PreviewSelection(args),
+        "preview_mark" => service.PreviewMark(args),
+        "preview_goto" => service.PreviewGoto(args),
         _ => Envelope.Fail(
             ErrorCodes.InvalidArgs,
             $"Unknown tool: '{name}'.",

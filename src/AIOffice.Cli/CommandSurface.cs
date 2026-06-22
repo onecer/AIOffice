@@ -209,13 +209,21 @@ public static class CommandSurface
             "office_help"),
 
         new("preview",
-            "Live browser preview: open serves the document on localhost (click = select), selection reads the clicked paths, close stops the server.",
-            "aioffice preview <open|selection|close> <file> [--port N]",
+            "Live browser preview with a watch loop: open serves the document on localhost (click / box-drag = select, double-click = inline edit) and live-reloads on disk change; selection reads the clicked paths; mark/unmark/marks push advisory highlights to viewers; goto scrolls every viewer to a path; close stops the server.",
+            "aioffice preview <open|selection|close|mark|unmark|marks|goto> <file> [<path>] [--port N]",
             [
-                new("action", true, "open (blocking server; prints {url,port,pid} first), selection or close."),
+                new("action", true, "open (blocking server; prints {url,port,pid} first), selection, close, mark, unmark, marks or goto."),
                 new("file", true, "Document to preview (.docx/.xlsx/.pptx)."),
+                new("path", false, "mark/unmark/goto: the canonical path to mark, unmark or scroll to (mark also accepts the pseudo-path 'selected')."),
             ],
-            [new("port", "N", "Fixed port for open (default: first free port in 26500-26600).")],
+            [
+                new("port", "N", "Fixed port for open (default: first free port in 26500-26600)."),
+                new("color", "<hex|name>", "mark: highlight color (#ffeb3b or a named color; default yellow)."),
+                new("note", "<text>", "mark: a note shown on hover."),
+                new("find", "<text>", "mark: a substring to call out within the element (shown in the note)."),
+                new("tofix", null, "mark: flag the element as needing a fix (dashed outline)."),
+                new("all", null, "unmark: remove every mark."),
+            ],
             "preview_open"),
 
         new("mcp",

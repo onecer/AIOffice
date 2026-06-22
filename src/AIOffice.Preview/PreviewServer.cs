@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AIOffice.Core;
+using AIOffice.Excel;
+using AIOffice.Pptx;
+using AIOffice.Word;
 
 namespace AIOffice.Preview;
 
@@ -29,6 +32,7 @@ public sealed class PreviewServer : IDisposable
     private readonly FileSystemWatcher _watcher;
     private readonly Timer _debounce;
     private readonly SelectionStore _selection = new();
+    private readonly MarkStore _marks = new();
     private readonly List<SseClient> _sseClients = [];
     private readonly object _sseGate = new();
     private readonly TaskCompletionSource _shutdown = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -234,6 +238,9 @@ public sealed class PreviewServer : IDisposable
                 case ("GET", "/"):
                     HandleRoot(context);
                     break;
+                case ("GET", "/content"):
+                    WriteText(context.Response, 200, "text/html; charset=utf-8", PreviewRenderer.RenderContent(FilePath, Workspace));
+                    break;
                 case ("GET", "/events"):
                     HandleEvents(context);
                     break;
@@ -243,6 +250,21 @@ public sealed class PreviewServer : IDisposable
                 case ("POST", "/selection"):
                     HandlePostSelection(context);
                     break;
+                case ("GET", "/marks"):
+                    WriteJson(context.Response, 200, JsonSerializer.Serialize(SnapshotMarks(), JsonDefaults.Options));
+                    break;
+                case ("POST", "/marks"):
+                    HandlePostMark(context);
+                    break;
+                case ("DELETE", "/marks"):
+                    HandleDeleteMark(context);
+                    break;
+                case ("POST", "/goto"):
+                    HandleGoto(context);
+                    break;
+                case ("POST", "/api/edit"):
+                    HandleApiEdit(context);
+                    break;
                 case ("POST", "/shutdown"):
                     WriteJson(context.Response, 200, Envelope.Ok(new { stopped = true }, MetaNow()).ToJson());
                     Stop();
@@ -251,7 +273,7 @@ public sealed class PreviewServer : IDisposable
                     WriteJson(context.Response, 404, Envelope.Fail(
                         ErrorCodes.InvalidArgs,
                         $"No such route: {route.Method} {route.Path}",
-                        "Use GET /, GET /events, GET|POST /selection or POST /shutdown.",
+                        "Use GET / · /content · /events · /selection · /marks, POST /selection · /marks · /goto · /api/edit · /shutdown, or DELETE /marks.",
                         meta: MetaNow()).ToJson());
                     break;
             }
@@ -330,6 +352,136 @@ public sealed class PreviewServer : IDisposable
         WriteJson(context.Response, 200, JsonSerializer.Serialize(SnapshotSelection(), JsonDefaults.Options));
     }
 
+    // ----------------------------------------------------------------- marks
+
+    private MarksSnapshot SnapshotMarks()
+    {
+        var (marks, updatedAt) = _marks.Read();
+        return new MarksSnapshot(marks, SafeRev(), updatedAt);
+    }
+
+    private void HandlePostMark(HttpListenerContext context)
+    {
+        var body = ReadJsonObjectBody(context);
+        var rawPath = RequireString(body, "path",
+            "Send a mark like {\"path\":\"/body/p[3]\",\"color\":\"red\",\"note\":\"overflows\"}.");
+        var color = MarkColor.Normalize((body["color"] as JsonValue)?.GetValue<string>());
+        var note = (body["note"] as JsonValue)?.GetValue<string>();
+        var find = (body["find"] as JsonValue)?.GetValue<string>();
+        var toFix = (body["toFix"] as JsonValue)?.GetValueKind() == JsonValueKind.True;
+
+        // The pseudo-path "selected" marks every currently-selected element.
+        IReadOnlyList<string> targets = string.Equals(rawPath, "selected", StringComparison.Ordinal)
+            ? _selection.Read().Paths
+            : [rawPath];
+
+        if (targets.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "Nothing is selected, so 'selected' marks nothing.",
+                "Click an element in the preview first, or pass an explicit path.");
+        }
+
+        foreach (var path in targets)
+        {
+            PreviewPaths.Validate(path);
+            _marks.Add(new Mark(path, color, note, find, toFix));
+        }
+
+        BroadcastMarks();
+        WriteJson(context.Response, 200, JsonSerializer.Serialize(SnapshotMarks(), JsonDefaults.Options));
+    }
+
+    private void HandleDeleteMark(HttpListenerContext context)
+    {
+        var body = ReadJsonObjectBody(context);
+        if ((body["all"] as JsonValue)?.GetValueKind() == JsonValueKind.True)
+        {
+            _marks.Clear();
+        }
+        else
+        {
+            _marks.Remove(RequireString(body, "path", "Send {\"path\":\"/body/p[3]\"} or {\"all\":true}."));
+        }
+
+        BroadcastMarks();
+        WriteJson(context.Response, 200, JsonSerializer.Serialize(SnapshotMarks(), JsonDefaults.Options));
+    }
+
+    // ------------------------------------------------------------------ goto
+
+    private void HandleGoto(HttpListenerContext context)
+    {
+        var body = ReadJsonObjectBody(context);
+        var path = RequireString(body, "path", "Send {\"path\":\"/body/p[12]\"}.");
+        PreviewPaths.Validate(path);
+        BroadcastScroll(path);
+        WriteJson(context.Response, 200, Envelope.Ok(new { scrolledTo = path }, MetaNow()).ToJson());
+    }
+
+    // ---------------------------------------------------------- browser edit
+
+    private void HandleApiEdit(HttpListenerContext context)
+    {
+        var body = ReadJsonObjectBody(context);
+        var op = RequireString(body, "op", "Send {\"op\":\"set\",\"path\":\"/Sheet1/A1\",\"props\":{...}}.");
+        var path = RequireString(body, "path", "Send the target path, e.g. /Sheet1/A1.");
+        PreviewPaths.Validate(path);
+
+        var editOp = new EditOp { Op = op, Path = path, Props = body["props"] as JsonObject ?? [] };
+        var ctx = new CommandContext { Workspace = Workspace, File = FilePath };
+        var extension = Path.GetExtension(FilePath).ToLowerInvariant();
+        var result = extension switch
+        {
+            ".docx" => new WordHandler().Edit(ctx, [editOp]),
+            ".xlsx" => new ExcelHandler().Edit(ctx, [editOp]),
+            ".pptx" => new PptxHandler().Edit(ctx, [editOp]),
+            _ => throw PreviewRenderer.UnsupportedExtension(extension),
+        };
+
+        // The write trips the FileSystemWatcher → reload; nudge viewers immediately too.
+        if (result.IsOk)
+        {
+            BroadcastReload();
+        }
+
+        WriteJson(context.Response, result.IsOk ? 200 : 400, result.ToJson());
+    }
+
+    private static JsonObject ReadJsonObjectBody(HttpListenerContext context)
+    {
+        if (context.Request.ContentLength64 > MaxRequestBytes)
+        {
+            throw new AiofficeException(ErrorCodes.InvalidArgs, "Request body exceeds 1 MiB.", "Send a small JSON object.");
+        }
+
+        string body;
+        using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
+        {
+            body = reader.ReadToEnd();
+        }
+
+        JsonNode? parsed;
+        try
+        {
+            parsed = JsonNode.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs, $"Request body is not valid JSON: {ex.Message}", "Send a JSON object.", innerException: ex);
+        }
+
+        return parsed as JsonObject
+            ?? throw new AiofficeException(ErrorCodes.InvalidArgs, "Request body must be a JSON object.", "Send a JSON object.");
+    }
+
+    private static string RequireString(JsonObject body, string key, string suggestion) =>
+        body[key] is JsonValue v && v.GetValueKind() == JsonValueKind.String && v.GetValue<string>().Length > 0
+            ? v.GetValue<string>()
+            : throw new AiofficeException(ErrorCodes.InvalidArgs, $"'{key}' (a non-empty string) is required.", suggestion);
+
     private void HandleEvents(HttpListenerContext context)
     {
         var response = context.Response;
@@ -351,7 +503,10 @@ public sealed class PreviewServer : IDisposable
             _sseClients.Add(client);
         }
 
-        // The response intentionally stays open; reloads are pushed by BroadcastReload.
+        // Replay current marks so a freshly-opened viewer shows existing highlights.
+        client.TryWrite($"event: marks\ndata: {JsonSerializer.Serialize(SnapshotMarks(), JsonDefaults.Options)}\n\n");
+
+        // The response intentionally stays open; updates are pushed by the Broadcast* methods.
     }
 
     private SelectionSnapshot SnapshotSelection()
@@ -391,16 +546,21 @@ public sealed class PreviewServer : IDisposable
         }
     }
 
-    private void BroadcastReload()
+    private void BroadcastReload() => BroadcastRaw(string.Create(
+        CultureInfo.InvariantCulture, $"event: reload\ndata: {{\"rev\":\"{SafeRev() ?? string.Empty}\"}}\n\n"));
+
+    private void BroadcastMarks() => BroadcastRaw(
+        $"event: marks\ndata: {JsonSerializer.Serialize(SnapshotMarks(), JsonDefaults.Options)}\n\n");
+
+    private void BroadcastScroll(string path) => BroadcastRaw(
+        $"event: scroll\ndata: {JsonSerializer.Serialize(new { path }, JsonDefaults.Options)}\n\n");
+
+    private void BroadcastRaw(string payload)
     {
         if (Volatile.Read(ref _stopped) == 1)
         {
             return;
         }
-
-        var payload = string.Create(
-            CultureInfo.InvariantCulture,
-            $"event: reload\ndata: {{\"rev\":\"{SafeRev() ?? string.Empty}\"}}\n\n");
 
         List<SseClient> clients;
         lock (_sseGate)

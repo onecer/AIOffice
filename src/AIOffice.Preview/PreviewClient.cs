@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AIOffice.Core;
 
 namespace AIOffice.Preview;
@@ -50,6 +52,108 @@ public static class PreviewClient
             PreviewLock.Delete(lockPath);
             throw NotRunning(file, ex);
         }
+    }
+
+    /// <summary>Reads the current advisory marks of the preview for <paramref name="file"/>.</summary>
+    public static MarksSnapshot GetMarks(string file, string? lockDirectory = null)
+    {
+        var (lockPath, lockfile) = RequireRunning(file, lockDirectory);
+        try
+        {
+            var json = Http.GetStringAsync(RouteUrl(lockfile.Port, "marks")).GetAwaiter().GetResult();
+            return JsonSerializer.Deserialize<MarksSnapshot>(json, JsonDefaults.Options) ?? throw NotRunning(file);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            PreviewLock.Delete(lockPath);
+            throw NotRunning(file, ex);
+        }
+    }
+
+    /// <summary>Adds/replaces a mark (path may be the pseudo-path "selected").</summary>
+    public static MarksSnapshot AddMark(string file, string path, string? color, string? note, string? find, bool toFix, string? lockDirectory = null) =>
+        SendMarks(file, HttpMethod.Post, new MarkRequest(path, color, note, find, toFix), lockDirectory);
+
+    /// <summary>Removes the mark on <paramref name="path"/>.</summary>
+    public static MarksSnapshot RemoveMark(string file, string path, string? lockDirectory = null) =>
+        SendMarks(file, HttpMethod.Delete, new MarkRequest(path, null, null, null, false), lockDirectory);
+
+    /// <summary>Clears every mark.</summary>
+    public static MarksSnapshot ClearMarks(string file, string? lockDirectory = null) =>
+        SendMarks(file, HttpMethod.Delete, new ClearRequest(true), lockDirectory);
+
+    /// <summary>Pushes a scroll-to-path command to every live viewer.</summary>
+    public static void Goto(string file, string path, string? lockDirectory = null)
+    {
+        var (lockPath, lockfile) = RequireRunning(file, lockDirectory);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, RouteUrl(lockfile.Port, "goto"))
+            {
+                Content = JsonContent.Create(new { path }),
+            };
+            using var response = Http.Send(request);
+            EnsureOk(response, response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            PreviewLock.Delete(lockPath);
+            throw NotRunning(file, ex);
+        }
+    }
+
+    private sealed record MarkRequest(string Path, string? Color, string? Note, string? Find, bool ToFix);
+
+    private sealed record ClearRequest(bool All);
+
+    private static MarksSnapshot SendMarks(string file, HttpMethod method, object body, string? lockDirectory)
+    {
+        var (lockPath, lockfile) = RequireRunning(file, lockDirectory);
+        try
+        {
+            using var request = new HttpRequestMessage(method, RouteUrl(lockfile.Port, "marks"))
+            {
+                Content = JsonContent.Create(body, options: JsonDefaults.Options),
+            };
+            using var response = Http.Send(request);
+            var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            EnsureOk(response, json);
+            return JsonSerializer.Deserialize<MarksSnapshot>(json, JsonDefaults.Options) ?? throw NotRunning(file);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            PreviewLock.Delete(lockPath);
+            throw NotRunning(file, ex);
+        }
+    }
+
+    /// <summary>Surfaces a non-2xx preview response as its typed error envelope.</summary>
+    private static void EnsureOk(HttpResponseMessage response, string body)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(body)?["error"] is JsonObject error && error["code"] is { } code)
+            {
+                throw new AiofficeException(
+                    code.GetValue<string>(),
+                    error["message"]?.GetValue<string>() ?? "Preview request failed.",
+                    error["suggestion"]?.GetValue<string>() ?? "Retry, or reopen the preview.");
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through to the generic error
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InternalError,
+            string.Create(CultureInfo.InvariantCulture, $"Preview request failed (HTTP {(int)response.StatusCode})."),
+            "Reopen the preview ('aioffice preview open <file>') and retry.");
     }
 
     private static string RouteUrl(int port, string route) =>

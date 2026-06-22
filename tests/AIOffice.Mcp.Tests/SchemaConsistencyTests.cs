@@ -77,10 +77,14 @@ public sealed class SchemaConsistencyTests
     }
 
     [Fact]
-    public void Mcp_tool_catalog_has_seventeen_tools_including_file_snapshot()
+    public void Mcp_tool_catalog_has_nineteen_tools_including_file_snapshot()
     {
-        Assert.Equal(17, ToolCatalog.Names.Count);
+        // 17 verb-tools + preview_mark + preview_goto (the preview verb carries
+        // preview_open/selection/mark/goto, so the verb set stays 17 — see above).
+        Assert.Equal(19, ToolCatalog.Names.Count);
         Assert.Contains("file_snapshot", ToolCatalog.Names);
+        Assert.Contains("preview_mark", ToolCatalog.Names);
+        Assert.Contains("preview_goto", ToolCatalog.Names);
 
         // The snapshot tool is the one deliberate exception to the office_* /
         // preview_* naming (CONTRACT §7): assert it is exactly file_snapshot, and
