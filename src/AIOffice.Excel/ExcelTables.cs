@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AIOffice.Core;
 using ClosedXML.Excel;
@@ -223,6 +224,14 @@ internal static class ExcelTables
             var hasFunction = setting.TryGetPropertyValue("function", out var functionNode) && functionNode is not null;
             var hasLabel = setting.TryGetPropertyValue("label", out var labelNode) && labelNode is not null;
 
+            if (!hasFunction && !hasLabel)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: totals['{column}'] needs a function or label.",
+                    "Provide {function:\"sum\"} or {label:\"Total\"}.");
+            }
+
             // Resolve the column's final state first. A totals cell holds EITHER a
             // function OR a custom label, never both — when this op sets both, the
             // label wins (the OOXML reader gives a label precedence). Start from the
@@ -233,6 +242,15 @@ internal static class ExcelTables
 
             if (hasFunction)
             {
+                if (functionNode is not JsonValue functionValue || functionValue.GetValueKind() != JsonValueKind.String)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{index}]: totals['{column}'].function must be a string.",
+                        "Use one of: " + string.Join(", ", TotalsFunctionNames) + ".",
+                        candidates: TotalsFunctionNames);
+                }
+
                 var functionName = functionNode!.GetValue<string>();
                 if (!TotalsFunctions.TryGetValue(functionName, out var resolved))
                 {
@@ -249,6 +267,14 @@ internal static class ExcelTables
 
             if (hasLabel)
             {
+                if (labelNode is not JsonValue labelValue || labelValue.GetValueKind() != JsonValueKind.String)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{index}]: totals['{column}'].label must be a string.",
+                        "Use a string label, or \"\" to clear it.");
+                }
+
                 var requested = labelNode!.GetValue<string>();
                 if (requested.Length == 0)
                 {

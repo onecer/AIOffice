@@ -411,6 +411,41 @@ public sealed class TableTests : ExcelTestBase
         Assert.Contains("sum", envelope.Error.Candidates ?? [], StringComparer.Ordinal);
     }
 
+    [Fact]
+    public void Set_totals_non_string_function_is_invalid_args()
+    {
+        var file = SeedSalesTable();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = 5 } })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("sum", envelope.Error.Candidates ?? [], StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void Set_totals_non_string_label_is_invalid_args()
+    {
+        var file = SeedSalesTable();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Region"] = new JsonObject { ["label"] = 42 } })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+    }
+
+    [Fact]
+    public void Set_totals_empty_column_object_is_invalid_args()
+    {
+        var file = SeedSalesTable();
+
+        // {} carries neither function nor label — reject rather than silently flip the totals row on.
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject() })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+    }
+
     /// <summary>
     /// PIN: a table set carrying ANY non-'totals' prop still hits the blanket
     /// guard with the identical UnsupportedFeature error — the relaxation never
