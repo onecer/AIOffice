@@ -3,12 +3,12 @@
 When the idea has a *shape* (a process, a cycle, a 2×2, a funnel), build the real diagram — don't fake it with a row of cards. aioffice has the native primitives; they're just not in the terse schema. Run `office_help smartart connectors properties-pptx` first.
 
 **Primitive inventory (what actually exists):**
-- **SmartArt** `add type:smartart {layout, nodes:[{text,level}]}` — `layout` ∈ `list process hierarchy orgChart cycle` ONLY. Create+read (no in-place node edit — rebuild to change). Native, regenerates on open.
+- **SmartArt** `add type:smartart {layout, nodes:[{text,level}]}` — `layout` ∈ `list process hierarchy orgChart cycle` ONLY. Create+read (no in-place node edit — rebuild to change). Native, regenerates in PowerPoint — but **some LibreOffice versions render it blank**, so if your `--engine soffice` render shows nothing, use the connected-cards form (shapes + connectors) below, which renders everywhere.
 - **Connector** `add type:connector {from:"@id", to:"@id", kind:"straight|elbow|curved", startArrow, endArrow:"none|arrow|triangle", color, width}`.
 - **Shapes** `add type:shape {shape:"rect|roundRect|ellipse|triangle|diamond|arrow|line", x, y, w, h, fill, flipH, flipV}` — **only those 7 presets** (no trapezoid/chevron/pentagon/star). Z-order via `{op:"move", position:"front|back|forward|backward"}`.
 - **Text** `add type:text {text, x, y, w, fontSize, color, bold, align}` for labels on top of geometry.
 - **Equation** `add type:equation {latex, display}` (pptx + docx).
-- **Charts** `add type:chart {kind, …, dataLabels, legend, axisTitles, seriesColors}` for quantitative data — a real chart beats a hand-drawn one.
+- **Charts** `add type:chart {kind, …, dataLabels, legend, axisTitles}` for quantitative data — a real chart beats a hand-drawn one. (`seriesColors` is **xlsx-only**; pptx chart series take their color from the master theme accents — set `accent1..3` on `/master[1]`.)
 
 Canvas = 16:9, **centimeters**, 33.87 w × 19.05 h. Coordinates below are illustrative — adapt to your layout.
 
@@ -101,4 +101,4 @@ Use color contrast (light vs dark panel) to carry "old vs new"; keep the two col
 ```
 
 ## quantitative data → a real chart, not a drawn one
-If the "diagram" is actually numbers (trend, share, comparison of values), use `add type:chart` with `dataLabels`+`legend`+`axisTitles`+`seriesColors` — see `office_help chart-polish`. A native chart is editable, accurate, and re-renders on open; hand-drawn bars are none of those.
+If the "diagram" is actually numbers (trend, share, comparison of values), use `add type:chart` with `dataLabels`+`legend`+`axisTitles` (and `seriesColors` on **xlsx**; pptx series follow the master theme accents) — see `office_help chart-polish`. A native chart is editable, accurate, and re-renders on open; hand-drawn bars are none of those.
