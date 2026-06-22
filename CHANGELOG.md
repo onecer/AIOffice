@@ -4,6 +4,45 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## Unreleased — `aioffice plugin install`: self-install into AI coding hosts (additive)
+
+`surfaceVersion` stays **1.0** and the **MCP surface is unchanged — still 17 tools**. This adds one
+CLI-only verb, **`plugin`** (now **19 CLI verbs**), a host-install utility that edits local host config
+files; it has no MCP tool and is outside the AI/document contract, so `office_schema` / `tools/list` are
+byte-identical (guarded by `SchemaConsistencyTests`).
+
+### Added — distribution
+
+- **`aioffice plugin <install|uninstall|list|status>`** registers aioffice into the AI coding hosts on the
+  machine without hand-editing any config:
+  - **Claude Code** — `mcpServers.aioffice` in `~/.claude.json` (or `<workspace>/.mcp.json` at
+    `--scope project`), the skill at `~/.claude/skills/aioffice/SKILL.md`, and the `/aioffice` command.
+  - **Codex** — a self-headed `[mcp_servers.aioffice]` block appended to `~/.codex/config.toml` (backed up
+    first), a skill under `~/.codex/skills/`, and a delimited section in `~/.codex/AGENTS.md`.
+  - **opencode** — `mcp.aioffice` (`type:"local"`, command array) in `opencode.json`, an `agents/aioffice.md`
+    subagent, a `command/aioffice.md`, and an `AGENTS.md` section.
+  - **TonoBraid** — a `cc`-format plugin at `~/.tonoagent/plugins/aioffice/` (manifest + skill + command +
+    bundled `.mcp.json`), registered in `~/.tonoagent/plugins.json` with `trust:"trusted"` and a sha256 tree
+    digest computed byte-for-byte the way TonoBraid recomputes it on load (so trust never silently downgrades).
+  - **`--host claude|codex|opencode|tonobraid|all`** (default: all *detected* hosts; comma-separate for
+    several), **`--scope user|project`**, **`--dry-run`** (prints the exact files/keys it would change and
+    writes nothing), **`--force`** (overwrite instead of skip). Every write is idempotent and only ever
+    touches the `aioffice` key; `uninstall` removes only aioffice and leaves your other servers intact.
+  - The embedded payload is the design / anti-homogenization **agent guide** (promoted into the source tree
+    at `src/AIOffice.Cli/Plugin/`), version-stamped at install time and adapted per host (Claude/Codex skill
+    frontmatter, opencode subagent, TonoBraid plugin skill, AGENTS.md pointer sections).
+  - The guide is upgraded with methodology borrowed from the design literature: a **spec-lock + re-read-per-slide**
+    discipline (so a long deck doesn't drift), a **page-rhythm** rule (anchor/dense/breathing — kills the
+    "every slide is a card grid" default), presentation **modes** (pyramid/narrative/instructional/showcase/briefing),
+    a **diagram-archetype → native-primitive** map (SmartArt/connectors/shapes instead of fake card grids), and a
+    "reach for the full surface" section that names aioffice's underused power (SmartArt, connectors, conditional-format
+    kinds, table styles, animations, embedded fonts, equations, gradient/image fills, `seriesColors`). Skill-directory
+    hosts (Claude, Codex, TonoBraid) also receive two reference files — **`palette-library.md`** (10 palettes as
+    usage-contracts with hex + temperament) and **`diagram-archetypes.md`** (copy-paste op skeletons for
+    process/cycle/matrix/funnel/pyramid/timeline/comparison, using only real shape presets).
+
+See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
+
 ## 1.17.0 — table & tracked depth: pptx cell borders · docx tracked cross-refs · xlsx totals editing (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each adds a prop or relaxes a guard on an existing

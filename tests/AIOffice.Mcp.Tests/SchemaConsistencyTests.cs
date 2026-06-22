@@ -24,14 +24,17 @@ public sealed class SchemaConsistencyTests
         var cliVerbs = CommandSurface.VerbNames.ToHashSet(StringComparer.Ordinal);
         var mcpVerbs = SurfaceSchema.VerbNames.ToHashSet(StringComparer.Ordinal);
 
-        // The CLI surface carries one extra verb — `version` — that has no MCP
-        // tool (the package version rides in every envelope's meta.version).
-        // Otherwise the two verb sets are identical.
+        // The CLI surface carries two extra verbs with no MCP tool: `version`
+        // (the package version rides in every envelope's meta.version) and
+        // `plugin` (a host-install utility that edits local host config files,
+        // not a document operation). Otherwise the two verb sets are identical.
+        var cliOnly = new HashSet<string>(["version", "plugin"], StringComparer.Ordinal);
         Assert.Equal(17, mcpVerbs.Count);
-        Assert.Equal(18, cliVerbs.Count);
+        Assert.Equal(19, cliVerbs.Count);
         Assert.Contains("version", cliVerbs);
+        Assert.Contains("plugin", cliVerbs);
         Assert.True(mcpVerbs.IsSubsetOf(cliVerbs));
-        Assert.Equal(mcpVerbs, cliVerbs.Where(v => v != "version").ToHashSet(StringComparer.Ordinal));
+        Assert.Equal(mcpVerbs, cliVerbs.Where(v => !cliOnly.Contains(v)).ToHashSet(StringComparer.Ordinal));
     }
 
     [Fact]
