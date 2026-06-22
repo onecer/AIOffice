@@ -62,7 +62,13 @@ internal static class PptxTables
 
     private static readonly IReadOnlyList<string> CellPropKeys =
         ["text", "bold", "color", "fontSize", "align", "fill", "mergeRight", "mergeDown",
-         "valign", "marginLeft", "marginRight", "marginTop", "marginBottom", "textDirection"];
+         "valign", "marginLeft", "marginRight", "marginTop", "marginBottom", "textDirection", "borders"];
+
+    /// <summary>The four edges a per-cell <c>borders</c> set can carry, plus the "all" alias.</summary>
+    private static readonly IReadOnlyList<string> CellBorderEdges = ["top", "bottom", "left", "right", "all"];
+
+    /// <summary>The border styles a per-cell edge accepts; "none" (or the bare string) clears the edge.</summary>
+    private static readonly IReadOnlyList<string> CellBorderStyles = ["single", "double", "dotted", "dashed", "none"];
 
     private const int MaxRows = 100;
     private const int MaxCols = 30;
@@ -645,7 +651,7 @@ internal static class PptxTables
                     $"Unknown cell prop '{key}'.",
                     "Cell props: text, bold, color, fontSize, align, fill, mergeRight, mergeDown, " +
                     "valign (top/middle/bottom), marginLeft/marginRight/marginTop/marginBottom (lengths), " +
-                    "textDirection (horizontal/vertical).",
+                    "textDirection (horizontal/vertical), borders ({top,bottom,left,right,all}).",
                     candidates: CellPropKeys);
             }
         }
@@ -720,6 +726,9 @@ internal static class PptxTables
                     break;
                 case "textDirection":
                     EnsureCellProperties(cell).Vertical = ParseTextDirection(value);
+                    break;
+                case "borders":
+                    EnsureCellBorders(cell, value);
                     break;
                 default:
                     break; // mergeRight/mergeDown already handled
@@ -880,6 +889,215 @@ internal static class PptxTables
         }
 
         properties.Append(new A.SolidFill(new A.RgbColorModelHex { Val = hex }));
+    }
+
+    /// <summary>
+    /// Per-cell a:lnL/lnR/lnT/lnB (v1.17.0). <paramref name="value"/> is an object whose
+    /// keys are a subset of {top,bottom,left,right,all}; each value is an object
+    /// {color?,widthPt?,style?} or the bare string "none". "all" rewrites the four edges;
+    /// style/"none" clears just that edge.
+    /// <para>
+    /// CT_TableCellProperties orders the line children FIRST (lnL, lnR, lnT, lnB) ahead of
+    /// the fill group, and the SDK does NOT reorder positional appends — the fill set by
+    /// <see cref="SetCellFill"/> appends LAST. So this removes any stale a:ln* edges and
+    /// INSERTS the kept ones at the FRONT of a:tcPr (in lnL/lnR/lnT/lnB order), keeping them
+    /// before any existing fill. Setting borders twice replaces, never stacks.
+    /// </para>
+    /// </summary>
+    private static void EnsureCellBorders(A.TableCell cell, JsonNode? value)
+    {
+        if (value is not JsonObject borders)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "borders must be an object whose keys are a subset of {top,bottom,left,right,all}.",
+                "Example: {\"props\":{\"borders\":{\"bottom\":{\"color\":\"C00000\",\"widthPt\":1.5}}}}; " +
+                "use \"all\" for the four edges and style \"none\" (or the bare string \"none\") to clear an edge.");
+        }
+
+        // Resolve every requested edge first (so a bad edge/spec throws before we mutate),
+        // then apply — "all" fans out to the four, later keys win on conflict.
+        var resolved = new Dictionary<string, BorderEdge?>(StringComparer.Ordinal);
+        foreach (var (edge, spec) in borders)
+        {
+            if (!CellBorderEdges.Contains(edge, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown cell border edge '{edge}'.",
+                    $"Use a subset of: {string.Join(", ", CellBorderEdges)}.",
+                    candidates: CellBorderEdges);
+            }
+
+            var parsed = ParseCellBorderEdge(edge, spec);
+            if (edge == "all")
+            {
+                resolved["left"] = parsed;
+                resolved["right"] = parsed;
+                resolved["top"] = parsed;
+                resolved["bottom"] = parsed;
+            }
+            else
+            {
+                resolved[edge] = parsed;
+            }
+        }
+
+        var tcPr = EnsureCellProperties(cell);
+
+        // Carry forward whatever line edges the cell already has (e.g. a preset look's four
+        // borders), overlay the resolved edges (replace, or clear to null), then re-emit every
+        // surviving edge at the FRONT in lnL/lnR/lnT/lnB schema order so they always precede the
+        // fill group. Rebuilding the whole set this way keeps the four edges correctly ordered
+        // even when only some were touched, and never stacks duplicates.
+        var lines = new Dictionary<string, A.LinePropertiesType?>(StringComparer.Ordinal)
+        {
+            ["left"] = tcPr.GetFirstChild<A.LeftBorderLineProperties>(),
+            ["right"] = tcPr.GetFirstChild<A.RightBorderLineProperties>(),
+            ["top"] = tcPr.GetFirstChild<A.TopBorderLineProperties>(),
+            ["bottom"] = tcPr.GetFirstChild<A.BottomBorderLineProperties>(),
+        };
+
+        foreach (var (name, edge) in resolved)
+        {
+            lines[name] = edge is { } kept ? BuildBorderLine(name, kept) : null;
+        }
+
+        foreach (var name in new[] { "left", "right", "top", "bottom" })
+        {
+            RemoveBorderEdge(tcPr, name);
+        }
+
+        // Insert in reverse (B, T, R, L) at index 0 so they land ordered L, R, T, B at the front.
+        foreach (var name in new[] { "bottom", "top", "right", "left" })
+        {
+            if (lines[name] is { } line)
+            {
+                tcPr.InsertAt(line, 0);
+            }
+        }
+    }
+
+    /// <summary>One resolved edge: width in EMU, optional color, optional preset dash, double flag.</summary>
+    private readonly record struct BorderEdge(int WidthEmu, string? Color, A.PresetLineDashValues? Dash, bool Double);
+
+    /// <summary>
+    /// Parses one edge's {color?,widthPt?,style?} (or the bare string "none") into a
+    /// <see cref="BorderEdge"/>; a null result means the edge is cleared (style/"none").
+    /// </summary>
+    private static BorderEdge? ParseCellBorderEdge(string edge, JsonNode? spec)
+    {
+        // A bare string "none" clears the edge, mirroring fill/SetRunColor.
+        if (spec is JsonValue sv && sv.TryGetValue<string>(out var bare) &&
+            bare.Trim().Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (spec is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"borders.{edge} must be an object {{color?,widthPt?,style?}} or the string \"none\".",
+                "Example: {\"" + edge + "\":{\"color\":\"C00000\",\"widthPt\":1.5,\"style\":\"single\"}}.");
+        }
+
+        var style = obj.TryGetPropertyValue("style", out var styleNode) && styleNode is not null
+            ? J.ScalarText(styleNode).Trim()
+            : "single";
+        if (!CellBorderStyles.Contains(style, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown border style '{style}' on borders.{edge}.",
+                $"Use one of: {string.Join(", ", CellBorderStyles)}.",
+                candidates: CellBorderStyles);
+        }
+
+        if (style == "none")
+        {
+            return null;
+        }
+
+        var width = obj.TryGetPropertyValue("widthPt", out var widthNode)
+            ? ParseBorderWidthEmu(edge, widthNode)
+            : BorderWidthEmu; // default 1pt
+        var color = obj.TryGetPropertyValue("color", out var colorNode) && colorNode is not null
+            ? Units.ParseColorHex(Units.Inv($"borders.{edge}.color"), colorNode)
+            : null;
+        var dash = style switch
+        {
+            "dotted" => (A.PresetLineDashValues?)A.PresetLineDashValues.Dot,
+            "dashed" => A.PresetLineDashValues.Dash,
+            _ => null, // single/double draw solid
+        };
+
+        return new BorderEdge(width, color, dash, Double: style == "double");
+    }
+
+    /// <summary>Parses a non-negative widthPt into EMU at 12700/pt; throws invalid_args otherwise.</summary>
+    private static int ParseBorderWidthEmu(string edge, JsonNode? node)
+    {
+        if (node is JsonValue value && Units.TryNumber(value, out var pt) && pt >= 0)
+        {
+            return (int)Math.Round(pt * BorderWidthEmu);
+        }
+
+        if (node is JsonValue str && str.TryGetValue<string>(out var raw) &&
+            double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed >= 0)
+        {
+            return (int)Math.Round(parsed * BorderWidthEmu);
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"borders.{edge}.widthPt must be a non-negative number of points; got {node?.ToJsonString() ?? "null"}.",
+            "Use a width like 1, 1.5 or 2 (points).");
+    }
+
+    /// <summary>Builds the a:lnL/lnR/lnT/lnB element for a kept edge (a:solidFill before a:prstDash).</summary>
+    private static A.LinePropertiesType BuildBorderLine(string edge, BorderEdge spec)
+    {
+        A.LinePropertiesType line = edge switch
+        {
+            "left" => new A.LeftBorderLineProperties(),
+            "right" => new A.RightBorderLineProperties(),
+            "top" => new A.TopBorderLineProperties(),
+            "bottom" => new A.BottomBorderLineProperties(),
+            _ => throw CorruptTable($"unknown border edge '{edge}'"),
+        };
+
+        line.Width = spec.WidthEmu;
+        if (spec.Double)
+        {
+            line.CompoundLineType = A.CompoundLineValues.Double;
+        }
+
+        if (spec.Color is not null)
+        {
+            line.Append(new A.SolidFill(new A.RgbColorModelHex { Val = spec.Color }));
+        }
+
+        if (spec.Dash is { } dash)
+        {
+            line.Append(new A.PresetDash { Val = dash });
+        }
+
+        return line;
+    }
+
+    /// <summary>Removes the a:lnL/lnR/lnT/lnB child for one edge name (stale-edge cleanup).</summary>
+    private static void RemoveBorderEdge(A.TableCellProperties tcPr, string edge)
+    {
+        OpenXmlElement? existing = edge switch
+        {
+            "left" => tcPr.GetFirstChild<A.LeftBorderLineProperties>(),
+            "right" => tcPr.GetFirstChild<A.RightBorderLineProperties>(),
+            "top" => tcPr.GetFirstChild<A.TopBorderLineProperties>(),
+            "bottom" => tcPr.GetFirstChild<A.BottomBorderLineProperties>(),
+            _ => null,
+        };
+        existing?.Remove();
     }
 
     // ----- merge -------------------------------------------------------------------
@@ -1271,6 +1489,52 @@ internal static class PptxTables
             MarginTop = tcPr?.TopMargin is { } mt ? Units.EmuToCm(mt) : (double?)null,
             MarginBottom = tcPr?.BottomMargin is { } mb ? Units.EmuToCm(mb) : (double?)null,
             TextDirection = TextDirectionToken(tcPr?.Vertical?.Value),
+            Borders = CellBordersShape(tcPr),
+        };
+    }
+
+    /// <summary>
+    /// Per-edge view of a:lnL/lnR/lnT/lnB for get: each present edge becomes
+    /// {style,color?,widthPt?} (widthPt back-computed from EMU /12700). Returns null when the
+    /// cell carries no a:ln* edges, so get stays quiet on cells without explicit borders.
+    /// </summary>
+    private static object? CellBordersShape(A.TableCellProperties? tcPr)
+    {
+        if (tcPr is null)
+        {
+            return null;
+        }
+
+        var top = BorderEdgeShape(tcPr.GetFirstChild<A.TopBorderLineProperties>());
+        var bottom = BorderEdgeShape(tcPr.GetFirstChild<A.BottomBorderLineProperties>());
+        var left = BorderEdgeShape(tcPr.GetFirstChild<A.LeftBorderLineProperties>());
+        var right = BorderEdgeShape(tcPr.GetFirstChild<A.RightBorderLineProperties>());
+        if (top is null && bottom is null && left is null && right is null)
+        {
+            return null;
+        }
+
+        return new { Top = top, Bottom = bottom, Left = left, Right = right };
+    }
+
+    /// <summary>One a:ln* edge as {style,color?,widthPt?}; null when the edge is absent.</summary>
+    private static object? BorderEdgeShape(A.LinePropertiesType? line)
+    {
+        if (line is null)
+        {
+            return null;
+        }
+
+        var style = line.CompoundLineType?.Value == A.CompoundLineValues.Double ? "double"
+            : line.GetFirstChild<A.PresetDash>()?.Val?.Value is { } dash
+                ? dash == A.PresetLineDashValues.Dot ? "dotted" : dash == A.PresetLineDashValues.Dash ? "dashed" : "single"
+                : "single";
+
+        return new
+        {
+            Style = style,
+            Color = line.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant(),
+            WidthPt = line.Width?.Value is { } w ? Math.Round(w / (double)BorderWidthEmu, 4) : (double?)null,
         };
     }
 

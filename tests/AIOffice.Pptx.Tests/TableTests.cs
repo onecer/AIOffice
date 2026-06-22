@@ -97,6 +97,33 @@ public sealed class TableTests : IDisposable
             .TableCellProperties!.GetFirstChild<A.SolidFill>()!.RgbColorModelHex!.Val!.Value);
     }
 
+    [Theory]
+    [InlineData("light", "BFBFBF")]
+    [InlineData("medium", "8EAADB")]
+    [InlineData("dark", "0B1120")]
+    public void AddTable_PresetBorders_StayByteIdentical(string style, string border)
+    {
+        // The preset look paints four a:ln* edges at a fixed 1pt width THEN a:solidFill,
+        // positionally (BuildCell). v1.17's per-edge border set must not disturb this byte
+        // shape: a preset cell that never received an explicit 'borders' op is unchanged.
+        CreateWithTable(rows: 2, cols: 2, headerRow: true, style: style);
+
+        using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+        var headerCell = OpenTable(doc).Elements<A.TableRow>().First().Elements<A.TableCell>().First();
+        var tcPr = headerCell.TableCellProperties!;
+
+        // Four line edges, in lnL/lnR/lnT/lnB schema order, THEN the fill — byte-stable.
+        var headerFill = style switch { "light" => "F2F2F2", "medium" => "4472C4", _ => "0F172A" };
+        var expected =
+            "<a:tcPr xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
+            $"<a:lnL w=\"12700\"><a:solidFill><a:srgbClr val=\"{border}\" /></a:solidFill></a:lnL>" +
+            $"<a:lnR w=\"12700\"><a:solidFill><a:srgbClr val=\"{border}\" /></a:solidFill></a:lnR>" +
+            $"<a:lnT w=\"12700\"><a:solidFill><a:srgbClr val=\"{border}\" /></a:solidFill></a:lnT>" +
+            $"<a:lnB w=\"12700\"><a:solidFill><a:srgbClr val=\"{border}\" /></a:solidFill></a:lnB>" +
+            $"<a:solidFill><a:srgbClr val=\"{headerFill}\" /></a:solidFill></a:tcPr>";
+        Assert.Equal(expected, tcPr.OuterXml);
+    }
+
     [Fact]
     public void AddTable_UnknownStyle_IsTypedUnsupported()
     {
