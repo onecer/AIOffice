@@ -711,4 +711,176 @@ public sealed class TrackedChangesTests : WordTestBase
 
         AssertValidatesClean(file);
     }
+
+    // ---------------------------------------------------- tracked cross-reference
+
+    /// <summary>
+    /// A doc carrying one Figure caption (p[2]) plus an anchor paragraph at p[3]
+    /// already holding the author's "As shown in " run, so a tracked crossRef add
+    /// there must wrap ONLY the new field runs and leave that run alone.
+    /// </summary>
+    private string CrossRefDoc(string name = "doc.docx")
+    {
+        var file = CreateDoc(name, title: "Captioned");
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"[figure placeholder]"}}]""");
+        Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"caption","props":{"label":"Figure","text":"Trend","position":"after"}}]""");
+        // p[3] is the doc's trailing empty paragraph; give it the author's run.
+        Edit(file, """[{"op":"set","path":"/body/p[3]","props":{"text":"As shown in "}}]""");
+        return file;
+    }
+
+    [Fact]
+    public void Untracked_crossRef_add_stays_on_the_byte_stable_legacy_path()
+    {
+        // The untracked branch is first-in-code and must not change: no w:ins wraps
+        // the field, and the five complex-field runs are direct children of the
+        // anchor paragraph. Two independent untracked runs are byte-identical.
+        var a = CrossRefDoc("a.docx");
+        var b = CrossRefDoc("b.docx");
+        const string add =
+            """[{"op":"add","path":"/body/p[3]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]"}}]""";
+        Edit(a, add);
+        Edit(b, add);
+
+        Assert.True(DocumentXml(a).SequenceEqual(DocumentXml(b)));
+
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(a, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        Assert.Empty(body.Descendants<InsertedRun>());
+
+        // The anchor paragraph (p[3]) keeps its author run plus the five field runs
+        // as direct children (no w:ins); three of them carry a FieldChar.
+        var anchor = body.Elements<Paragraph>().ElementAt(2);
+        Assert.Equal(3, anchor.Elements<Run>().Count(r => r.GetFirstChild<FieldChar>() is not null));
+        Assert.Empty(anchor.Descendants<InsertedRun>());
+        AssertValidatesClean(a);
+    }
+
+    [Fact]
+    public void Tracked_crossRef_add_wraps_only_the_new_runs_in_a_single_ins()
+    {
+        var file = CrossRefDoc();
+
+        Edit(file,
+            """[{"op":"add","path":"/body/p[3]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]","leadingText":"see "}}]""",
+            Track("Reviewer"));
+
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        var anchor = body.Elements<Paragraph>().ElementAt(2); // p[3]
+
+        // Exactly one w:ins, carrying the leadingText run + the five field runs.
+        var ins = Assert.Single(anchor.Elements<InsertedRun>());
+        Assert.Equal("Reviewer", ins.Author!.Value);
+        Assert.NotNull(ins.Id);
+        Assert.NotNull(ins.Date);
+        Assert.Equal(6, ins.Elements<Run>().Count());
+        Assert.Equal(3, ins.Elements<Run>().Count(r => r.GetFirstChild<FieldChar>() is not null));
+        Assert.Contains("see ", ins.InnerText, StringComparison.Ordinal);
+        Assert.Contains("Figure 1", ins.InnerText, StringComparison.Ordinal);
+
+        // The anchor's pre-existing "As shown in " run is NOT wrapped, and the
+        // paragraph mark is untouched (no inserted run-mark properties).
+        Assert.Single(anchor.Elements<Run>()); // only the pre-existing author run is a direct child
+        Assert.Equal("As shown in ", anchor.Elements<Run>().Single().InnerText);
+        Assert.Null(anchor.ParagraphProperties?.ParagraphMarkRunProperties?.GetFirstChild<Inserted>());
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_crossRef_add_reports_exactly_one_insert_revision()
+    {
+        var file = CrossRefDoc();
+
+        Edit(file,
+            """[{"op":"add","path":"/body/p[3]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]"}}]""",
+            Track());
+
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("insert", revision!["kind"]!.GetValue<string>());
+        Assert.Equal("/body/p[3]", revision["at"]!.GetValue<string>());
+        Assert.Null(revision["mark"]); // not a paragraph-mark insertion
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_crossRef_accepts_to_kept_field_and_rejects_to_gone()
+    {
+        var fileAccept = CrossRefDoc("accept.docx");
+        Edit(fileAccept,
+            """[{"op":"add","path":"/body/p[3]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]"}}]""",
+            Track());
+        Edit(fileAccept, """[{"op":"accept","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileAccept));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileAccept, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            Assert.Empty(body.Descendants<InsertedRun>());
+            // Accept unwraps the w:ins keeping the REF field intact.
+            var refField = body.Descendants<FieldCode>().Select(c => c.Text)
+                .FirstOrDefault(t => t.Contains("REF") && !t.Contains("SEQ"));
+            Assert.NotNull(refField);
+        }
+        AssertValidatesClean(fileAccept);
+
+        var fileReject = CrossRefDoc("reject.docx");
+        Edit(fileReject,
+            """[{"op":"add","path":"/body/p[3]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]"}}]""",
+            Track());
+        Edit(fileReject, """[{"op":"reject","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileReject));
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(fileReject, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            // Reject drops the w:ins and the field runs it wrapped.
+            Assert.Empty(body.Descendants<InsertedRun>());
+            Assert.DoesNotContain(body.Descendants<FieldCode>().Select(c => c.Text),
+                t => t.Contains("REF") && !t.Contains("SEQ"));
+        }
+        AssertValidatesClean(fileReject);
+    }
+
+    [Fact]
+    public void Tracked_crossRef_to_a_missing_caption_still_errors_via_resolve()
+    {
+        var file = CreateDoc(title: "Captioned");
+        Edit(file, """[{"op":"add","path":"/body","props":{"text":"See "}}]""");
+
+        var ex = Assert.Throws<AiofficeException>(() => Edit(file,
+            """[{"op":"add","path":"/body/p[2]","type":"crossRef","props":{"to":"/caption[@label=Figure][1]"}}]""",
+            Track()));
+        Assert.Equal(ErrorCodes.InvalidPath, ex.Code);
+    }
+
+    [Fact]
+    public void Tracked_caption_link_and_field_adds_stay_unsupported()
+    {
+        var file = CreateDoc(title: "Gated");
+
+        var caption = Assert.Throws<AiofficeException>(() => Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"caption","props":{"label":"Figure","text":"x"}}]""", Track()));
+        Assert.Equal(ErrorCodes.UnsupportedFeature, caption.Code);
+
+        var link = Assert.Throws<AiofficeException>(() => Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"link","props":{"text":"x","url":"https://a.test"}}]""", Track()));
+        Assert.Equal(ErrorCodes.UnsupportedFeature, link.Code);
+
+        var field = Assert.Throws<AiofficeException>(() => Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"field","props":{"kind":"page"}}]""", Track()));
+        Assert.Equal(ErrorCodes.UnsupportedFeature, field.Code);
+    }
+
+    /// <summary>The raw bytes of the main document part (word/document.xml).</summary>
+    private static byte[] DocumentXml(string file)
+    {
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(file, isEditable: false);
+        using var stream = doc.MainDocumentPart!.GetStream();
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
 }

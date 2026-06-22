@@ -122,7 +122,7 @@ public sealed partial class WordHandler
     private static object ApplyAddCrossRef(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var props = op.Props?.DeepClone().AsObject() ?? [];
-        props.Remove("author");
+        var author = session.ResolveAuthor(props);
 
         var to = props["to"] is { } toNode ? NodeToString(toNode) : null;
         if (string.IsNullOrEmpty(to))
@@ -157,6 +157,10 @@ public sealed partial class WordHandler
                     : "Pick a paragraph path, e.g. /body/p[5].");
         }
 
+        // Remember the anchor's last pre-existing child so a tracked add can wrap
+        // exactly the runs we are about to append (and nothing the author wrote).
+        var lastExisting = paragraph.LastChild;
+
         if (leadingText is { Length: > 0 })
         {
             paragraph.AppendChild(new Run(NewText(leadingText)));
@@ -170,6 +174,24 @@ public sealed partial class WordHandler
         };
 
         AppendComplexField(paragraph, instruction, displayText);
+
+        // Tracked: wrap ONLY the newly-appended runs (optional leadingText plus the
+        // complex field's begin/instr/separate/cached/end) in a single w:ins. As with
+        // the footnote ref we deliberately skip MarkParagraphInserted: the anchor's
+        // pre-existing runs and paragraph mark are the author's, not part of this add.
+        if (session.Track)
+        {
+            var newRuns = (lastExisting is null
+                ? paragraph.Elements<Run>()
+                : lastExisting.ElementsAfter().OfType<Run>()).ToList();
+            var ins = NewTrackChange(new InsertedRun(), author, DateTime.UtcNow, NextRevisionId(doc));
+            newRuns[0].InsertBeforeSelf(ins);
+            foreach (var run in newRuns)
+            {
+                run.Remove();
+                ins.AppendChild(run);
+            }
+        }
 
         if (!session.Warnings.Any(w => w.Code == "caption_numbers_cached"))
         {

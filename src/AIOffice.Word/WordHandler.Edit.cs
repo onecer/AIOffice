@@ -187,7 +187,8 @@ public sealed partial class WordHandler
             "add" when op.Type == "columnBreak" => ApplyAddColumnBreak(doc, op, session),
             "add" when op.Type == "caption" && session.Track => throw TrackedStructureUnsupported("caption"),
             "add" when op.Type == "caption" => ApplyAddCaption(doc, op, session),
-            "add" when op.Type == "crossRef" && session.Track => throw TrackedStructureUnsupported("crossRef"),
+            // crossRef is the one CT_Ins-legal tracked structural add: its appended
+            // complex-field runs are wrapped in a w:ins by ApplyAddCrossRef itself.
             "add" when op.Type == "crossRef" => ApplyAddCrossRef(doc, op, session),
             "add" when op.Type == "contentControl" && session.Track => throw TrackedStructureUnsupported("contentControl"),
             "add" when op.Type == "contentControl" => ApplyAddContentControl(doc, op),
