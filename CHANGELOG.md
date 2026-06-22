@@ -31,6 +31,15 @@ byte-identical (guarded by `SchemaConsistencyTests`).
   - The embedded payload is the design / anti-homogenization **agent guide** (promoted into the source tree
     at `src/AIOffice.Cli/Plugin/`), version-stamped at install time and adapted per host (Claude/Codex skill
     frontmatter, opencode subagent, TonoBraid plugin skill, AGENTS.md pointer sections).
+  - The guide is upgraded with methodology borrowed from the design literature: a **spec-lock + re-read-per-slide**
+    discipline (so a long deck doesn't drift), a **page-rhythm** rule (anchor/dense/breathing — kills the
+    "every slide is a card grid" default), presentation **modes** (pyramid/narrative/instructional/showcase/briefing),
+    a **diagram-archetype → native-primitive** map (SmartArt/connectors/shapes instead of fake card grids), and a
+    "reach for the full surface" section that names aioffice's underused power (SmartArt, connectors, conditional-format
+    kinds, table styles, animations, embedded fonts, equations, gradient/image fills, `seriesColors`). Skill-directory
+    hosts (Claude, Codex, TonoBraid) also receive two reference files — **`palette-library.md`** (10 palettes as
+    usage-contracts with hex + temperament) and **`diagram-archetypes.md`** (copy-paste op skeletons for
+    process/cycle/matrix/funnel/pyramid/timeline/comparison, using only real shape presets).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 

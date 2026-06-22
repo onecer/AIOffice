@@ -22,6 +22,9 @@ internal static class PluginVerbs
     private static readonly string[] Actions = ["install", "uninstall", "list", "status"];
     private static readonly string[] KnownHosts = ["claude", "codex", "opencode", "tonobraid"];
 
+    /// <summary>Extra design references shipped alongside SKILL.md into skill-directory hosts.</summary>
+    private static readonly string[] SkillReferenceFiles = ["palette-library.md", "diagram-archetypes.md"];
+
     private const string PluginId = "aioffice";
     private const string MarkerBegin = "<!-- BEGIN aioffice -->";
     private const string MarkerEnd = "<!-- END aioffice -->";
@@ -205,7 +208,7 @@ internal static class PluginVerbs
 
         var node = StdioMcpNode(ctx.Exe!, ctx.Ws);
         surfaces.Add(UpsertMapKey(mcpPath, "mcpServers", PluginId, node, "mcp", ctx.DryRun, ctx.Force));
-        surfaces.Add(WriteTextFile(skillPath, SkillFile(), "skill", ctx.DryRun, ctx.Force));
+        surfaces.Add(WriteSkillBundle(Path.GetDirectoryName(skillPath)!, ctx.DryRun, ctx.Force));
         surfaces.Add(WriteTextFile(commandPath, CommandFile(includeName: true), "command", ctx.DryRun, ctx.Force));
         return HostOutcome.ForInstall("claude", detected, surfaces);
     }
@@ -249,7 +252,7 @@ internal static class PluginVerbs
         }
 
         surfaces.Add(InstallCodexToml(configPath, ctx.Exe!, ctx.Ws, ctx.DryRun, ctx.Force));
-        surfaces.Add(WriteTextFile(skillPath, SkillFile(), "skill", ctx.DryRun, ctx.Force));
+        surfaces.Add(WriteSkillBundle(Path.GetDirectoryName(skillPath)!, ctx.DryRun, ctx.Force));
         surfaces.Add(UpsertMarker(agentsPath, GuidePointer, "guide", ctx.DryRun));
         return HostOutcome.ForInstall("codex", detected, surfaces, notes);
     }
@@ -410,7 +413,13 @@ internal static class PluginVerbs
         };
         WriteText(Path.Combine(pluginDir, ".mcp.json"), Pretty(mcp));
 
-        WriteText(Path.Combine(pluginDir, "skills", PluginId, "SKILL.md"), SkillFile());
+        var skillDir = Path.Combine(pluginDir, "skills", PluginId);
+        WriteText(Path.Combine(skillDir, "SKILL.md"), SkillFile());
+        foreach (var refName in SkillReferenceFiles)
+        {
+            WriteText(Path.Combine(skillDir, refName), LoadPayload(refName));
+        }
+
         WriteText(Path.Combine(pluginDir, "commands", "aioffice.md"), CommandFile(includeName: true));
     }
 
@@ -542,6 +551,34 @@ internal static class PluginVerbs
     }
 
     // ----------------------------------------------------- text-file surfaces
+
+    /// <summary>
+    /// Writes the full skill bundle (SKILL.md + the design reference files) into a
+    /// skill directory. Idempotency is keyed on SKILL.md; the surface path is the
+    /// directory so uninstall removes the whole bundle.
+    /// </summary>
+    private static SurfaceChange WriteSkillBundle(string skillDir, bool dryRun, bool force)
+    {
+        var skillMd = Path.Combine(skillDir, "SKILL.md");
+        var exists = File.Exists(skillMd);
+        if (exists && !force)
+        {
+            return new SurfaceChange("skill", dryRun ? "would-skip:exists" : "skipped:exists", skillDir);
+        }
+
+        if (dryRun)
+        {
+            return new SurfaceChange("skill", "would-write", skillDir);
+        }
+
+        WriteText(skillMd, SkillFile());
+        foreach (var refName in SkillReferenceFiles)
+        {
+            WriteText(Path.Combine(skillDir, refName), LoadPayload(refName));
+        }
+
+        return new SurfaceChange("skill", "written", skillDir);
+    }
 
     private static SurfaceChange WriteTextFile(string path, string content, string surface, bool dryRun, bool force)
     {

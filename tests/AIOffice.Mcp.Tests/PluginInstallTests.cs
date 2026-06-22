@@ -67,7 +67,10 @@ public sealed class PluginInstallTests : IDisposable
         Assert.Equal("stdio", aioffice.GetProperty("type").GetString());
         Assert.Equal(_exe, aioffice.GetProperty("command").GetString());
 
-        Assert.True(File.Exists(Path.Combine(_home, ".claude", "skills", "aioffice", "SKILL.md")));
+        var skillDir = Path.Combine(_home, ".claude", "skills", "aioffice");
+        Assert.True(File.Exists(Path.Combine(skillDir, "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(skillDir, "palette-library.md")));
+        Assert.True(File.Exists(Path.Combine(skillDir, "diagram-archetypes.md")));
         Assert.True(File.Exists(Path.Combine(_home, ".claude", "commands", "aioffice.md")));
     }
 
@@ -81,6 +84,8 @@ public sealed class PluginInstallTests : IDisposable
         Assert.True(File.Exists(Path.Combine(pluginDir, ".claude-plugin", "plugin.json")));
         Assert.True(File.Exists(Path.Combine(pluginDir, ".mcp.json")));
         Assert.True(File.Exists(Path.Combine(pluginDir, "skills", "aioffice", "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(pluginDir, "skills", "aioffice", "palette-library.md")));
+        Assert.True(File.Exists(Path.Combine(pluginDir, "skills", "aioffice", "diagram-archetypes.md")));
 
         using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(_home, ".tonoagent", "plugins.json")));
         var record = registry.RootElement.GetProperty("plugins").EnumerateArray()
