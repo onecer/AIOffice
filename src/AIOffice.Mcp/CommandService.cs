@@ -415,6 +415,10 @@ public sealed class CommandService
 
     public Envelope PreviewSelection(JsonObject args) => Run(args, a => PreviewTools.Selection(Workspace, a));
 
+    public Envelope PreviewMark(JsonObject args) => Run(args, a => PreviewTools.Mark(Workspace, a));
+
+    public Envelope PreviewGoto(JsonObject args) => Run(args, a => PreviewTools.Goto(Workspace, a));
+
     public Envelope Help(JsonObject args) => Run(args, a => Envelope.Ok(HelpTopics.Get(OptionalString(a, "topic"))));
 
     public Envelope Schema(JsonObject args) => Run(args, a => Envelope.Ok(SurfaceSchema.Build(OptionalString(a, "verb"))));

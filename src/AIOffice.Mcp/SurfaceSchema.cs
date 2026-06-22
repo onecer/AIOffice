@@ -10,7 +10,7 @@ namespace AIOffice.Mcp;
 /// tables). The two are kept in lock-step on the shared vocabularies — the verb
 /// set, the <c>read --view</c> enum and the <c>edit</c> op list — by
 /// <c>SchemaConsistencyTests</c>, which reddens CI if they ever drift.
-/// 17 verbs, mirroring the 17 MCP tools (the <c>preview</c> verb carries
+/// 17 verbs over 19 MCP tools (the <c>preview</c> verb carries open/selection/mark/goto;
 /// both <c>preview_open</c> and <c>preview_selection</c>) plus the <c>mcp</c>
 /// verb itself. M9 added <c>convert</c> / <c>office_convert</c>; M8 added <c>diff</c>.
 /// </summary>
@@ -162,16 +162,21 @@ public static class SurfaceSchema
             [ErrorCodes.InvalidArgs],
             [("aioffice help selectors", "full selector grammar")]),
 
-        Verb("preview", "Live browser preview: open serves the document on localhost (click = select), selection reads the clicked paths, close stops the server.", "preview_open",
-            [("action", "open (blocking server; prints {url,port,pid} before blocking) | selection | close"),
+        Verb("preview", "Live browser preview + watch loop: open serves the document on localhost (click/box-drag = select, double-click = inline edit) and live-reloads on disk change; selection reads the clicked paths; mark/unmark/marks push advisory highlights; goto scrolls every viewer to a path; close stops the server.", "preview_open",
+            [("action", "open (blocking; prints {url,port,pid} first) | selection | close | mark | unmark | marks | goto"),
              ("file", "document to preview (.docx/.xlsx/.pptx)"),
-             ("--port", "fixed port for open (default: first free port in 26500-26600)")],
-            [ErrorCodes.InvalidArgs, ErrorCodes.PreviewNotRunning, ErrorCodes.FileNotFound,
+             ("path", "mark/unmark/goto: the path to mark, unmark or scroll to (mark also accepts 'selected')"),
+             ("--port", "fixed port for open (default: first free port in 26500-26600)"),
+             ("--color/--note/--find/--tofix", "mark: highlight color, hover note, substring, fix-flag"),
+             ("--all", "unmark: clear every mark")],
+            [ErrorCodes.InvalidArgs, ErrorCodes.InvalidPath, ErrorCodes.PreviewNotRunning, ErrorCodes.FileNotFound,
              ErrorCodes.SandboxDenied, ErrorCodes.UnsupportedFeature],
             [("aioffice preview open report.docx", "blocks; click elements in the browser, then read them"),
-             ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit")]),
+             ("aioffice preview selection report.docx", "the clicked canonical paths, ready for get/edit"),
+             ("aioffice preview mark report.docx /body/p[3] --note overflows --tofix", "highlight an element for the human, advisory only"),
+             ("aioffice preview goto report.docx /body/p[12]", "scroll every viewer to the path")]),
 
-        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (17 tools).", null,
+        Verb("mcp", "Start the stdio MCP server exposing the same capabilities as the CLI (19 tools).", null,
             [("--workspace", "sandbox root (default cwd; also AIOFFICE_WORKSPACE)")],
             [ErrorCodes.InternalError],
             [("aioffice mcp --workspace ~/docs", "stdio transport; one JSON envelope per tool result")]),

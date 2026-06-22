@@ -4,6 +4,33 @@ All notable changes to AIOffice are recorded here. The package **Version** follo
 semantic versioning; the AI-facing **`surfaceVersion`** (the frozen contract in
 [CONTRACT.md](CONTRACT.md)) moves independently and only bumps on a breaking change.
 
+## Unreleased — `preview` watch parity: marks, goto, incremental reload, browser edit (additive)
+
+`surfaceVersion` stays **1.0**. The `preview` verb gains four watch-style actions and the live page
+gains an interactive layer; **two MCP tools** are added (`preview_mark`, `preview_goto`), so the tool
+count goes **17 → 19** (the `preview` verb now carries open/selection/mark/goto; the MCP **verb** set
+stays 17). The whole tool surface still fits the 3,500-token budget.
+
+### Added — preview
+
+- **Marks** — `aioffice preview mark <file> <path> [--color --note --find --tofix]`, `preview unmark <file>
+  <path>|--all`, `preview marks <file>` (and the `preview_mark` MCP tool). Advisory, in-memory highlights
+  pushed to every live viewer over SSE — the "agent highlights → human reviews" loop. `path` may be the
+  pseudo-path `selected` to mark everything the human clicked. Marks never touch the document.
+- **Goto** — `aioffice preview goto <file> <path>` (and `preview_goto`) scrolls every live viewer to an
+  element and flashes it. Server route `POST /goto` → SSE `scroll`.
+- **Incremental reload** — on a disk change the page now soft-patches: it fetches `GET /content` and swaps
+  only the changed `data-aio-path` nodes (full `<main>` swap only on structural change) instead of
+  `location.reload()`, so scroll, selection, marks and the SSE stream survive.
+- **Browser editing** — box-drag rubber-band multi-select, and double-click inline edit of an xlsx cell or
+  docx paragraph that POSTs `/api/edit` (runs the format handler in-process, then live-reloads). Chart-drag
+  repositioning is intentionally deferred.
+- New server routes: `GET /content`, `GET|POST|DELETE /marks`, `POST /goto`, `POST /api/edit`; new SSE
+  events `marks` and `scroll`. New CLI flags `--color/--note/--find/--tofix/--all`.
+
+This closes the gap with OfficeCLI's `watch` command (marks/goto/incremental reload/in-browser editing);
+aioffice's filesystem-watch auto-reload already covered — and exceeded — `watch`'s command-driven refresh.
+
 ## Unreleased — `aioffice plugin install`: self-install into AI coding hosts (additive)
 
 `surfaceVersion` stays **1.0** and the **MCP surface is unchanged — still 17 tools**. This adds one

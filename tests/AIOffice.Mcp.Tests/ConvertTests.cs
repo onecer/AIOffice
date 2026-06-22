@@ -324,7 +324,7 @@ public sealed class ConvertTests : IDisposable
         BuildReport();
         await using var srv = await McpTestServer.StartAsync(_service);
 
-        Assert.Equal(17, (await srv.Client.ListToolsAsync()).Count);
+        Assert.Equal(19, (await srv.Client.ListToolsAsync()).Count);
 
         var data = EnvelopeAssert.Ok(await srv.CallAsync("office_convert",
             new Dictionary<string, object?> { ["src"] = "report.docx", ["dest"] = "wire.pptx" }));
