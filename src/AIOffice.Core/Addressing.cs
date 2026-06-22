@@ -132,7 +132,12 @@ public sealed partial record DocPath
     [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[([A-Z]{1,3})\]$")]
     private static partial Regex LetterElement();
 
-    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name|tag|num)=([A-Za-z0-9_.-]+)\]$")]
+    // The value class allows parentheses so a numbered equation can be addressed
+    // by its verbatim label, /equation[@num=(1.1)], not only its bare number
+    // /equation[@num=1.1]. Parens are inert for the id/name/tag selectors (real
+    // shape ids, bookmark names and sdt tags don't use them), so widening the
+    // class is purely additive — nothing that parsed before changes meaning.
+    [GeneratedRegex(@"^([A-Za-z_][A-Za-z0-9_.-]*)\[@(id|name|tag|num)=([A-Za-z0-9_.()-]+)\]$")]
     private static partial Regex IdElement();
 
     // Named variants are a closed vocabulary (docx M5 header/footer types), so

@@ -203,6 +203,40 @@ public class AddressingTests
         Assert.Equal("slide", path.Segments[0].Name);
     }
 
+    // --- id selectors (@id / @name / @tag / @num) ---
+
+    [Fact]
+    public void Parses_numbered_equation_by_verbatim_label_with_parens()
+    {
+        var path = DocPath.Parse("/equation[@num=(1.1)]");
+
+        var segment = Assert.Single(path.Segments);
+        Assert.Equal("equation", segment.Name);
+        Assert.Equal("num", segment.IdAttribute);
+        Assert.Equal("(1.1)", segment.Id);
+        Assert.Equal("/equation[@num=(1.1)]", path.ToCanonicalString());
+    }
+
+    [Fact]
+    public void Parses_numbered_equation_by_bare_number()
+    {
+        var path = DocPath.Parse("/equation[@num=1.1]");
+
+        var segment = Assert.Single(path.Segments);
+        Assert.Equal("num", segment.IdAttribute);
+        Assert.Equal("1.1", segment.Id);
+    }
+
+    [Fact]
+    public void Parens_do_not_disturb_id_name_tag_selectors()
+    {
+        // Real shape ids / bookmark names / sdt tags don't use parens; widening the
+        // value class leaves their canonical (paren-free) forms parsing as before.
+        Assert.Equal("7", DocPath.Parse("/slide[1]/shape[@id=7]").Segments[^1].Id);
+        Assert.Equal("Results", DocPath.Parse("/bookmark[@name=Results]").Segments[0].Id);
+        Assert.Equal("clientName", DocPath.Parse("/sdt[@tag=clientName]").Segments[0].Id);
+    }
+
     // --- canonicalization round-trips ---
 
     [Theory]
