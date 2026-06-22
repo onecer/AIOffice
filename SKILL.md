@@ -57,9 +57,14 @@ binary is self-contained (~36 MB).
 
 ### Register as an MCP server
 
-The same surface is available over stdio as 17 MCP tools (`office_create`, `office_read`,
-`office_edit`, … — 1:1 with the CLI verbs). Run it with `aioffice mcp`. The `--workspace`
-(or `AIOFFICE_WORKSPACE`) defines the sandbox root.
+**Easiest — let aioffice install itself:** `aioffice plugin install` registers the MCP server
+(plus the design skill and an `/aioffice` command) into Claude Code, Codex, opencode and TonoBraid
+automatically. `--host <name>` targets one host, `--dry-run` previews the changes, `uninstall`
+removes them. See [docs/MCP-SETUP.md](docs/MCP-SETUP.md).
+
+To wire it by hand: the same surface is available over stdio as 19 MCP tools (`office_create`,
+`office_read`, `office_edit`, … 1:1 with the CLI verbs, plus `preview_mark` / `preview_goto`).
+Run it with `aioffice mcp`. The `--workspace` (or `AIOFFICE_WORKSPACE`) defines the sandbox root.
 
 ```jsonc
 // Generic stdio MCP client config
@@ -128,7 +133,7 @@ aioffice edit  <file> --ops '[...]'     # atomic batch (auto-snapshots)
 aioffice validate <file>                # prove the file is still sound
 ```
 
-## Verb cheat-sheet (all 18)
+## Verb cheat-sheet (all 19)
 
 | verb | one-liner |
 |------|-----------|
@@ -147,9 +152,10 @@ aioffice validate <file>                # prove the file is still sound
 | `doctor`   | Diagnose runtime, workspace, handlers, dependencies, browser. |
 | `schema`   | Machine-readable JSON of the whole surface — introspect instead of guessing. |
 | `help`     | Progressive docs: `aioffice help [addressing\|selectors\|properties-docx\|…\|errors]`. |
-| `preview`  | Live browser preview (`open`/`selection`/`close`); click in the page = select a path. |
-| `mcp`      | Run the stdio MCP server (same 17 tools). |
+| `preview`  | Live browser preview + watch loop: `open`/`selection`/`close`, plus `mark`/`unmark`/`marks` (advisory highlights) and `goto` (scroll viewers to a path). Click/box-drag = select, double-click = inline edit; live-reloads on disk change. |
+| `mcp`      | Run the stdio MCP server (same 19 tools). |
 | `version`  | Print the version. |
+| `plugin`   | Install aioffice into AI coding hosts (Claude Code/Codex/opencode/TonoBraid): `plugin install\|uninstall\|list\|status`. |
 
 Global flags: `--pretty` (indented JSON), `--quiet` (suppress success envelopes),
 `--workspace <dir>` (sandbox root). Exit codes: `0` ok · `2` user/input · `3` internal/format ·
