@@ -108,5 +108,5 @@ npm install -g aioffice
 
 ## License
 
-Apache-2.0. See the [AIOffice repository](https://github.com/onecer/AIOffice)
+MIT. See the [AIOffice repository](https://github.com/onecer/AIOffice)
 for source, full documentation, and the AI-facing surface contract.

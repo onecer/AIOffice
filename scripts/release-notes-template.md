@@ -59,4 +59,4 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 See the [README](https://github.com/onecer/AIOffice/blob/main/README.md) · [中文 README](https://github.com/onecer/AIOffice/blob/main/README.zh-CN.md) for the full command surface and capability ledger.
 
-License: Apache-2.0.
+License: MIT.

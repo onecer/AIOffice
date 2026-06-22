@@ -3,7 +3,7 @@
 **English** | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/onecer/AIOffice/actions/workflows/ci.yml/badge.svg)](https://github.com/onecer/AIOffice/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4)
 ![platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
@@ -782,4 +782,4 @@ AIOffice's surface is **deliberately incompatible** with existing office CLIs: c
 
 ## License
 
-[Apache-2.0](LICENSE). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) — all dependencies are permissive (MIT: DocumentFormat.OpenXml, ClosedXML, ModelContextProtocol C# SDK; BSD-2-Clause: Markdig); no bundled third-party binaries.
+[MIT](LICENSE). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) — all dependencies are permissive (MIT: DocumentFormat.OpenXml, ClosedXML, ModelContextProtocol C# SDK; BSD-2-Clause: Markdig); no bundled third-party binaries.
