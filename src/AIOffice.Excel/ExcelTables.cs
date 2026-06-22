@@ -173,6 +173,125 @@ internal static class ExcelTables
         return new TotalsResult(applied, table.Theme.ToString().Length > 0);
     }
 
+    // ----- set totals (post-creation edit) ------------------------------------
+
+    /// <summary>
+    /// Edits a table's totals-row functions and labels after creation. The
+    /// <paramref name="totals"/> object maps a column name to
+    /// <c>{ function?, label? }</c>. <c>function:"none"</c> clears the column's
+    /// function; an empty-string label clears the label. Setting any totals turns
+    /// the totals row on (parity with how Excel auto-shows the row). Returns the
+    /// applied edits per column for the response.
+    ///
+    /// <para>A totals cell holds EITHER a built-in function OR a custom label,
+    /// never both (Excel's own model): setting a non-empty label clears the
+    /// column's function, and setting a function clears a custom label. This keeps
+    /// the column's totals state unambiguous and round-trips cleanly through the
+    /// OOXML reader.</para>
+    ///
+    /// <para>After setting a function the totals cell's SUBTOTAL formula is
+    /// materialized (<c>TotalsCell.FormulaA1</c>): ClosedXML's
+    /// evaluate-before-save pass otherwise strips a loaded table's
+    /// <c>totalsRowFunction</c>, and touching the formula makes it survive — the
+    /// same shape the table-add path produces.</para>
+    /// </summary>
+    public static object ApplySetTotals(ExcelTarget target, IXLTable table, JsonObject totals, int index)
+    {
+        if (totals.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: totals needs at least one column → {{function?, label?}} entry.",
+                "Use {totals:{\"Qty\":{function:\"sum\", label:\"Total Qty\"}}}.");
+        }
+
+        table.SetShowTotalsRow(true);
+
+        var applied = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var (column, settingNode) in totals)
+        {
+            if (settingNode is not JsonObject setting)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: totals['{column}'] needs an object like {{function:\"sum\", label:\"Total\"}}.",
+                    "Map each column to a {function?, label?} object.");
+            }
+
+            var field = FieldOrThrow(table, column, index);
+            var entry = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var hasFunction = setting.TryGetPropertyValue("function", out var functionNode) && functionNode is not null;
+            var hasLabel = setting.TryGetPropertyValue("label", out var labelNode) && labelNode is not null;
+
+            // Resolve the column's final state first. A totals cell holds EITHER a
+            // function OR a custom label, never both — when this op sets both, the
+            // label wins (the OOXML reader gives a label precedence). Start from the
+            // column's current state so function-only / label-only edits leave the
+            // other side untouched.
+            XLTotalsRowFunction function = field.TotalsRowFunction;
+            string? label = string.IsNullOrEmpty(field.TotalsRowLabel) ? null : field.TotalsRowLabel;
+
+            if (hasFunction)
+            {
+                var functionName = functionNode!.GetValue<string>();
+                if (!TotalsFunctions.TryGetValue(functionName, out var resolved))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"ops[{index}]: unknown totals function '{functionName}' for column '{column}'.",
+                        "Use one of: " + string.Join(", ", TotalsFunctionNames) + ".",
+                        candidates: TotalsFunctionNames);
+                }
+
+                function = resolved;
+                label = null; // a function owns the cell; drop a stray label
+            }
+
+            if (hasLabel)
+            {
+                var requested = labelNode!.GetValue<string>();
+                if (requested.Length == 0)
+                {
+                    label = null; // empty string clears the label
+                }
+                else
+                {
+                    function = XLTotalsRowFunction.None; // a custom label replaces a function
+                    label = requested;
+                }
+            }
+
+            // Apply in an order that survives ClosedXML's writer: clear the label
+            // BEFORE setting the function (setting a null label after a function
+            // resets the function in the model), then materialize the SUBTOTAL so
+            // the evaluate-before-save pass keeps it (matches the table-add path).
+            field.TotalsRowLabel = label;
+            field.TotalsRowFunction = function;
+            if (function != XLTotalsRowFunction.None)
+            {
+                _ = field.TotalsCell.FormulaA1;
+                entry["function"] = TotalsName(function);
+            }
+
+            if (label is not null)
+            {
+                entry["label"] = label;
+            }
+
+            applied[field.Name] = entry;
+        }
+
+        return new
+        {
+            op = "set",
+            type = "table",
+            path = ExcelPaths.TablePath(target.Sheet, table.Name),
+            name = table.Name,
+            totalsRow = table.ShowTotalsRow,
+            totals = applied,
+        };
+    }
+
     private static IXLTableField FieldOrThrow(IXLTable table, string columnName, int index)
     {
         var field = table.Fields.FirstOrDefault(f =>

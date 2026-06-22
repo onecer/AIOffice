@@ -28,6 +28,9 @@ public sealed partial class ExcelHandler
         "printTitleRows", "printTitleCols", "pageBreaks", "fitToPage", "fitToHeight",
         "centerHorizontally", "centerVertically", "printGridlines", "printHeadings",
         "printHeader", "printFooter",
+        // v1.17 (additive): edit a table column's totals-row function/label after
+        // creation (table path only; relaxes the blanket set-on-table guard).
+        "totals",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -841,6 +844,27 @@ public sealed partial class ExcelHandler
         }
 
         var target = ExcelPaths.Resolve(workbook, op.Path);
+
+        // (1.17) A totals-ONLY set on a table path edits the table's totals-row
+        // functions/labels in place. Tightly scoped: it fires only when the target
+        // is a table AND the sole prop is 'totals'; every other table-set input
+        // (and all other target kinds) still hits the blanket guard below with the
+        // identical UnsupportedFeature error.
+        if (target.Kind is ExcelTargetKind.Table &&
+            props.Count == 1 && props.ContainsKey("totals"))
+        {
+            if (props["totals"] is not JsonObject totalsObject)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: totals must be an object mapping column → {{function?, label?}}.",
+                    "Use {totals:{\"Qty\":{function:\"sum\", label:\"Total Qty\"}}}.");
+            }
+
+            details.Add(ExcelTables.ApplySetTotals(target, ExcelTables.Find(target), totalsObject, index));
+            return;
+        }
+
         if (target.Kind is ExcelTargetKind.Chart or ExcelTargetKind.Pivot
             or ExcelTargetKind.ConditionalFormat or ExcelTargetKind.Image
             or ExcelTargetKind.DataValidation or ExcelTargetKind.Sparkline or ExcelTargetKind.Comment

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json.Nodes;
 using AIOffice.Core;
 using ClosedXML.Excel;
@@ -203,6 +204,273 @@ public sealed class TableTests : ExcelTestBase
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Contains("table", envelope.Error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ----- v1.17: edit a table's totals-row function/label after creation -----
+
+    /// <summary>Seeds a Sales table (no totals row) ready for a set-totals op.</summary>
+    private string SeedSalesTable(string name = "book.xlsx")
+    {
+        var file = SeedSalesData(name);
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:C3", "table", ("name", "Sales"))).IsOk);
+        return file;
+    }
+
+    [Fact]
+    public void Set_totals_function_and_label_after_creation_round_trips()
+    {
+        var file = SeedSalesTable();
+
+        // A function on one column and a custom label on another, in one op. Both
+        // round-trip through reopen; setting the totals turns the totals row on.
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject
+            {
+                ["Sales"] = new JsonObject { ["function"] = "sum" },
+                ["Region"] = new JsonObject { ["label"] = "Total Qty" },
+            })));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+
+        var data = OkData(envelope)["ops"]![0]!;
+        Assert.Equal("table", data["type"]!.GetValue<string>());
+        Assert.True(data["totalsRow"]!.GetValue<bool>());
+        Assert.Equal("sum", data["totals"]!["Sales"]!["function"]!.GetValue<string>());
+        Assert.Equal("Total Qty", data["totals"]!["Region"]!["label"]!.GetValue<string>());
+
+        using var workbook = new XLWorkbook(file);
+        var table = workbook.Worksheet("Sheet1").Tables.Single();
+        Assert.True(table.ShowTotalsRow);
+        Assert.Equal(XLTotalsRowFunction.Sum, table.Field("Sales").TotalsRowFunction);
+        Assert.Equal("Total Qty", table.Field("Region").TotalsRowLabel);
+        AssertValidatorClean(file);
+    }
+
+    /// <summary>
+    /// A custom label and a built-in function are mutually exclusive in a totals
+    /// cell (Excel's own model). When one op sets both on the SAME column the
+    /// label wins (the OOXML reader gives a label precedence), and the response
+    /// reflects only the label that actually persisted.
+    /// </summary>
+    [Fact]
+    public void Set_totals_both_on_one_column_lets_the_label_win()
+    {
+        var file = SeedSalesTable();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "sum", ["label"] = "Total Qty" } })));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        var sales = OkData(envelope)["ops"]![0]!["totals"]!["Sales"]!;
+        Assert.Equal("Total Qty", sales["label"]!.GetValue<string>());
+        Assert.Null(sales["function"]);
+
+        using var workbook = new XLWorkbook(file);
+        var field = workbook.Worksheet("Sheet1").Tables.Single().Field("Sales");
+        Assert.Equal(XLTotalsRowFunction.None, field.TotalsRowFunction);
+        Assert.Equal("Total Qty", field.TotalsRowLabel);
+        AssertValidatorClean(file);
+    }
+
+    /// <summary>
+    /// Setting a function on a column that previously held a custom label replaces
+    /// the label (a cell is one or the other). The function persists clean.
+    /// </summary>
+    [Fact]
+    public void Set_totals_function_replaces_an_existing_label()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["label"] = "Old Label" } }))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "average" } }))).IsOk);
+
+        using var workbook = new XLWorkbook(file);
+        var field = workbook.Worksheet("Sheet1").Tables.Single().Field("Sales");
+        Assert.Equal(XLTotalsRowFunction.Average, field.TotalsRowFunction);
+        Assert.True(string.IsNullOrEmpty(field.TotalsRowLabel));
+        AssertValidatorClean(file);
+    }
+
+    /// <summary>
+    /// Setting a custom label on a column that previously held a function replaces
+    /// the function. The label persists clean.
+    /// </summary>
+    [Fact]
+    public void Set_totals_label_replaces_an_existing_function()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "sum" } }))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["label"] = "Grand" } }))).IsOk);
+
+        using var workbook = new XLWorkbook(file);
+        var field = workbook.Worksheet("Sheet1").Tables.Single().Field("Sales");
+        Assert.Equal(XLTotalsRowFunction.None, field.TotalsRowFunction);
+        Assert.Equal("Grand", field.TotalsRowLabel);
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Set_totals_function_none_clears_the_function()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "sum" } }))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "none" } }))).IsOk);
+
+        using var workbook = new XLWorkbook(file);
+        Assert.Equal(XLTotalsRowFunction.None,
+            workbook.Worksheet("Sheet1").Tables.Single().Field("Sales").TotalsRowFunction);
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Set_totals_empty_label_clears_the_label()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Region"] = new JsonObject { ["label"] = "Totals" } }))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Region"] = new JsonObject { ["label"] = "" } }))).IsOk);
+
+        using var workbook = new XLWorkbook(file);
+        Assert.True(string.IsNullOrEmpty(
+            workbook.Worksheet("Sheet1").Tables.Single().Field("Region").TotalsRowLabel));
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Set_totals_multiple_columns_in_one_op()
+    {
+        var file = SeedSalesTable();
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject
+            {
+                ["Region"] = new JsonObject { ["label"] = "Total" },
+                ["Sales"] = new JsonObject { ["function"] = "sum" },
+                ["Cost"] = new JsonObject { ["function"] = "average" },
+            }))).IsOk);
+
+        using var workbook = new XLWorkbook(file);
+        var table = workbook.Worksheet("Sheet1").Tables.Single();
+        Assert.True(table.ShowTotalsRow);
+        Assert.Equal("Total", table.Field("Region").TotalsRowLabel);
+        Assert.Equal(XLTotalsRowFunction.Sum, table.Field("Sales").TotalsRowFunction);
+        Assert.Equal(XLTotalsRowFunction.Average, table.Field("Cost").TotalsRowFunction);
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Get_round_trips_the_totals_function_and_label()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject
+            {
+                ["Sales"] = new JsonObject { ["function"] = "sum" },
+                ["Region"] = new JsonObject { ["label"] = "Grand Total" },
+            }))).IsOk);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/table[@name=Sales]"))));
+        var columns = data["columns"]!.AsArray();
+        var salesColumn = columns.Single(c => c!["name"]!.GetValue<string>() == "Sales")!;
+        var regionColumn = columns.Single(c => c!["name"]!.GetValue<string>() == "Region")!;
+        Assert.Equal("sum", salesColumn["totalsFunction"]!.GetValue<string>());
+        Assert.Equal("Grand Total", regionColumn["totalsLabel"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Set_totals_unknown_column_lists_real_columns()
+    {
+        var file = SeedSalesTable();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Profit"] = new JsonObject { ["function"] = "sum" } })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("Profit", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("Region", envelope.Error.Candidates ?? [], StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void Set_totals_unknown_function_lists_the_function_candidates()
+    {
+        var file = SeedSalesTable();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "median" } })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("median", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("sum", envelope.Error.Candidates ?? [], StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// PIN: a table set carrying ANY non-'totals' prop still hits the blanket
+    /// guard with the identical UnsupportedFeature error — the relaxation never
+    /// over-reaches. Locks against accidental widening of the totals carve-out.
+    /// </summary>
+    [Fact]
+    public void Table_SetWithoutTotals_StillUnsupported()
+    {
+        var file = SeedSalesTable();
+
+        // bold alone on a table path: still unsupported.
+        var bold = EditOps(file, SetOp("/Sheet1/table[@name=Sales]", ("bold", true)));
+        Assert.False(bold.IsOk);
+        Assert.Equal(ErrorCodes.UnsupportedFeature, bold.Error!.Code);
+        Assert.Contains("table", bold.Error.Message, StringComparison.OrdinalIgnoreCase);
+
+        // totals + a second prop is NOT a totals-only set → still unsupported.
+        var mixed = EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject { ["Sales"] = new JsonObject { ["function"] = "sum" } }),
+            ("bold", true)));
+        Assert.False(mixed.IsOk);
+        Assert.Equal(ErrorCodes.UnsupportedFeature, mixed.Error!.Code);
+        Assert.Equal(bold.Error.Message, mixed.Error.Message);
+    }
+
+    /// <summary>
+    /// BYTE-STABLE: a table with existing totals, re-saved by an edit that does
+    /// NOT carry a totals set op, leaves the table-definition part byte-identical
+    /// (the guard relaxation fires ONLY on a totals-only set).
+    /// </summary>
+    [Fact]
+    public void Existing_totals_survive_a_non_totals_resave_byte_for_byte()
+    {
+        var file = SeedSalesTable();
+        Assert.True(EditOps(file, SetOp("/Sheet1/table[@name=Sales]",
+            ("totals", new JsonObject
+            {
+                ["Sales"] = new JsonObject { ["function"] = "sum" },
+                ["Region"] = new JsonObject { ["label"] = "T" },
+            }))).IsOk);
+
+        var before = TableDefinitionBytes(file);
+
+        // A benign cell set re-saves the workbook without touching the table path.
+        Assert.True(EditOps(file, SetOp("/Sheet1/E1", ("value", 1))).IsOk);
+
+        Assert.Equal(before, TableDefinitionBytes(file));
+    }
+
+    /// <summary>Reads the raw bytes of the single table-definition part.</summary>
+    private static byte[] TableDefinitionBytes(string file)
+    {
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var part = document.WorkbookPart!.WorksheetParts
+            .SelectMany(w => w.TableDefinitionParts)
+            .Single();
+        using var stream = part.GetStream();
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
     }
 
     [Fact]
