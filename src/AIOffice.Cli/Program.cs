@@ -137,6 +137,8 @@ internal static class Program
                 return NativeVerbs.Schema(parsed);
             case "help":
                 return NativeVerbs.Help(parsed);
+            case "plugin":
+                return PluginVerbs.Run(parsed);
             default:
                 break;
         }

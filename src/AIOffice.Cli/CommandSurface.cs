@@ -225,6 +225,20 @@ public static class CommandSurface
             [],
             null),
 
+        new("plugin",
+            "Install aioffice into AI coding hosts (Claude Code, Codex, opencode, TonoBraid): registers the MCP server, drops the agent guide/skill, and adds the /aioffice command where supported.",
+            "aioffice plugin <install|uninstall|list|status> [--host claude|codex|opencode|tonobraid|all] [--scope user|project] [--dry-run] [--force]",
+            [
+                new("action", true, "install, uninstall, list or status."),
+            ],
+            [
+                new("host", "claude|codex|opencode|tonobraid|all", "Target host(s) (default: all detected)."),
+                new("scope", "user|project", "Write at user scope (home dirs) or project scope (workspace root) (default: user)."),
+                new("dry-run", null, "Report what would change without writing any host config."),
+                new("force", null, "Overwrite an existing aioffice entry / guide instead of skipping it."),
+            ],
+            null),
+
         new("version",
             "Print the aioffice version.",
             "aioffice version",

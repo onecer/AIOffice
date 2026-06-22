@@ -16,6 +16,33 @@ If you installed via npm and want zero global state, you can use `npx` as the co
 
 ---
 
+## The easy way — `aioffice plugin install` · 一键接入
+
+> **中文** — 不想手改各家配置?直接让 aioffice 把自己装进各个 AI 主机:`aioffice plugin install` 会在检测到的主机里注册 MCP server、放入技能/AGENT 指南、并加上 `/aioffice` 命令。`--dry-run` 先看会改哪些文件,`uninstall` 干净卸载,`status` 查看安装状态。每次写入都是幂等的,只动 `aioffice` 自己的键,绝不破坏你已有的服务器配置。
+
+Instead of editing each host's config by hand (the sections below), the binary can install itself:
+
+```sh
+aioffice plugin install                 # all detected hosts (Claude Code, Codex, opencode, TonoBraid)
+aioffice plugin install --host claude    # just one host (comma-separate for several)
+aioffice plugin install --dry-run        # show exactly which files/keys would change — writes nothing
+aioffice plugin status                   # what's installed where
+aioffice plugin uninstall                # remove aioffice from every host (leaves your other servers intact)
+```
+
+What it writes per host (all idempotent — re-running is a no-op unless `--force`; only the `aioffice` key is ever touched):
+
+| Host | MCP registration | Guide / skill | Command |
+|---|---|---|---|
+| **Claude Code** | `mcpServers.aioffice` in `~/.claude.json` (user) or `<workspace>/.mcp.json` (`--scope project`) | `~/.claude/skills/aioffice/SKILL.md` | `~/.claude/commands/aioffice.md` |
+| **Codex** | `[mcp_servers.aioffice]` appended to `~/.codex/config.toml` (backed up first) | `~/.codex/skills/aioffice/SKILL.md` | `<!-- aioffice -->` block in `~/.codex/AGENTS.md` |
+| **opencode** | `mcp.aioffice` in `~/.config/opencode/opencode.json` (`type:"local"`, command array) | `~/.config/opencode/agents/aioffice.md` + `AGENTS.md` block | `~/.config/opencode/command/aioffice.md` |
+| **TonoBraid** | a bundled `.mcp.json` inside a `cc`-format plugin at `~/.tonoagent/plugins/aioffice/`, registered in `~/.tonoagent/plugins.json` (`trust:"trusted"`, sha256 tree digest) — restart TonoBraid to activate | `skills/aioffice/SKILL.md` in the plugin | `commands/aioffice.md` in the plugin |
+
+Flags: `--host claude|codex|opencode|tonobraid|all` · `--scope user|project` · `--dry-run` · `--force`. The recorded MCP command is the absolute path of the running `aioffice` binary (override with `AIOFFICE_EXE`); the baked `--workspace` defaults to your home dir at user scope, or the workspace/cwd at project scope. The manual per-host snippets below remain valid if you'd rather wire it yourself.
+
+---
+
 ## The 17 tools · 工具一览
 
 | MCP tool | CLI verb | What it does |

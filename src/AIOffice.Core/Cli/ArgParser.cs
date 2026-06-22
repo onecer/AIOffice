@@ -34,7 +34,7 @@ public static class ArgParser
     /// <summary>Options that never consume the next token as a value.</summary>
     private static readonly HashSet<string> BooleanFlags = new(StringComparer.Ordinal)
     {
-        "json", "pretty", "quiet", "dry-run", "track",
+        "json", "pretty", "quiet", "dry-run", "track", "force",
         // find/replace sugar modifiers (M4): never eat the next token.
         "regex", "match-case", "whole-word",
     };
