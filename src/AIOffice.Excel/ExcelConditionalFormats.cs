@@ -335,7 +335,19 @@ internal static partial class ExcelConditionalFormats
         }
 
         var midType = OptionalString(props, "midType");
-        if (midType is null || !ColorScaleMidTypes.Contains(midType, StringComparer.Ordinal))
+        if (midType is null)
+        {
+            // midValue supplied without midType (the only way to reach here with a null
+            // type, since absent-both returned above) — name the missing prop, not "".
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a 'midValue' needs a 'midType'.",
+                "Pass a midType too, e.g. {\"midType\":\"percent\",\"midValue\":50}. Supported: " +
+                string.Join(", ", ColorScaleMidTypes) + ".",
+                candidates: ColorScaleMidTypes);
+        }
+
+        if (!ColorScaleMidTypes.Contains(midType, StringComparer.Ordinal))
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,

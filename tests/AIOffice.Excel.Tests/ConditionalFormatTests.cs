@@ -259,6 +259,22 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         Assert.Contains("midColor", envelope.Error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ColorScale_midValue_without_midType_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midValue", 25)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        // Names the missing prop, not an empty-string "unknown midType ''".
+        Assert.Contains("midType", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("percent", envelope.Error.Candidates ?? [], StringComparer.Ordinal);
+    }
+
     [Theory]
     [InlineData("percent", -1)]
     [InlineData("percent", 101)]
