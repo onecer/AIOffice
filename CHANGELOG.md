@@ -70,6 +70,32 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.18.0 — round-trip & prop completions: pptx bg object · xlsx colorScale midpoint · docx tracked merge/if fields (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a write/read asymmetry, byte-stable on
+its legacy path. Agents that target 1.17.0 are byte-for-byte compatible with 1.18.0.
+
+### Added — pptx
+
+- **Full gradient/image background object on `get /slide`**: `get` now projects the gradient
+  (`{type, angle?, stops}`) or image (`{src, mode, tint?}`) object — completing the v1.14 write round-trip
+  (previously `get` only reported a solid hex / the `backgroundKind` string). Solid stays a bare hex, none
+  stays `null`. Read-only change; no write path touched.
+
+### Added — xlsx
+
+- **colorScale custom 3-color midpoint**: a 3-color `colorScale` now accepts `midType`
+  (`num`/`percent`/`percentile`) + `midValue`, replacing the hardcoded percentile-50. Omitting both is
+  byte-identical to 1.17; `get` reports them only for a custom midpoint. Invalid combos (midType without
+  midColor, midValue without midType, unknown midType, percent/percentile out of 0–100) → `invalid_args`.
+
+### Added — docx
+
+- **Tracked mergeField / ifField insertion (append path)**: `add type:mergeField`/`type:ifField` now work
+  under `track:true` on the append form, wrapping the complex-field runs in `w:ins` (`kind:"insert"`;
+  accept keeps, reject removes). The `find` mid-paragraph form, `type:field` (w:fldSimple element), and
+  tracked link/toc/tableOfFigures/index/indexEntry stay unsupported.
+
 ## 1.17.0 — table & tracked depth: pptx cell borders · docx tracked cross-refs · xlsx totals editing (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each adds a prop or relaxes a guard on an existing

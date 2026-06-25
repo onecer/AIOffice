@@ -972,6 +972,42 @@ Each adds a prop or relaxes a guard on an existing op, with the legacy branch fi
 
 Agents that target the 1.16.0 surface are byte-for-byte compatible with 1.17.0.
 
+## 7r. 1.18.0 — round-trip & prop completions: pptx bg object, xlsx colorScale midpoint, docx tracked merge/if fields (additive, surface 1.0)
+
+Package **1.18.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each closes a write/read asymmetry; the legacy branch stays first-in-code and byte-stable.
+
+### pptx — full gradient/image background object on get
+
+- **`get /slide[i]` now projects the FULL gradient/image background object** (§6, read-side completion of
+  the v1.14 write): for a gradient, `background` is `{type:linear|radial, angle?, stops:[{color, at}]}`
+  (reversed from `a:gradFill`; radial has no `angle`); for an image, `{src, mode:stretch|tile, tint?}`
+  (`src` is the embedded media-part filename, not the original caller path). A **solid** background still
+  projects the bare hex string and **none** still projects `null` — byte-identical to 1.17. `backgroundKind`
+  is unchanged. Feeding the projected object back into `set` (wrapped under `background.gradient`/`.image`)
+  reproduces the same fill. (No write-path change.)
+
+### xlsx — colorScale custom 3-color midpoint
+
+- **A 3-color `colorScale` conditional format now accepts `midType` + `midValue`** (§5, additive),
+  replacing the hardcoded percentile-50 midpoint: `midType` ∈ `num|percent|percentile`, `midValue` a number
+  (→ the middle `cfvo @type/@val`). Omitting **both** keeps the byte-identical percentile-50 default;
+  `get`/describe report `midType`/`midValue` only when a custom midpoint is set (a percentile-50 reads back
+  as omitted, by byte-stability). `midType` without a `midColor`, a `midValue` without a `midType`, an
+  unknown `midType`, or a percent/percentile `midValue` outside 0–100 → `invalid_args` (a `num` value
+  outside the data range is accepted, as in Excel).
+
+### docx — tracked merge/if field insertion
+
+- **`add type:mergeField` and `add type:ifField` now work under `track:true` on the append path** (§4,
+  additive; previously `unsupported_feature`), extending tracked structural authoring: the newly-appended
+  complex-field runs are wrapped in a `w:ins` (read as `kind:"insert"`; accept keeps, reject removes). This
+  is deliberately scoped to the **append** form — the mid-paragraph `find` form, and `add type:field` (which
+  emits a `w:fldSimple` element, not runs), plus tracked `link`/`toc`/`tableOfFigures`/`index`/`indexEntry`,
+  all still return `unsupported_feature`. Untracked adds are unchanged.
+
+Agents that target the 1.17.0 surface are byte-for-byte compatible with 1.18.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:
