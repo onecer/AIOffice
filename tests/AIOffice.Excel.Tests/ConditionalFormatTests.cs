@@ -159,6 +159,154 @@ public sealed class ConditionalFormatTests : ExcelTestBase
     }
 
     [Fact]
+    public void ColorScale_two_colors_get_omits_the_midpoint()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/C1:C10", "conditionalFormat",
+            ("kind", "colorScale"), ("minColor", "FFFFFF"), ("maxColor", "63BE7B"))).IsOk);
+
+        var scale = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("colorScale", scale["cfKind"]!.GetValue<string>());
+        // A 2-color scale has no midpoint at all — no midColor, midType or midValue.
+        Assert.Null(scale["midColor"]);
+        Assert.Null(scale["midType"]);
+        Assert.Null(scale["midValue"]);
+    }
+
+    [Fact]
+    public void ColorScale_custom_midpoint_roundtrips_through_cfvo_and_get()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midType", "percent"), ("midValue", 25))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var scale = Assert.Single(RawRules(document)).GetFirstChild<S.ColorScale>()!;
+            var cfvos = scale.Elements<S.ConditionalFormatValueObject>().ToList();
+            Assert.Equal(["min", "percent", "max"], cfvos.Select(o => o.Type!.InnerText));
+            Assert.Equal("25", cfvos[1].Val!.Value);
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("FFEB84", data["midColor"]!.GetValue<string>());
+        Assert.Equal("percent", data["midType"]!.GetValue<string>());
+        Assert.Equal(25d, data["midValue"]!.GetValue<double>());
+    }
+
+    [Theory]
+    [InlineData("num", 7, "num", "7")]
+    [InlineData("percent", 40, "percent", "40")]
+    [InlineData("percentile", 60, "percentile", "60")]
+    public void ColorScale_each_midType_writes_its_cfvo(
+        string midType, double midValue, string expectedCfvoType, string expectedVal)
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midType", midType), ("midValue", midValue))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var scale = Assert.Single(RawRules(document)).GetFirstChild<S.ColorScale>()!;
+        var mid = scale.Elements<S.ConditionalFormatValueObject>().ElementAt(1);
+        Assert.Equal(expectedCfvoType, mid.Type!.InnerText);
+        Assert.Equal(expectedVal, mid.Val!.Value);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal(midType, data["midType"]!.GetValue<string>());
+        Assert.Equal(midValue, data["midValue"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void ColorScale_default_midpoint_stays_percentile_50_and_get_omits_midType()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var scale = Assert.Single(RawRules(document)).GetFirstChild<S.ColorScale>()!;
+            var mid = scale.Elements<S.ConditionalFormatValueObject>().ElementAt(1);
+            Assert.Equal("percentile", mid.Type!.InnerText);
+            Assert.Equal("50", mid.Val!.Value);
+        }
+
+        // Legacy default: midColor surfaces, but midType/midValue are omitted.
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("FFEB84", data["midColor"]!.GetValue<string>());
+        Assert.Null(data["midType"]);
+        Assert.Null(data["midValue"]);
+    }
+
+    [Fact]
+    public void ColorScale_midType_without_midColor_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"), ("minColor", "F8696B"), ("maxColor", "63BE7B"),
+            ("midType", "percent"), ("midValue", 25)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("midColor", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("percent", -1)]
+    [InlineData("percent", 101)]
+    [InlineData("percentile", 150)]
+    public void ColorScale_percent_midValue_out_of_range_is_invalid_args(string midType, double midValue)
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midType", midType), ("midValue", midValue)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("between 0 and 100", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ColorScale_num_midValue_outside_data_range_is_accepted()
+    {
+        var file = CreateDataWorkbook();
+        // A 'num' midpoint outside the data range is legal in Excel — accept it.
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midType", "num"), ("midValue", 9999))).IsOk);
+
+        AssertValidatorClean(file);
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("num", data["midType"]!.GetValue<string>());
+        Assert.Equal(9999d, data["midValue"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void ColorScale_unknown_midType_is_invalid_args_with_candidates()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "colorScale"),
+            ("minColor", "F8696B"), ("midColor", "FFEB84"), ("maxColor", "63BE7B"),
+            ("midType", "quartile"), ("midValue", 25)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Equal(["num", "percent", "percentile"], envelope.Error.Candidates!);
+    }
+
+    [Fact]
     public void DataBar_is_validator_clean_after_the_guid_fixup()
     {
         var file = CreateDataWorkbook();

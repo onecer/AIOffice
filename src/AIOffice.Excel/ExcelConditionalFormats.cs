@@ -59,7 +59,17 @@ internal static partial class ExcelConditionalFormats
     private static readonly IReadOnlyList<string> CellIsProps =
         ["kind", "operator", "value", "value2", "fill", "color", "bold"];
 
-    private static readonly IReadOnlyList<string> ColorScaleProps = ["kind", "minColor", "midColor", "maxColor"];
+    private static readonly IReadOnlyList<string> ColorScaleProps =
+        ["kind", "minColor", "midColor", "maxColor", "midType", "midValue"];
+
+    /// <summary>
+    /// The colorScale 3-color midpoint content types a caller can pin. The wire
+    /// name maps to the OOXML <c>cfvo@type</c>: <c>num</c> → a fixed number (legal
+    /// even outside the data range, like Excel), <c>percent</c>/<c>percentile</c>
+    /// → 0..100 of the range. Omitting both midType and midValue keeps the legacy
+    /// Percentile/50 midpoint.
+    /// </summary>
+    private static readonly IReadOnlyList<string> ColorScaleMidTypes = ["num", "percent", "percentile"];
 
     private static readonly IReadOnlyList<string> DataBarProps =
         ["kind", "color", "minType", "minValue", "maxType", "maxValue", "showValue"];
@@ -274,17 +284,90 @@ internal static partial class ExcelConditionalFormats
         var max = ParseColor(RequiredColorText(props, "maxColor", opIndex), opIndex);
         var midText = OptionalString(props, "midColor");
 
+        // The optional caller-controlled midpoint endpoint. Null keeps the legacy
+        // Percentile/50 midpoint (byte-stable). midType/midValue only apply to a
+        // 3-color scale, so a midpoint type without a midColor is invalid.
+        var midpoint = ParseColorScaleMidpoint(props, midText is not null, opIndex);
+
         var scale = range.AddConditionalFormat().ColorScale().LowestValue(min);
         if (midText is null)
         {
             scale.HighestValue(max);
         }
-        else
+        else if (midpoint is null)
         {
             scale
                 .Midpoint(XLCFContentType.Percentile, 50, ParseColor(midText, opIndex))
                 .HighestValue(max);
         }
+        else
+        {
+            scale
+                .Midpoint(midpoint.Value.Type, midpoint.Value.Value, ParseColor(midText, opIndex))
+                .HighestValue(max);
+        }
+    }
+
+    /// <summary>
+    /// Parses (and validates) the optional colorScale midpoint endpoint. Returns
+    /// null when BOTH <c>midType</c> and <c>midValue</c> are absent (the legacy
+    /// Percentile/50 default stays byte-stable). When present, both are required,
+    /// a midColor must be present (a midpoint type needs a 3-color scale), and a
+    /// <c>percent</c>/<c>percentile</c> value is clamped to 0..100 (a <c>num</c>
+    /// value outside the data range is legal in Excel — accepted as-is).
+    /// </summary>
+    private static (XLCFContentType Type, double Value)? ParseColorScaleMidpoint(
+        JsonObject props, bool hasMidColor, int opIndex)
+    {
+        var hasMidType = props.ContainsKey("midType");
+        var hasMidValue = props.ContainsKey("midValue");
+        if (!hasMidType && !hasMidValue)
+        {
+            return null;
+        }
+
+        if (!hasMidColor)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a midpoint type needs a midColor (midType/midValue apply to a 3-color scale).",
+                "Add a 'midColor', or drop midType/midValue for a 2-color scale.");
+        }
+
+        var midType = OptionalString(props, "midType");
+        if (midType is null || !ColorScaleMidTypes.Contains(midType, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown colorScale 'midType' '{midType}'.",
+                "Supported midpoint types: " + string.Join(", ", ColorScaleMidTypes) + ".",
+                candidates: ColorScaleMidTypes);
+        }
+
+        var midValue = OptionalNumber(props, "midValue", opIndex);
+        if (midValue is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: midType '{midType}' needs a numeric 'midValue'.",
+                "Pass e.g. {\"midType\":\"" + midType + "\",\"midValue\":50}.");
+        }
+
+        if ((midType == "percent" || midType == "percentile") && (midValue < 0 || midValue > 100))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a {midType} 'midValue' must be between 0 and 100.",
+                "Pass e.g. {\"midType\":\"" + midType + "\",\"midValue\":50}.");
+        }
+
+        var type = midType switch
+        {
+            "num" => XLCFContentType.Number,
+            "percent" => XLCFContentType.Percent,
+            _ => XLCFContentType.Percentile,
+        };
+        return (type, midValue.Value);
     }
 
     /// <summary>
@@ -795,6 +878,10 @@ internal static partial class ExcelConditionalFormats
             midColor = format.ConditionalFormatType == XLConditionalFormatType.ColorScale && format.Colors.Count == 3
                 ? ColorAt(format, 2)
                 : null,
+            // The 3-color midpoint endpoint, emitted ONLY when it is NOT the legacy
+            // Percentile/50 default, so legacy colorScale rules read unchanged.
+            midType = ColorScaleMidpoint(format)?.Type,
+            midValue = ColorScaleMidpoint(format)?.Value,
             maxColor = format.ConditionalFormatType == XLConditionalFormatType.ColorScale
                 ? ColorAt(format, format.Colors.Count)
                 : null,
@@ -983,6 +1070,44 @@ internal static partial class ExcelConditionalFormats
 
     private static string? ColorAt(IXLConditionalFormat format, int key) =>
         format.Colors.TryGetValue(key, out var color) ? HexOf(color) : null;
+
+    /// <summary>
+    /// The 3-color colorScale midpoint endpoint (wire type + numeric value), read
+    /// from <c>ContentTypes[2]</c>/<c>Values[2]</c>, but ONLY when it is NOT the
+    /// legacy Percentile/50 default — so legacy colorScale rules project no
+    /// midType/midValue and read byte-unchanged. Null on every other case.
+    /// </summary>
+    private static (string Type, double Value)? ColorScaleMidpoint(IXLConditionalFormat format)
+    {
+        if (format.ConditionalFormatType != XLConditionalFormatType.ColorScale || format.Colors.Count != 3)
+        {
+            return null;
+        }
+
+        if (!format.ContentTypes.TryGetValue(2, out var contentType) ||
+            !format.Values.TryGetValue(2, out var value) || value?.Value is not { } valueText ||
+            !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+        {
+            return null;
+        }
+
+        var wire = contentType switch
+        {
+            XLCFContentType.Number => "num",
+            XLCFContentType.Percent => "percent",
+            XLCFContentType.Percentile => "percentile",
+            _ => null,
+        };
+
+        // The legacy default (Percentile/50) is omitted so legacy files read
+        // unchanged; only a caller-pinned midpoint surfaces.
+        if (wire is null || (wire == "percentile" && number == 50))
+        {
+            return null;
+        }
+
+        return (wire, number);
+    }
 
     /// <summary>Six-digit RGB hex (8-digit when alpha is not FF); null for theme/indexed/unset colors.</summary>
     internal static string? HexOf(XLColor? color)
