@@ -156,4 +156,185 @@ public sealed class MergeFieldTests : WordTestBase
 
         Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
     }
+
+    // ------------------------------------------------------------ tracked add
+
+    private static JsonObject Track(string? author = null)
+    {
+        var args = new JsonObject { ["track"] = true };
+        if (author is not null)
+        {
+            args["author"] = author;
+        }
+
+        return args;
+    }
+
+    private JsonArray Revisions(string file) =>
+        Data(Handler.Read(Ctx(file, new JsonObject { ["view"] = "revisions" })))["revisions"]!.AsArray();
+
+    /// <summary>The raw bytes of the main document part (word/document.xml).</summary>
+    private static byte[] DocumentXml(string file)
+    {
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        using var stream = doc.MainDocumentPart!.GetStream();
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
+
+    /// <summary>A doc whose p[1] holds the author's "Dear " run, the merge-field anchor.</summary>
+    private string MergeAnchorDoc(string name = "doc.docx")
+    {
+        var file = CreateDoc(name, title: "Letter");
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"Dear "}}]""");
+        return file;
+    }
+
+    [Fact]
+    public void Tracked_merge_field_add_wraps_only_the_new_runs_in_a_single_ins()
+    {
+        var file = MergeAnchorDoc();
+
+        Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""",
+            Track("Reviewer"));
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        var anchor = body.Elements<Paragraph>().First(); // p[1]
+
+        // Exactly one w:ins, carrying the five complex-field runs (begin / instr /
+        // separate / «result» / end); three of them carry a FieldChar.
+        var ins = Assert.Single(anchor.Elements<InsertedRun>());
+        Assert.Equal("Reviewer", ins.Author!.Value);
+        Assert.NotNull(ins.Id);
+        Assert.NotNull(ins.Date);
+        Assert.Equal(5, ins.Elements<Run>().Count());
+        Assert.Equal(3, ins.Elements<Run>().Count(r => r.GetFirstChild<FieldChar>() is not null));
+        Assert.Contains("MERGEFIELD FirstName", ins.Descendants<FieldCode>().Single().Text, StringComparison.Ordinal);
+        Assert.Contains("«FirstName»", ins.InnerText, StringComparison.Ordinal);
+
+        // The anchor's pre-existing "Dear " run is NOT wrapped, and the paragraph
+        // mark is untouched (no inserted run-mark properties).
+        Assert.Single(anchor.Elements<Run>()); // only the pre-existing author run is a direct child
+        Assert.Equal("Dear ", anchor.Elements<Run>().Single().InnerText);
+        Assert.Null(anchor.ParagraphProperties?.ParagraphMarkRunProperties?.GetFirstChild<Inserted>());
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Tracked_merge_field_add_uses_a_unique_revision_id_per_field()
+    {
+        var file = MergeAnchorDoc();
+
+        Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""",
+            Track());
+        Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"LastName"}}]""",
+            Track());
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var ids = doc.MainDocumentPart!.Document!.Body!.Descendants<InsertedRun>()
+            .Select(i => i.Id!.Value).ToList();
+        Assert.Equal(2, ids.Count);
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public void Tracked_merge_field_add_reports_exactly_one_insert_revision()
+    {
+        var file = MergeAnchorDoc();
+
+        Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""",
+            Track());
+
+        var revision = Assert.Single(Revisions(file));
+        Assert.Equal("insert", revision!["kind"]!.GetValue<string>());
+        Assert.Equal("/body/p[1]", revision["at"]!.GetValue<string>());
+        Assert.Null(revision["mark"]); // not a paragraph-mark insertion
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Untracked_merge_field_add_stays_on_the_byte_stable_legacy_path()
+    {
+        // The untracked branch is first-in-code and must not change: no w:ins wraps
+        // the field, and the five complex-field runs are direct children of the
+        // anchor paragraph. Two independent untracked runs are byte-identical.
+        var a = MergeAnchorDoc("a.docx");
+        var b = MergeAnchorDoc("b.docx");
+        const string add =
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""";
+        Edit(a, add);
+        Edit(b, add);
+
+        Assert.True(DocumentXml(a).SequenceEqual(DocumentXml(b)));
+
+        using var doc = WordprocessingDocument.Open(a, isEditable: false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        Assert.Empty(body.Descendants<InsertedRun>());
+
+        // The anchor paragraph keeps its author run plus the five field runs as
+        // direct children (no w:ins); three of them carry a FieldChar.
+        var anchor = body.Elements<Paragraph>().First();
+        Assert.Equal(3, anchor.Elements<Run>().Count(r => r.GetFirstChild<FieldChar>() is not null));
+        Assert.Empty(anchor.Descendants<InsertedRun>());
+        AssertValidatesClean(a);
+    }
+
+    [Fact]
+    public void Tracked_merge_field_accepts_to_kept_field_and_rejects_to_gone()
+    {
+        var fileAccept = MergeAnchorDoc("accept.docx");
+        Edit(fileAccept,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""",
+            Track());
+        Edit(fileAccept, """[{"op":"accept","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileAccept));
+        using (var doc = WordprocessingDocument.Open(fileAccept, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            // Accept unwraps the w:ins keeping the MERGEFIELD intact.
+            Assert.Empty(body.Descendants<InsertedRun>());
+            Assert.Contains(body.Descendants<FieldCode>().Select(c => c.Text),
+                t => t.Contains("MERGEFIELD FirstName", StringComparison.Ordinal));
+        }
+        AssertValidatesClean(fileAccept);
+
+        var fileReject = MergeAnchorDoc("reject.docx");
+        Edit(fileReject,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FirstName"}}]""",
+            Track());
+        Edit(fileReject, """[{"op":"reject","path":"/body"}]""");
+
+        Assert.Empty(Revisions(fileReject));
+        using (var doc = WordprocessingDocument.Open(fileReject, isEditable: false))
+        {
+            var body = doc.MainDocumentPart!.Document!.Body!;
+            // Reject drops the w:ins and the field runs it wrapped.
+            Assert.Empty(body.Descendants<InsertedRun>());
+            Assert.DoesNotContain(body.Descendants<FieldCode>().Select(c => c.Text),
+                t => t.Contains("MERGEFIELD", StringComparison.Ordinal));
+        }
+        AssertValidatesClean(fileReject);
+    }
+
+    [Fact]
+    public void Tracked_merge_field_with_find_stays_unsupported()
+    {
+        // The mid-paragraph (props.find) path splices runs into an existing
+        // paragraph — too large a change for CT_Ins, so it stays refused.
+        var file = CreateDoc(title: "Letter");
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"Name: here"}}]""");
+
+        var ex = Assert.Throws<AiofficeException>(() => Edit(file,
+            """[{"op":"add","path":"/body/p[1]","type":"mergeField","props":{"name":"FullName","find":"here"}}]""",
+            Track()));
+        Assert.Equal(ErrorCodes.UnsupportedFeature, ex.Code);
+    }
 }

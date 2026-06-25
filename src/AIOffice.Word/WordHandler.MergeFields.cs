@@ -24,10 +24,10 @@ public sealed partial class WordHandler
     /// field on the target paragraph. The cached result is Word's «name» chevron
     /// form so the document reads sensibly before a merge fills it.
     /// </summary>
-    private static object ApplyAddMergeField(WordprocessingDocument doc, EditOp op)
+    private static object ApplyAddMergeField(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var props = op.Props?.DeepClone().AsObject() ?? [];
-        props.Remove("author");
+        var author = session.ResolveAuthor(props);
 
         var name = props["name"] is { } nameNode ? NodeToString(nameNode).Trim() : null;
         if (string.IsNullOrEmpty(name))
@@ -65,11 +65,25 @@ public sealed partial class WordHandler
 
         if (find is { Length: > 0 })
         {
+            // Mid-paragraph placement splices runs into an existing paragraph — a
+            // larger change than CT_Ins can wrap, so it stays tracked-unsupported.
+            if (session.Track)
+            {
+                throw TrackedStructureUnsupported("mergeField");
+            }
+
             PlaceComplexFieldAtText(paragraph, find, instruction, cached);
         }
         else
         {
+            // Remember the anchor's last pre-existing child so a tracked add wraps
+            // exactly the five runs AppendComplexField is about to append.
+            var lastExisting = paragraph.LastChild;
             AppendComplexField(paragraph, instruction, cached);
+            if (session.Track)
+            {
+                WrapAppendedFieldRuns(doc, paragraph, lastExisting, author);
+            }
         }
 
         return new

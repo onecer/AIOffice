@@ -181,16 +181,7 @@ public sealed partial class WordHandler
         // pre-existing runs and paragraph mark are the author's, not part of this add.
         if (session.Track)
         {
-            var newRuns = (lastExisting is null
-                ? paragraph.Elements<Run>()
-                : lastExisting.ElementsAfter().OfType<Run>()).ToList();
-            var ins = NewTrackChange(new InsertedRun(), author, DateTime.UtcNow, NextRevisionId(doc));
-            newRuns[0].InsertBeforeSelf(ins);
-            foreach (var run in newRuns)
-            {
-                run.Remove();
-                ins.AppendChild(run);
-            }
+            WrapAppendedFieldRuns(doc, paragraph, lastExisting, author);
         }
 
         if (!session.Warnings.Any(w => w.Code == "caption_numbers_cached"))
@@ -245,6 +236,28 @@ public sealed partial class WordHandler
         paragraph.AppendChild(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
         paragraph.AppendChild(new Run(NewText(cachedResult)));
         paragraph.AppendChild(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
+    }
+
+    /// <summary>
+    /// Tracked-add closure shared by crossRef / mergeField / ifField appends: wraps
+    /// the runs appended after <paramref name="lastExisting"/> (the field's
+    /// begin/instr/separate/cached/end) in a single w:ins, leaving the anchor's
+    /// pre-existing runs and paragraph mark untouched (they are the author's). Like
+    /// the footnote ref it deliberately skips MarkParagraphInserted.
+    /// </summary>
+    private static void WrapAppendedFieldRuns(
+        WordprocessingDocument doc, Paragraph paragraph, OpenXmlElement? lastExisting, string author)
+    {
+        var newRuns = (lastExisting is null
+            ? paragraph.Elements<Run>()
+            : lastExisting.ElementsAfter().OfType<Run>()).ToList();
+        var ins = NewTrackChange(new InsertedRun(), author, DateTime.UtcNow, NextRevisionId(doc));
+        newRuns[0].InsertBeforeSelf(ins);
+        foreach (var run in newRuns)
+        {
+            run.Remove();
+            ins.AppendChild(run);
+        }
     }
 
     /// <summary>The cached display text a cross-reference shows for its target and mode.</summary>

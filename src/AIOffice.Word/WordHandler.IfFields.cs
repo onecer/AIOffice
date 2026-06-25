@@ -30,10 +30,10 @@ public sealed partial class WordHandler
     /// result is the branch the empty-merge state selects (the false branch), so the
     /// document reads sensibly before a merge fills it.
     /// </summary>
-    private static object ApplyAddIfField(WordprocessingDocument doc, EditOp op)
+    private static object ApplyAddIfField(WordprocessingDocument doc, EditOp op, EditSession session)
     {
         var props = op.Props?.DeepClone().AsObject() ?? [];
-        props.Remove("author");
+        var author = session.ResolveAuthor(props);
 
         var field = props["field"] is { } fieldNode ? NodeToString(fieldNode).Trim() : null;
         if (string.IsNullOrEmpty(field))
@@ -105,6 +105,13 @@ public sealed partial class WordHandler
         var find = props["find"] is { } findNode ? NodeToString(findNode) : null;
         if (find is { Length: > 0 })
         {
+            // Mid-paragraph placement splices runs into an existing paragraph — a
+            // larger change than CT_Ins can wrap, so it stays tracked-unsupported.
+            if (session.Track)
+            {
+                throw TrackedStructureUnsupported("ifField");
+            }
+
             PlaceFieldAtText(
                 paragraph,
                 find,
@@ -113,7 +120,14 @@ public sealed partial class WordHandler
         }
         else
         {
+            // Remember the anchor's last pre-existing child so a tracked add wraps
+            // exactly the five runs AppendComplexField is about to append.
+            var lastExisting = paragraph.LastChild;
             AppendComplexField(paragraph, instruction, cached);
+            if (session.Track)
+            {
+                WrapAppendedFieldRuns(doc, paragraph, lastExisting, author);
+            }
         }
 
         return new
