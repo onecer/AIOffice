@@ -540,7 +540,7 @@ internal static class PptxQueryEngine
         {
             Path = address.CanonicalSlidePath,
             Index = address.SlideIndex,
-            Background = PptxDoc.BackgroundHex(slidePart),
+            Background = PptxDoc.BackgroundDetail(slidePart),
             BackgroundKind = PptxDoc.BackgroundKind(slidePart),
             Transition = transition?.Kind,
             TransitionDuration = transition?.Duration,

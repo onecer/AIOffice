@@ -478,6 +478,92 @@ internal static class PptxDoc
         return properties.GetFirstChild<A.SolidFill>() is not null ? "solid" : null;
     }
 
+    /// <summary>
+    /// The projected <c>background</c> object for a slide's p:bg, reversing the fill it carries
+    /// back into the shape <see cref="PptxFill"/> consumes on write (PURE READ-SIDE):
+    /// <list type="bullet">
+    /// <item>solid → the bare RRGGBB hex string (identical to <see cref="BackgroundHex"/>).</item>
+    /// <item>none → null (the slide inherits the layout/master).</item>
+    /// <item>gradient → <c>{type, angle?, stops:[{color, at}]}</c> (radial omits angle).</item>
+    /// <item>image → <c>{src, mode, tint?}</c> where src is the embedded media-part filename
+    /// (e.g. "image1.png" — the original caller path is not stored in OOXML); tint is omitted
+    /// when no a:duotone is present.</item>
+    /// </list>
+    /// Round-trips byte-for-byte through <c>set /slide background</c> (modulo sub-degree / sub-0.1%
+    /// drift on odd a:lin@ang / a:gs@pos values).
+    /// </summary>
+    public static object? BackgroundDetail(SlidePart slidePart)
+    {
+        var properties = slidePart.Slide?.CommonSlideData?.Background?.BackgroundProperties;
+        if (properties is null)
+        {
+            return null;
+        }
+
+        // Solid stays first-in-code and byte-stable: the bare hex BackgroundHex returns today.
+        if (properties.GetFirstChild<A.SolidFill>() is { } solid)
+        {
+            return solid.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+        }
+
+        if (properties.GetFirstChild<A.GradientFill>() is { } gradient)
+        {
+            return GradientDetail(gradient);
+        }
+
+        if (properties.GetFirstChild<A.BlipFill>() is { } blip)
+        {
+            return ImageDetail(slidePart, blip);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reverses an <c>a:gradFill</c> into the gradient shape <see cref="PptxFill.BuildGradientFill"/>
+    /// consumes: linear carries an <c>angle</c> (a:lin@ang ÷ 60000 → degrees), radial omits it
+    /// (it writes a:path, not a:lin); each stop is <c>{color, at}</c> (a:gs@pos ÷ 1000 → 0–100).
+    /// </summary>
+    private static object GradientDetail(A.GradientFill gradient)
+    {
+        var stops = gradient.GetFirstChild<A.GradientStopList>()?.Elements<A.GradientStop>()
+            .Select(stop => (object)new
+            {
+                Color = stop.RgbColorModelHex?.Val?.Value?.ToUpperInvariant(),
+                At = (stop.Position?.Value ?? 0) / 1000.0,
+            })
+            .ToList() ?? [];
+
+        // Radial writes a:path (no a:lin), so there is no angle key for radial.
+        if (gradient.GetFirstChild<A.LinearGradientFill>() is { } linear)
+        {
+            return new { Type = "linear", Angle = (linear.Angle?.Value ?? 0) / 60000.0, Stops = stops };
+        }
+
+        return new { Type = "radial", Stops = stops };
+    }
+
+    /// <summary>
+    /// Reverses an <c>a:blipFill</c> into the image shape <see cref="PptxFill.BuildImageFill"/>
+    /// consumes: <c>{src, mode, tint?}</c>. src is the embedded media-part filename (the original
+    /// caller path is not retained in OOXML); tint is omitted when no a:duotone overlay is present.
+    /// </summary>
+    private static object ImageDetail(SlidePart slidePart, A.BlipFill blip)
+    {
+        var relId = blip.Blip?.Embed?.Value;
+        var src = relId is not null && slidePart.TryGetPartById(relId, out var part) && part is ImagePart
+            ? Path.GetFileName(part.Uri.OriginalString)
+            : null;
+        var mode = blip.GetFirstChild<A.Tile>() is not null ? "tile" : "stretch";
+        var tint = blip.Blip?.GetFirstChild<A.Duotone>()?.Elements<A.RgbColorModelHex>().LastOrDefault()?
+            .Val?.Value?.ToUpperInvariant();
+
+        // tint is OMITTED when no a:duotone is present (so legacy/untinted blips project two keys).
+        return tint is null
+            ? new { Src = src, Mode = mode }
+            : (object)new { Src = src, Mode = mode, Tint = tint };
+    }
+
     /// <summary>Solid RRGGBB fill of a shape, when one is set with an explicit RGB color.</summary>
     public static string? FillHex(OpenXmlCompositeElement element)
     {
