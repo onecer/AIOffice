@@ -115,6 +115,12 @@ public sealed partial class WordHandler
             sdtPr.AppendChild(new SdtAlias { Val = title });
         }
 
+        // Optional external XML data binding (w:dataBinding): after w:alias, before the kind child.
+        if (BuildDataBinding(props["dataBinding"]) is { } binding)
+        {
+            sdtPr.AppendChild(binding);
+        }
+
         string displayText;
         switch (kind)
         {
@@ -187,6 +193,49 @@ public sealed partial class WordHandler
         var run = new Run(NewText(displayText));
         var content = new SdtContentBlock(new Paragraph(run));
         return new SdtBlock(sdtPr, content);
+    }
+
+    /// <summary>
+    /// Parses props.dataBinding = {xpath (required, non-empty), storeItemId?, prefixMappings?}
+    /// into a w:dataBinding, or returns null when no binding was requested.
+    /// </summary>
+    private static DataBinding? BuildDataBinding(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "props.dataBinding must be an object with an xpath.",
+                "Example: {\"dataBinding\":{\"xpath\":\"/root/client\"}}.");
+        }
+
+        var xpath = obj["xpath"] is { } xp ? NodeToString(xp) : null;
+        if (string.IsNullOrWhiteSpace(xpath))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "props.dataBinding needs a non-empty xpath (the XML path the control binds to).",
+                "Example: {\"dataBinding\":{\"xpath\":\"/root/client\",\"storeItemId\":\"{GUID}\"}}.",
+                candidates: ["xpath"]);
+        }
+
+        // w:storeItemID is REQUIRED by the WordprocessingML schema, so it is always
+        // emitted; when the caller omits it we write an empty value (a valid binding
+        // that is not yet attached to a custom-XML store item).
+        var storeItemId = obj["storeItemId"] is { } sid ? NodeToString(sid) : string.Empty;
+        var binding = new DataBinding { XPath = xpath, StoreItemId = storeItemId };
+
+        if (obj["prefixMappings"] is { } pm && NodeToString(pm) is { Length: > 0 } prefixMappings)
+        {
+            binding.PrefixMappings = prefixMappings;
+        }
+
+        return binding;
     }
 
     // -------------------------------------------------------------------- set
@@ -433,6 +482,24 @@ public sealed partial class WordHandler
         if (kind == "dropdown")
         {
             shape["items"] = DropdownItems(sdt);
+        }
+
+        // External XML data binding (w:dataBinding), only when the control carries one —
+        // legacy controls stay byte-identical (no key emitted when absent).
+        if (sdt.SdtProperties?.GetFirstChild<DataBinding>() is { } binding)
+        {
+            var dataBinding = new Dictionary<string, object?> { ["xpath"] = binding.XPath?.Value };
+            if (binding.StoreItemId?.Value is { Length: > 0 } storeItemId)
+            {
+                dataBinding["storeItemId"] = storeItemId;
+            }
+
+            if (binding.PrefixMappings?.Value is { Length: > 0 } prefixMappings)
+            {
+                dataBinding["prefixMappings"] = prefixMappings;
+            }
+
+            shape["dataBinding"] = dataBinding;
         }
 
         return shape;

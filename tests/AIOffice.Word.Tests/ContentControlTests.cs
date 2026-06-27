@@ -198,4 +198,133 @@ public sealed class ContentControlTests : WordTestBase
         Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
         Assert.Contains("text", ex.Candidates!);
     }
+
+    // ---------------------------------------------------------- dataBinding (v1.19)
+
+    [Fact]
+    public void Control_without_dataBinding_writes_no_dataBinding_and_omits_the_key()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"plain","title":"Plain"}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var sdtPr = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>().Single().SdtProperties!;
+            Assert.Null(sdtPr.GetFirstChild<DataBinding>());
+            // sdtPr children unchanged from today: id, tag, alias, then the text kind child.
+            var kinds = sdtPr.ChildElements.Select(c => c.GetType().Name).ToList();
+            Assert.Equal(["SdtId", "Tag", "SdtAlias", "SdtContentText"], kinds);
+        }
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=plain]" })));
+        Assert.False(got["properties"]!.AsObject().ContainsKey("dataBinding"));
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Minimal_dataBinding_writes_xpath_after_alias_and_round_trips()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"client","title":"Client","dataBinding":{"xpath":"/root/client"}}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var sdtPr = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>().Single().SdtProperties!;
+            var binding = Assert.IsType<DataBinding>(sdtPr.GetFirstChild<DataBinding>());
+            Assert.Equal("/root/client", binding.XPath!.Value);
+            // w:storeItemID is schema-required, so it is always present (empty when omitted).
+            Assert.Equal(string.Empty, binding.StoreItemId!.Value);
+            Assert.Null(binding.PrefixMappings);
+
+            // Order: w:dataBinding sits AFTER w:alias and BEFORE the kind child.
+            var kinds = sdtPr.ChildElements.Select(c => c.GetType().Name).ToList();
+            Assert.Equal(kinds.IndexOf("SdtAlias") + 1, kinds.IndexOf("DataBinding"));
+            Assert.True(kinds.IndexOf("DataBinding") < kinds.IndexOf("SdtContentText"));
+        }
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=client]" })));
+        Assert.Equal("/root/client", got["properties"]!["dataBinding"]!["xpath"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Full_dataBinding_on_dropdown_writes_all_three_attributes_and_round_trips()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"dropdown","tag":"region","items":["North","South"],"dataBinding":{"xpath":"/root/region","storeItemId":"{12345678-1234-1234-1234-1234567890AB}","prefixMappings":"xmlns:ns0='urn:demo'"}}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var sdtPr = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>().Single().SdtProperties!;
+            var binding = sdtPr.GetFirstChild<DataBinding>()!;
+            Assert.Equal("/root/region", binding.XPath!.Value);
+            Assert.Equal("{12345678-1234-1234-1234-1234567890AB}", binding.StoreItemId!.Value);
+            Assert.Equal("xmlns:ns0='urn:demo'", binding.PrefixMappings!.Value);
+
+            // After w:alias-or-id, before the dropdown kind child.
+            var kinds = sdtPr.ChildElements.Select(c => c.GetType().Name).ToList();
+            Assert.True(kinds.IndexOf("DataBinding") < kinds.IndexOf("SdtContentDropDownList"));
+        }
+
+        var projected = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=region]" })))["properties"]!["dataBinding"]!;
+        Assert.Equal("/root/region", projected["xpath"]!.GetValue<string>());
+        Assert.Equal("{12345678-1234-1234-1234-1234567890AB}", projected["storeItemId"]!.GetValue<string>());
+        Assert.Equal("xmlns:ns0='urn:demo'", projected["prefixMappings"]!.GetValue<string>());
+        AssertValidatesClean(file);
+    }
+
+    [Theory]
+    [InlineData("""{"kind":"text","tag":"b","dataBinding":{"xpath":"/r/b"}}""")]
+    [InlineData("""{"kind":"dropdown","tag":"b","items":["A","B"],"dataBinding":{"xpath":"/r/b"}}""")]
+    [InlineData("""{"kind":"date","tag":"b","dataBinding":{"xpath":"/r/b"}}""")]
+    [InlineData("""{"kind":"checkbox","tag":"b","dataBinding":{"xpath":"/r/b"}}""")]
+    public void DataBinding_works_on_every_kind_and_set_remove_still_function(string addProps)
+    {
+        var file = DocWithControl($$"""[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{{addProps}}}]""");
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=b]" })));
+        Assert.Equal("/r/b", got["properties"]!["dataBinding"]!["xpath"]!.GetValue<string>());
+
+        // set still works with a binding present.
+        var kind = got["properties"]!["kind"]!.GetValue<string>();
+        var setProps = kind == "checkbox"
+            ? """{"checked":true}"""
+            : kind == "date" ? """{"text":"2026-06-27"}"""
+            : kind == "dropdown" ? """{"text":"B"}"""
+            : """{"text":"Filled"}""";
+        Edit(file, $$"""[{"op":"set","path":"/sdt[@tag=b]","props":{{setProps}}}]""");
+
+        // binding survives the set, and the control is still removable.
+        var afterSet = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=b]" })));
+        Assert.Equal("/r/b", afterSet["properties"]!["dataBinding"]!["xpath"]!.GetValue<string>());
+        AssertValidatesClean(file);
+
+        Edit(file, """[{"op":"remove","path":"/sdt[@tag=b]"}]""");
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>());
+    }
+
+    [Fact]
+    public void DataBinding_with_empty_xpath_is_invalid_args_naming_xpath()
+    {
+        var file = CreateDoc(title: "BadBinding");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"x","dataBinding":{"xpath":""}}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("xpath", ex.Candidates!);
+    }
+
+    [Fact]
+    public void DataBinding_with_missing_xpath_is_invalid_args_naming_xpath()
+    {
+        var file = CreateDoc(title: "NoXpath");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"x","dataBinding":{"storeItemId":"{GUID}"}}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Contains("xpath", ex.Candidates!);
+    }
 }
