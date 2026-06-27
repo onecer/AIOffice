@@ -1008,6 +1008,41 @@ Each closes a write/read asymmetry; the legacy branch stays first-in-code and by
 
 Agents that target the 1.17.0 surface are byte-for-byte compatible with 1.18.0.
 
+## 7s. 1.19.0 — round-trip the writable, evaluate the proven gap: pptx shape fill object, xlsx AVERAGEIF, docx content-control data binding (additive, surface 1.0)
+
+Package **1.19.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each closes a write/read asymmetry or a single probe-confirmed gap; the legacy branch stays byte-stable.
+
+### pptx — full gradient/image shape fill object on get
+
+- **`get` now projects the FULL gradient/image fill object for a SHAPE** (§6, the read-side inverse of the
+  shape gradient/image fill the contract already writes, mirroring v1.18's slide background): a shape's
+  `fill` reads back as `{type:linear|radial, angle?, stops:[{color, at}]}` (gradient) or
+  `{src, mode:stretch|tile, tint?}` (image), reversed from `a:gradFill`/`a:blipFill`. A **solid** fill still
+  projects the bare hex string and **no fill** still projects `null` — byte-identical to 1.18. Applies to
+  body shapes, group children, and master/layout shapes. (Read-only; the selector-match path stays
+  solid-hex. `describe`/render/diff stay a bare-hex summary, like the v1.18 background precedent.)
+
+### xlsx — AVERAGEIF write-time evaluation
+
+- **`AVERAGEIF` now evaluates at write time and caches the result** (§5, additive): it is the one
+  criteria-aggregate the base engine left as `#NAME?` (its plural twin `AVERAGEIFS` was already evaluated;
+  `SUMIF`/`COUNTIF`/`SUMIFS`/`COUNTIFS` already evaluate natively). `AVERAGEIF(range, criteria)` averages
+  the range; `AVERAGEIF(crit_range, criteria, avg_range)` averages `avg_range` rows whose `crit_range`
+  matches. No match → `#DIV/0!`. (Like `AVERAGEIFS`, `avg_range` must be the same shape as `crit_range` — a
+  mismatched-size `avg_range` caches `#N/A` rather than Excel's anchor-resize.)
+
+### docx — content-control external XML data binding
+
+- **`add type:contentControl` now accepts an optional `dataBinding`** (§4, additive): `{xpath (required),
+  storeItemId?, prefixMappings?}` writes a `w:dataBinding` (CT_DataBinding) under the control's `sdtPr`
+  (after `w:alias`, before the content child). `w:storeItemID` is schema-required, so it is always emitted
+  (empty when not supplied — a valid binding not yet attached to a custom-XML store). Works on all kinds
+  (text/dropdown/date/checkbox). `get` reports `dataBinding` only when present; a control without it is
+  byte-identical to 1.18. Missing/empty `xpath` → `invalid_args`.
+
+Agents that target the 1.18.0 surface are byte-for-byte compatible with 1.19.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

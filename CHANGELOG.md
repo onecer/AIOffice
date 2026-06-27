@@ -70,6 +70,33 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.19.0 — round-trip the writable, evaluate the proven gap: pptx shape fill object · xlsx AVERAGEIF · docx content-control data binding (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a write/read asymmetry or one
+probe-confirmed function gap, byte-stable on its legacy path. Agents that target 1.18.0 are byte-for-byte
+compatible with 1.19.0.
+
+### Added — pptx
+
+- **Full gradient/image shape fill object on `get`**: a shape's `fill` now reads back as the gradient
+  (`{type, angle?, stops}`) or image (`{src, mode, tint?}`) object — the read-side inverse of the shape
+  fill the contract already writes (mirrors v1.18's background read-back), for body shapes, group children,
+  and master/layout shapes. Solid stays a bare hex; no fill stays `null`. Read-only change.
+
+### Added — xlsx
+
+- **AVERAGEIF write-time evaluation**: `AVERAGEIF` (the one criteria-aggregate the base engine left as
+  `#NAME?`; its twin `AVERAGEIFS` was already evaluated, and `SUMIF`/`COUNTIF` evaluate natively) now
+  computes and caches its value. Supports the 2-arg (`range, criteria`) and 3-arg (`crit_range, criteria,
+  avg_range`) forms; no match → `#DIV/0!`.
+
+### Added — docx
+
+- **Content-control external XML data binding**: `add type:contentControl` accepts an optional
+  `dataBinding` (`{xpath, storeItemId?, prefixMappings?}`) writing a `w:dataBinding` under `sdtPr`, on all
+  control kinds. `get` reports it when present; a control without it is byte-identical. Missing/empty
+  `xpath` → `invalid_args`.
+
 ## 1.18.0 — round-trip & prop completions: pptx bg object · xlsx colorScale midpoint · docx tracked merge/if fields (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a write/read asymmetry, byte-stable on
