@@ -5,7 +5,7 @@ namespace AIOffice.Excel.Tests;
 
 /// <summary>
 /// (1.5) Golden-value tests for the scalar functions ClosedXML 0.105 returns
-/// #NAME? for (XLOOKUP / IFS / SWITCH / LET / MAXIFS / MINIFS / AVERAGEIFS):
+/// #NAME? for (XLOOKUP / IFS / SWITCH / LET / MAXIFS / MINIFS / AVERAGEIFS / AVERAGEIF):
 /// aioffice computes the cached value at write time so headless readers get a
 /// real result and no formula_not_evaluated warning. Functions ClosedXML already
 /// evaluates (TEXTJOIN / CONCAT / IFERROR / SUMIFS / COUNTIFS) are verified to
@@ -167,6 +167,192 @@ public sealed class ScalarFunctionTests : ExcelTestBase
         var c1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C1"))));
         // > 2 keeps {3,7,9,5} -> average 6.
         Assert.Equal(6.0, CachedNumber(c1));
+        AssertValidatorClean(file);
+    }
+
+    // ----- AVERAGEIF (singular twin of AVERAGEIFS) ------------------------------
+
+    [Fact]
+    public void Averageif_three_arg_text_criteria_uses_the_average_range()
+    {
+        var file = CreateWorkbook();
+        // Rows whose B = "X" have A = 1, 3, 10 -> average 4.6667. The other rows
+        // (B = "Y") are excluded by the text criteria. average_range is the 3rd arg.
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(1, "X"),
+                new JsonArray(2, "Y"),
+                new JsonArray(3, "X"),
+                new JsonArray(99, "Y"),
+                new JsonArray(10, "X")))) ).IsOk);
+        var env = EditOps(file, SetOp("/Sheet1/D1", ("value", "=AVERAGEIF(B1:B5,\"X\",A1:A5)")));
+        Assert.True(env.IsOk, env.ToJson());
+        Assert.Null(Json(env)["meta"]!["warnings"]); // evaluated, no formula_not_evaluated
+
+        // Read the cached value back after save+reopen (Handler.Get reopens the
+        // saved file; RawCell reads the raw <v> off disk).
+        var d1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/D1"))));
+        Assert.Equal(4.6667, CachedNumber(d1), 4); // (1 + 3 + 10) / 3
+
+        var (formula, cached, _) = RawCell(file, "Sheet1", "D1");
+        Assert.Contains("AVERAGEIF", formula!, StringComparison.Ordinal);
+        Assert.NotNull(cached);
+        Assert.Equal(4.6667, double.Parse(cached!, System.Globalization.CultureInfo.InvariantCulture), 4);
+        AssertValidatorClean(file);
+    }
+
+    [Theory]
+    [InlineData(">5", 15.0)]   // {10,20}            -> 15
+    [InlineData(">=10", 15.0)] // {10,20}            -> 15
+    [InlineData("<=3", 2.0)]   // {1,2,3}            -> 2
+    [InlineData("<3", 1.5)]    // {1,2}              -> 1.5
+    [InlineData("<>10", 6.5)]  // {1,2,3,20}         -> 6.5
+    [InlineData("=2", 2.0)]    // {2}                -> 2
+    public void Averageif_two_arg_operator_criteria_range_doubles_as_average_range(
+        string criteria, double expected)
+    {
+        var file = CreateWorkbook();
+        // 2-arg form: the single range is both the criteria range AND the average
+        // range. Source values 1, 2, 3, 10, 20.
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(1), new JsonArray(2), new JsonArray(3),
+                new JsonArray(10), new JsonArray(20)))) ).IsOk);
+        Assert.True(EditOps(
+            file, SetOp("/Sheet1/C1", ("value", $"=AVERAGEIF(A1:A5,\"{criteria}\")"))).IsOk);
+        var c1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C1"))));
+        Assert.Equal(expected, CachedNumber(c1), 6);
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Averageif_arg_order_pins_criteria_second_and_average_range_last()
+    {
+        var file = CreateWorkbook();
+        // Designed so the 2-arg and 3-arg forms give DIFFERENT answers — if the
+        // reshape mixed up the argument order the numbers would not separate.
+        //   Column A (criteria range B / values): 1, 2, 3, 4
+        //   Column B (average range, distinct):   100, 200, 300, 400
+        // 3-arg AVERAGEIF(A1:A4, ">2", B1:B4): A>2 keeps rows 3,4 -> avg of B = (300+400)/2 = 350.
+        // 2-arg AVERAGEIF(A1:A4, ">2"):        A>2 keeps rows 3,4 -> avg of A = (3+4)/2     = 3.5.
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(1, 100),
+                new JsonArray(2, 200),
+                new JsonArray(3, 300),
+                new JsonArray(4, 400)))) ).IsOk);
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/D1", ("value", "=AVERAGEIF(A1:A4,\">2\",B1:B4)")),
+            SetOp("/Sheet1/D2", ("value", "=AVERAGEIF(A1:A4,\">2\")"))).IsOk);
+
+        var d1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/D1"))));
+        var d2 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/D2"))));
+        Assert.Equal(350.0, CachedNumber(d1)); // averages the 3rd-arg range
+        Assert.Equal(3.5, CachedNumber(d2));   // averages the criteria range itself
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Averageif_no_match_caches_div_by_zero()
+    {
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(1), new JsonArray(2), new JsonArray(3)))) ).IsOk);
+        // No value is > 100 -> Excel returns #DIV/0! (matching AVERAGEIFS).
+        Assert.True(EditOps(file, SetOp("/Sheet1/C1", ("value", "=AVERAGEIF(A1:A3,\">100\")"))).IsOk);
+
+        var (formula, _, _) = RawCell(file, "Sheet1", "C1");
+        Assert.Contains("AVERAGEIF", formula!, StringComparison.Ordinal);
+        var c1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C1"))));
+        // The cached error surfaces as the #DIV/0! token in the read-back value.
+        Assert.Equal("#DIV/0!", c1["value"]!.GetValue<string>());
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Averageif_cell_reference_criteria_resolves_via_criteria_text()
+    {
+        var file = CreateWorkbook();
+        // Criteria is a cell reference C1 (= the text "x"); only rows whose B = "x"
+        // count. average_range A has 10, 30 for those rows -> 20.
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(10, "x"),
+                new JsonArray(40, "y"),
+                new JsonArray(30, "x")))),
+            SetOp("/Sheet1/C1", ("value", "x"))).IsOk);
+        Assert.True(EditOps(file, SetOp("/Sheet1/D1", ("value", "=AVERAGEIF(B1:B3,C1,A1:A3)"))).IsOk);
+
+        var d1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/D1"))));
+        Assert.Equal(20.0, CachedNumber(d1)); // (10 + 30) / 2
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Averageif_malformed_arg_count_does_not_crash()
+    {
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(1), new JsonArray(2)))) ).IsOk);
+        // A single-argument AVERAGEIF is malformed; it must yield a sensible error,
+        // never throw / corrupt the file.
+        var env = EditOps(file, SetOp("/Sheet1/C1", ("value", "=AVERAGEIF(A1:A2)")));
+        Assert.True(env.IsOk, env.ToJson());
+        AssertValidatorClean(file);
+    }
+
+    [Fact]
+    public void Averageif_dispatch_change_is_inert_for_non_averageif_workbooks()
+    {
+        // A workbook with no AVERAGEIF cells must save byte-identically across an
+        // idempotent re-save: adding AVERAGEIF to the dispatch set must not alter
+        // the save path of unrelated formulas (here a natively-evaluated SUMIFS).
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(3), new JsonArray(7), new JsonArray(2)))),
+            SetOp("/Sheet1/C1", ("value", "=SUMIFS(A1:A3,A1:A3,\">2\")"))).IsOk);
+        var bytesBefore = File.ReadAllBytes(file);
+
+        // Re-apply the identical SUMIFS formula to the same cell — an idempotent
+        // edit. With no AVERAGEIF anywhere the save is byte-stable.
+        Assert.True(EditOps(
+            file, SetOp("/Sheet1/C1", ("value", "=SUMIFS(A1:A3,A1:A3,\">2\")"))).IsOk);
+        Assert.Equal(bytesBefore, File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void Averageif_does_not_shadow_native_sumif_or_countif()
+    {
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1", ("values", new JsonArray(
+                new JsonArray(3), new JsonArray(7), new JsonArray(2)))) ).IsOk);
+        // SUMIF / COUNTIF are evaluated natively by ClosedXML 0.105; this change
+        // must NOT add or shadow them — they still carry a real cached value and no
+        // formula_not_evaluated warning.
+        var env = EditOps(
+            file,
+            SetOp("/Sheet1/C1", ("value", "=SUMIF(A1:A3,\">2\")")),
+            SetOp("/Sheet1/C2", ("value", "=COUNTIF(A1:A3,\">2\")")));
+        Assert.True(env.IsOk, env.ToJson());
+        Assert.Null(Json(env)["meta"]!["warnings"]);
+
+        var c1 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C1"))));
+        var c2 = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/C2"))));
+        Assert.Equal(10.0, c1["value"]!.GetValue<double>()); // 3 + 7
+        Assert.Equal(2.0, c2["value"]!.GetValue<double>());  // {3,7}
         AssertValidatorClean(file);
     }
 

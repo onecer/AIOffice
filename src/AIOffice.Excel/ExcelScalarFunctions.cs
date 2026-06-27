@@ -6,7 +6,7 @@ namespace AIOffice.Excel;
 /// <summary>
 /// (1.5) Write-time evaluation of the scalar functions ClosedXML 0.105 leaves as
 /// <c>#NAME?</c>: <c>XLOOKUP</c>, <c>IFS</c>, <c>SWITCH</c>, <c>LET</c>,
-/// <c>MAXIFS</c>, <c>MINIFS</c> and <c>AVERAGEIFS</c>. The cached value is
+/// <c>MAXIFS</c>, <c>MINIFS</c>, <c>AVERAGEIFS</c> and <c>AVERAGEIF</c>. The cached value is
 /// written into the saved cell, so headless readers see a real result instead of
 /// riding a <c>formula_not_evaluated</c> warning (the same discipline as the v1.4
 /// financial fallback).
@@ -29,7 +29,7 @@ internal static class ExcelScalarFunctions
 {
     /// <summary>The scalar functions this module evaluates as a save-time fallback (those ClosedXML returns #NAME? for).</summary>
     public static readonly IReadOnlyList<string> Functions =
-        ["XLOOKUP", "IFS", "SWITCH", "LET", "MAXIFS", "MINIFS", "AVERAGEIFS"];
+        ["XLOOKUP", "IFS", "SWITCH", "LET", "MAXIFS", "MINIFS", "AVERAGEIFS", "AVERAGEIF"];
 
     // A scratch cell far outside any realistic used range; the evaluator writes a
     // sub-expression here, reads ClosedXML's result, and clears it afterwards.
@@ -64,6 +64,7 @@ internal static class ExcelScalarFunctions
                 "MAXIFS" => ConditionalAggregate(sheet, args, Aggregate.Max),
                 "MINIFS" => ConditionalAggregate(sheet, args, Aggregate.Min),
                 "AVERAGEIFS" => ConditionalAggregate(sheet, args, Aggregate.Average),
+                "AVERAGEIF" => AverageIf(sheet, args),
                 _ => XLError.NameNotRecognized,
             };
         }
@@ -385,6 +386,30 @@ internal static class ExcelScalarFunctions
         }
 
         return kind == Aggregate.Max ? matched.Max() : matched.Min();
+    }
+
+    /// <summary>
+    /// =AVERAGEIF(range, criteria, [average_range]) — the singular twin of
+    /// AVERAGEIFS, the one criteria-aggregate ClosedXML 0.105 leaves as #NAME?.
+    /// Its argument order differs from AVERAGEIFS (criteria is 2nd, the optional
+    /// average_range is last), so the call is reshaped onto
+    /// <see cref="ConditionalAggregate"/> whose order is (agg_range, crit_range,
+    /// criteria): the 2-arg form lets <c>range</c> double as the average range,
+    /// the 3-arg form keeps <c>range</c> as the criteria range and uses the
+    /// trailing <c>average_range</c> for aggregation. Returns #DIV/0! on no match.
+    /// </summary>
+    private static XLCellValue AverageIf(IXLWorksheet sheet, IReadOnlyList<string> args)
+    {
+        if (args.Count is not (2 or 3))
+        {
+            return XLError.NoValueAvailable;
+        }
+
+        // ConditionalAggregate wants (agg_range, crit_range, criteria).
+        var reshaped = args.Count == 3
+            ? new[] { args[2], args[0], args[1] }  // (average_range, range, criteria)
+            : new[] { args[0], args[0], args[1] }; // (range, range, criteria) — range doubles as agg range
+        return ConditionalAggregate(sheet, reshaped, Aggregate.Average);
     }
 
     /// <summary>
