@@ -368,4 +368,281 @@ public sealed class FillTests : IDisposable
             [TestEnv.Op("set", path, props: TestEnv.Props(("gradient", gradient)))]);
         TestEnv.AssertFail(envelope, ErrorCodes.UnsupportedFeature);
     }
+
+    // ---- read-side: get projects the FULL shape fill object (1.19) ------------
+
+    private JsonObject Get(string path) => TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+
+    private string AddRect()
+    {
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", "2cm"), ("y", "2cm"), ("w", "10cm"), ("h", "6cm"))));
+        return added["results"]![0]!["target"]!.GetValue<string>();
+    }
+
+    [Fact]
+    public void GetShape_SolidFill_StaysBareHexStringByteIdentical()
+    {
+        // BYTE-STABLE: a:solidFill projects Fill as the bare RRGGBB hex string FillHex returns today,
+        // NOT an object and with no new field — identical to the pre-1.19 get output.
+        Create();
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("fill", "4472C4"))));
+        var path = added["results"]![0]!["target"]!.GetValue<string>();
+
+        var fill = Get(path)["fill"];
+        var value = Assert.IsType<JsonValue>(fill, exactMatch: false);
+        Assert.Equal("4472C4", value.GetValue<string>());
+    }
+
+    [Fact]
+    public void GetShape_NoFill_ProjectsNull()
+    {
+        // BYTE-STABLE: a shape with no explicit fill projects Fill=null (omitted) exactly as today.
+        Create();
+        var path = AddRect();
+
+        Assert.Null(Get(path)["fill"]);
+    }
+
+    [Fact]
+    public void GetShape_GradientFill_ProjectsTheFullObjectAndRoundTrips()
+    {
+        Create();
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("gradient", LinearGradient(45)))));
+
+        var fill = Assert.IsType<JsonObject>(Get(path)["fill"]);
+        Assert.Equal("linear", fill["type"]!.GetValue<string>());
+        // sub-0.1deg drift tolerance (a:lin@ang ÷ 60000 → degrees), mirroring v1.18's background read-back.
+        Assert.Equal(45.0, fill["angle"]!.GetValue<double>(), 1);
+        var stops = Assert.IsType<JsonArray>(fill["stops"]);
+        Assert.Equal(2, stops.Count);
+        Assert.Equal("0EA5E9", stops[0]!["color"]!.GetValue<string>());
+        Assert.Equal(0.0, stops[0]!["at"]!.GetValue<double>(), 1);
+        Assert.Equal("6366F1", stops[1]!["color"]!.GetValue<string>());
+        Assert.Equal(100.0, stops[1]!["at"]!.GetValue<double>(), 1);
+
+        // Re-feed the projected object back into set (it is the shape the 'gradient' key carries on
+        // write) → byte-identical a:gradFill.
+        string gradXmlBefore;
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            gradXmlBefore = doc.PresentationPart!.SlideParts.Single().Slide!
+                .Descendants<P.Shape>().Single(s => s.ShapeProperties?.GetFirstChild<A.GradientFill>() is not null)
+                .ShapeProperties!.GetFirstChild<A.GradientFill>()!.OuterXml;
+        }
+
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("gradient", fill.DeepClone()))));
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var gradXmlAfter = doc.PresentationPart!.SlideParts.Single().Slide!
+                .Descendants<P.Shape>().Single(s => s.ShapeProperties?.GetFirstChild<A.GradientFill>() is not null)
+                .ShapeProperties!.GetFirstChild<A.GradientFill>()!.OuterXml;
+            Assert.Equal(gradXmlBefore, gradXmlAfter);
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetShape_RadialGradientFill_OmitsAngleKey()
+    {
+        Create();
+        var path = AddRect();
+        var gradient = new JsonObject
+        {
+            ["type"] = "radial",
+            ["stops"] = new JsonArray(
+                new JsonObject { ["color"] = "FFFFFF", ["at"] = 0 },
+                new JsonObject { ["color"] = "0F172A", ["at"] = 100 }),
+        };
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("gradient", gradient))));
+
+        var fill = Assert.IsType<JsonObject>(Get(path)["fill"]);
+        Assert.Equal("radial", fill["type"]!.GetValue<string>());
+        Assert.False(fill.ContainsKey("angle"), "radial writes a:path, not a:lin — there is NO angle key");
+        Assert.Equal(2, Assert.IsType<JsonArray>(fill["stops"]).Count);
+    }
+
+    [Fact]
+    public void GetShape_ImageFill_ProjectsSrcModeTintAndRoundTrips()
+    {
+        Create();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(
+            ("image", new JsonObject { ["src"] = "banner.png", ["mode"] = "tile", ["tint"] = "1E40AF" }))));
+
+        var fill = Assert.IsType<JsonObject>(Get(path)["fill"]);
+        // src is the embedded media-part filename (the original caller path is not stored in OOXML).
+        Assert.EndsWith(".png", fill["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("tile", fill["mode"]!.GetValue<string>());
+        Assert.Equal("1E40AF", fill["tint"]!.GetValue<string>());
+
+        // Re-feed projected object back into set (the shape the 'image' key carries) → valid a:blipFill.
+        var reSrc = fill["src"]!.GetValue<string>();
+        File.WriteAllBytes(_ws.PathOf(reSrc), TestImages.Png(8, 8));
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("image", fill.DeepClone()))));
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            Assert.Single(doc.PresentationPart!.SlideParts.Single().Slide!.Descendants<A.BlipFill>());
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetShape_ImageFillWithoutTint_OmitsTheTintKey()
+    {
+        Create();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("image", "banner.png"))));
+
+        var fill = Assert.IsType<JsonObject>(Get(path)["fill"]);
+        Assert.EndsWith(".png", fill["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("stretch", fill["mode"]!.GetValue<string>());
+        Assert.False(fill.ContainsKey("tint"), "tint is OMITTED when no a:duotone is present");
+    }
+
+    // ---- coverage: same Fill shape on a group child + master/layout shape ------
+
+    [Fact]
+    public void GetGroupChild_GradientFill_ProjectsTheSameObjectShape()
+    {
+        Create();
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("gradient", LinearGradient(90)))));
+        var childId = uint.Parse(
+            path.Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+        var otherId = uint.Parse(
+            AddRect().Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group",
+            props: TestEnv.Props(("shapes", new JsonArray("@" + childId, "@" + otherId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+
+        var fill = Assert.IsType<JsonObject>(Get(groupPath + "/shape[@id=" + childId + "]")["fill"]);
+        Assert.Equal("linear", fill["type"]!.GetValue<string>());
+        Assert.Equal(2, Assert.IsType<JsonArray>(fill["stops"]).Count);
+    }
+
+    [Fact]
+    public void GetGroupChild_ImageFill_ResolvesSrcOffTheSlidePart()
+    {
+        Create();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("image", "banner.png"))));
+        var childId = uint.Parse(
+            path.Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+        var otherId = uint.Parse(
+            AddRect().Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group",
+            props: TestEnv.Props(("shapes", new JsonArray("@" + childId, "@" + otherId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+
+        // The blipFill relId resolves off the slide part (proves GroupDetail passes the right part).
+        var fill = Assert.IsType<JsonObject>(Get(groupPath + "/shape[@id=" + childId + "]")["fill"]);
+        Assert.EndsWith(".png", fill["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("stretch", fill["mode"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void GetLayoutShape_GradientFill_ProjectsTheSameObjectShape()
+    {
+        Create();
+        var added = Edit(TestEnv.Op("add", "/master[1]/layout[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", "2cm"), ("y", "2cm"), ("w", "10cm"), ("h", "6cm"))));
+        var shapePath = added["results"]![0]!["target"]!.GetValue<string>();
+        Edit(TestEnv.Op("set", shapePath, props: TestEnv.Props(("gradient", LinearGradient(90)))));
+
+        var fill = Assert.IsType<JsonObject>(Get(shapePath)["fill"]);
+        Assert.Equal("linear", fill["type"]!.GetValue<string>());
+        Assert.Equal(2, Assert.IsType<JsonArray>(fill["stops"]).Count);
+    }
+
+    [Fact]
+    public void GetLayoutShape_ImageFill_ResolvesSrcOffTheLayoutPart()
+    {
+        Create();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var added = Edit(TestEnv.Op("add", "/master[1]/layout[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", "2cm"), ("y", "2cm"), ("w", "10cm"), ("h", "6cm"))));
+        var shapePath = added["results"]![0]!["target"]!.GetValue<string>();
+        Edit(TestEnv.Op("set", shapePath, props: TestEnv.Props(("image", "banner.png"))));
+
+        // The blipFill relId resolves off the LAYOUT part (proves the part-resolution generalization).
+        var fill = Assert.IsType<JsonObject>(Get(shapePath)["fill"]);
+        Assert.EndsWith(".png", fill["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("stretch", fill["mode"]!.GetValue<string>());
+    }
+
+    // ---- negatives: no area fill / pattFill / empty spPr → null, no null-ref ---
+
+    [Fact]
+    public void GetPicture_NoAreaFill_ProjectsNullWithoutNullRef()
+    {
+        Create();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "image", props: TestEnv.Props(
+            ("src", "banner.png"), ("x", "2cm"), ("y", "2cm"), ("w", "6cm"), ("h", "3cm"))));
+        var path = added["results"]![0]!["target"]!.GetValue<string>();
+
+        // A P.Picture has a blipFill in its spPr image content, not an *area* fill → Fill=null.
+        Assert.Null(Get(path)["fill"]);
+    }
+
+    [Fact]
+    public void GetConnector_NoFill_ProjectsNull()
+    {
+        Create();
+        var a = AddRect();
+        var b = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", "14cm"), ("y", "2cm"), ("w", "4cm"), ("h", "3cm"))));
+        var bPath = b["results"]![0]!["target"]!.GetValue<string>();
+        var aId = uint.Parse(a.Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+        var bId = uint.Parse(bPath.Split("@id=")[1].TrimEnd(']'), System.Globalization.CultureInfo.InvariantCulture);
+
+        var connected = Edit(TestEnv.Op("add", "/slide[1]", type: "connector", props: TestEnv.Props(
+            ("from", JsonValue.Create("@" + aId)), ("to", JsonValue.Create("@" + bId)))));
+        var connPath = connected["results"]![0]!["target"]!.GetValue<string>();
+
+        // A P.ConnectionShape carries a line, not an area fill → Fill=null, no null-ref.
+        Assert.Null(Get(connPath)["fill"]);
+    }
+
+    [Fact]
+    public void GetShape_PatternFill_ProjectsNull()
+    {
+        // pattFill is neither solid/gradient/blip → FillDetail returns null (no new projection).
+        Create();
+        var path = AddRect();
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), true))
+        {
+            var shape = doc.PresentationPart!.SlideParts.Single().Slide!.Descendants<P.Shape>().Last();
+            shape.ShapeProperties!.Append(new A.PatternFill { Preset = A.PresetPatternValues.Cross });
+            doc.PresentationPart!.SlideParts.Single().Slide!.Save();
+        }
+
+        Assert.Null(Get(path)["fill"]);
+    }
+
+    // ---- selector match semantics stay hex-only (FillHex at :456) -------------
+
+    [Fact]
+    public void Selector_OverGradientShape_StaysHexOnly_NoMatch()
+    {
+        // A selector over fill still uses FillHex (non-solid → null): a gradient shape does not match
+        // any =RRGGBB predicate — byte-identical match semantics, unchanged by the FillDetail flips.
+        Create();
+        var path = AddRect();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("gradient", LinearGradient(90)))));
+
+        // Selector filtering stays hex-only: the gradient's start color is NOT a solid fill → 0 matches.
+        var data = TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape[fill=0EA5E9]"))));
+        Assert.Equal(0, data["count"]!.GetValue<int>());
+    }
 }

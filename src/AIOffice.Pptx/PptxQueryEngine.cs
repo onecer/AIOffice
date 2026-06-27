@@ -613,7 +613,7 @@ internal static class PptxQueryEngine
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
             W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
             H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
-            Fill = PptxDoc.FillHex(view.Element),
+            Fill = PptxDoc.FillDetail(view.Element, slidePart),
             LineColor = PptxDoc.LineHex(view.Element),
             Hyperlink = PptxHyperlinks.Resolve(presentation, slidePart, view.Element),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
@@ -679,7 +679,7 @@ internal static class PptxQueryEngine
                 Y = childGeometry is { } cg2 ? Units.EmuToCm(cg2.Y) : (double?)null,
                 W = childGeometry is { } cg3 ? Units.EmuToCm(cg3.Cx) : (double?)null,
                 H = childGeometry is { } cg4 ? Units.EmuToCm(cg4.Cy) : (double?)null,
-                Fill = PptxDoc.FillHex(child.Element),
+                Fill = PptxDoc.FillDetail(child.Element, slidePart),
                 Font = childParagraph is null ? null : FontInfo(childParagraph),
                 Autofit = PptxDoc.Autofit(child.Element),
                 VAlign = childTextFrame?.VAlign,
@@ -786,9 +786,13 @@ internal static class PptxQueryEngine
     public static object MasterShapeDetail(PresentationPart presentation, PptxAddress address)
     {
         var masterPart = PptxDoc.ResolveMaster(presentation, address.MasterIndex, address.Raw);
-        var tree = address.LayoutIndex is { } layoutIndex
-            ? PptxDoc.RequireShapeTree(PptxDoc.ResolveLayout(masterPart, address.MasterIndex, layoutIndex, address.Raw))
-            : PptxDoc.RequireShapeTree(masterPart);
+        // The part owning the shape (layout when addressed, else the master) resolves blipFill relIds.
+        OpenXmlPartContainer shapePart = address.LayoutIndex is { } layoutIndex
+            ? PptxDoc.ResolveLayout(masterPart, address.MasterIndex, layoutIndex, address.Raw)
+            : masterPart;
+        var tree = shapePart is SlideLayoutPart layout
+            ? PptxDoc.RequireShapeTree(layout)
+            : PptxDoc.RequireShapeTree((SlideMasterPart)shapePart);
 
         var containerPath = address.CanonicalContainerPath;
         var label = address.LayoutIndex is { } li
@@ -814,7 +818,7 @@ internal static class PptxQueryEngine
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,
             W = geometry is { } g3 ? Units.EmuToCm(g3.Cx) : (double?)null,
             H = geometry is { } g4 ? Units.EmuToCm(g4.Cy) : (double?)null,
-            Fill = PptxDoc.FillHex(view.Element),
+            Fill = PptxDoc.FillDetail(view.Element, shapePart),
             Font = firstParagraph is null ? null : FontInfo(firstParagraph),
         };
     }

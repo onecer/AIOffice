@@ -548,10 +548,10 @@ internal static class PptxDoc
     /// consumes: <c>{src, mode, tint?}</c>. src is the embedded media-part filename (the original
     /// caller path is not retained in OOXML); tint is omitted when no a:duotone overlay is present.
     /// </summary>
-    private static object ImageDetail(SlidePart slidePart, A.BlipFill blip)
+    private static object ImageDetail(OpenXmlPartContainer container, A.BlipFill blip)
     {
         var relId = blip.Blip?.Embed?.Value;
-        var src = relId is not null && slidePart.TryGetPartById(relId, out var part) && part is ImagePart
+        var src = relId is not null && container.TryGetPartById(relId, out var part) && part is ImagePart
             ? Path.GetFileName(part.Uri.OriginalString)
             : null;
         var mode = blip.GetFirstChild<A.Tile>() is not null ? "tile" : "stretch";
@@ -571,6 +571,48 @@ internal static class PptxDoc
             ?? (element as P.Picture)?.ShapeProperties
             ?? (element as P.ConnectionShape)?.ShapeProperties;
         return properties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+    }
+
+    /// <summary>
+    /// The projected <c>fill</c> for a shape (P.Shape / P.Picture / P.ConnectionShape), the read-side
+    /// inverse of the gradient/image fill the contract writes — mirroring <see cref="BackgroundDetail"/>
+    /// (PURE READ-SIDE):
+    /// <list type="bullet">
+    /// <item>solid → the bare RRGGBB hex string, BYTE-IDENTICAL to <see cref="FillHex"/>.</item>
+    /// <item>gradient → <c>{type, angle?, stops:[{color, at}]}</c> via <see cref="GradientDetail"/> (radial omits angle).</item>
+    /// <item>image → <c>{src, mode, tint?}</c> via <see cref="ImageDetail"/>, src resolved off <paramref name="part"/>.</item>
+    /// <item>none / pattFill / empty spPr → null.</item>
+    /// </list>
+    /// <paramref name="part"/> is the part owning the relationship for a:blipFill (slide part for slide
+    /// shapes, the layout/master part for master shapes).
+    /// </summary>
+    public static object? FillDetail(OpenXmlCompositeElement element, OpenXmlPartContainer part)
+    {
+        var properties = (element as P.Shape)?.ShapeProperties
+            ?? (element as P.Picture)?.ShapeProperties
+            ?? (element as P.ConnectionShape)?.ShapeProperties;
+        if (properties is null)
+        {
+            return null;
+        }
+
+        // Solid stays first-in-code and byte-stable: the bare hex FillHex returns today.
+        if (properties.GetFirstChild<A.SolidFill>() is { } solid)
+        {
+            return solid.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
+        }
+
+        if (properties.GetFirstChild<A.GradientFill>() is { } gradient)
+        {
+            return GradientDetail(gradient);
+        }
+
+        if (properties.GetFirstChild<A.BlipFill>() is { } blip)
+        {
+            return ImageDetail(part, blip);
+        }
+
+        return null;
     }
 
     /// <summary>Solid RRGGBB outline (stroke) color of a shape, when one is set explicitly.</summary>
