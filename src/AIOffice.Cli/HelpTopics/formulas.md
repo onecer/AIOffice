@@ -36,10 +36,11 @@ the text and delimiters may be string literals or cell references.
 
 ## scalar functions (1.5)
 
-`=XLOOKUP`, `=IFS`, `=SWITCH`, `=LET`, `=MAXIFS`, `=MINIFS` and `=AVERAGEIFS` —
-which the base engine returns `#NAME?` for — are now **evaluated** at write time
-and the cached scalar value is written, so headless readers see a real result with
-no `formula_not_evaluated` warning.
+`=XLOOKUP`, `=IFS`, `=SWITCH`, `=LET`, `=MAXIFS`, `=MINIFS`, `=AVERAGEIFS` and
+`=AVERAGEIF` (1.19) — which the base engine returns `#NAME?` for — are now
+**evaluated** at write time and the cached scalar value is written, so headless
+readers see a real result with no `formula_not_evaluated` warning. (`=SUMIF` and
+`=COUNTIF` already evaluate natively in the base engine.)
 
 ```jsonc
 {op:"set", path:"/Sheet1/D2", props:{value:"=XLOOKUP(\"Widget\",A1:A20,B1:B20)"}} // exact match (default)

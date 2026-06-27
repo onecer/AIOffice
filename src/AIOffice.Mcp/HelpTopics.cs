@@ -931,9 +931,9 @@ public static class HelpTopics
                   {"op":"set","path":"/Sheet1/D1","props":{"value":"=UNIQUE(A1:A20)"}}  -> spills distinct values; get D1 shows the spill range.
                   =TEXTSPLIT("a,b;c,d",",",";") spills a 2x2 grid; the text/delimiters may be cell refs.
                   spill_blocked (1.4 error): result rectangle would overwrite a non-empty cell -> nothing written; clear the named range first.
-                Scalar functions (EVALUATED 1.5): =XLOOKUP, =IFS, =SWITCH, =LET, =MAXIFS, =MINIFS, =AVERAGEIFS -> the cell carries a cached value.
+                Scalar functions (EVALUATED 1.5, +AVERAGEIF 1.19): =XLOOKUP, =IFS, =SWITCH, =LET, =MAXIFS, =MINIFS, =AVERAGEIFS, =AVERAGEIF -> the cell carries a cached value.
                   XLOOKUP does exact match (default) or approximate (match_mode -1/1) and returns if_not_found on a miss; LET binds names left-to-right then evaluates the calc.
-                  Already evaluated by the base engine (carry a cached value too): TEXTJOIN, CONCAT, CONCATENATE, IFERROR, SUMIFS, COUNTIFS, and the classic SUM/IF/VLOOKUP/INDEX/MATCH/TEXT/DATE set.
+                  Already evaluated by the base engine (carry a cached value too): TEXTJOIN, CONCAT, CONCATENATE, IFERROR, SUMIF, COUNTIF, SUMIFS, COUNTIFS, and the classic SUM/IF/VLOOKUP/INDEX/MATCH/TEXT/DATE set.
                 Financial (EVALUATED 1.4): RATE, IRR, XIRR, NPV, PV, FV, PMT, NPER -> the cell carries a cached numeric value (iterative ones converge).
                 Still NOT evaluated (honest formula_not_evaluated warning, never a wrong value): stored LAMBDA and the lambda-helpers MAP/REDUCE/SCAN/BYROW/BYCOL — Excel computes them on open.
                 Backward-compatible: the newly-evaluated functions no longer raise formula_not_evaluated — cells that used to warn now carry a cached value; an agent that handled the warning still works.
