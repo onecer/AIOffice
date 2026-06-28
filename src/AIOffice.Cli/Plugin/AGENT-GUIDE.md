@@ -8,10 +8,12 @@
 
 ## Driving aioffice
 One self-contained binary reads/edits/renders real `.docx/.xlsx/.pptx`. Two equivalent ways:
-- **MCP tools**: `office_create office_edit office_read office_get office_query office_render office_validate office_audit office_help office_schema office_status`.
+- **MCP tools**: `office_create office_edit office_read office_get office_query office_render office_validate office_audit office_help office_schema office_status`. Some hosts **namespace** MCP tools — they may appear as `mcp__aioffice__office_create` or `mcp__aioffice.aioffice__office_create`. Call whichever `*office_create` / `*office_edit` the host exposes; match by the `office_*` suffix, not the exact bare name.
 - **CLI** via Bash: `aioffice <verb> <file> …` (on PATH after install).
 
-Every call prints one JSON envelope `{ok, data, error{code,message,suggestion,candidates?}, meta}`; on failure read `suggestion`/`candidates`. Use aioffice for any `.docx/.xlsx/.pptx`; never hand-roll OOXML or use python-pptx/pptxgenjs/SheetJS.
+Every call prints one JSON envelope `{ok, data, error{code,message,suggestion,candidates?}, meta}`; on failure read `suggestion`/`candidates`.
+
+**Producing a `.pptx/.docx/.xlsx` means producing that actual file with aioffice.** Do NOT satisfy the request by writing an `.html` "slides" page, a Markdown outline, or hand-rolled OOXML, and do NOT silently substitute python-pptx/pptxgenjs/SheetJS. If the aioffice MCP tools aren't reachable in your host, fall back to the `aioffice` **CLI via Bash**; if neither is available, say so plainly — never hand back a webpage and call it a deck.
 
 ## RULE 0 — never ship default-white
 A bare `create` + title + bullets + `kind`-only chart = crude. You MUST set a theme/master, position shapes with fills, set `fontSize`+`color` on every text box, and give every chart `dataLabels`+`legend`+`axisTitles`. Polish is opt-in.
