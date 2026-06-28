@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">AIOffice format capability map</title>
+  <desc id="desc">Capability map for Word, Excel, and PowerPoint support in AIOffice.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f6f7fb; }
+      .ink { fill: #111827; }
+      .muted { fill: #667085; }
+      .doc { fill: #e8f2ff; stroke: #2563eb; }
+      .xls { fill: #e9f9ef; stroke: #15803d; }
+      .ppt { fill: #fff1e8; stroke: #c2410c; }
+      .shared { fill: #ffffff; stroke: #cbd5e1; }
+      .chip { fill: #ffffff; stroke: #d0d5dd; stroke-width: 1.4; }
+      .line { stroke: #cbd5e1; stroke-width: 2; }
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      .h1 { font-size: 34px; font-weight: 760; }
+      .h2 { font-size: 24px; font-weight: 780; }
+      .body { font-size: 16px; }
+      .small { font-size: 14px; }
+      .label { font-size: 13px; font-weight: 760; letter-spacing: .4px; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="ink h1" x="56" y="66">Three format handlers, one editing model</text>
+  <text class="muted body" x="58" y="100">All formats share read/query/get/edit/render/validate/audit/diff/convert, while each handler owns format-native depth.</text>
+
+  <rect class="doc" x="64" y="146" width="344" height="392" rx="24" stroke-width="2.5"/>
+  <text class="label" fill="#2563eb" x="94" y="190">WORD / DOCX</text>
+  <text class="ink h2" x="94" y="224">Narrative documents</text>
+  <rect class="chip" x="94" y="256" width="126" height="36" rx="18"/>
+  <text class="ink small" x="119" y="279">Styles</text>
+  <rect class="chip" x="232" y="256" width="134" height="36" rx="18"/>
+  <text class="ink small" x="258" y="279">Tables</text>
+  <rect class="chip" x="94" y="304" width="126" height="36" rx="18"/>
+  <text class="ink small" x="116" y="327">Track changes</text>
+  <rect class="chip" x="232" y="304" width="134" height="36" rx="18"/>
+  <text class="ink small" x="258" y="327">Comments</text>
+  <rect class="chip" x="94" y="352" width="126" height="36" rx="18"/>
+  <text class="ink small" x="114" y="375">Fields</text>
+  <rect class="chip" x="232" y="352" width="134" height="36" rx="18"/>
+  <text class="ink small" x="253" y="375">Equations</text>
+  <rect class="chip" x="94" y="400" width="126" height="36" rx="18"/>
+  <text class="ink small" x="112" y="423">Citations</text>
+  <rect class="chip" x="232" y="400" width="134" height="36" rx="18"/>
+  <text class="ink small" x="255" y="423">Mail merge</text>
+  <text class="muted body" x="94" y="486">Best for reports, memos, contracts,</text>
+  <text class="muted body" x="94" y="512">letters, capability docs, and reviews.</text>
+
+  <rect class="xls" x="468" y="146" width="344" height="392" rx="24" stroke-width="2.5"/>
+  <text class="label" fill="#15803d" x="498" y="190">EXCEL / XLSX</text>
+  <text class="ink h2" x="498" y="224">Dashboards and models</text>
+  <rect class="chip" x="498" y="256" width="126" height="36" rx="18"/>
+  <text class="ink small" x="522" y="279">Formulas</text>
+  <rect class="chip" x="636" y="256" width="134" height="36" rx="18"/>
+  <text class="ink small" x="664" y="279">Charts</text>
+  <rect class="chip" x="498" y="304" width="126" height="36" rx="18"/>
+  <text class="ink small" x="520" y="327">Pivots</text>
+  <rect class="chip" x="636" y="304" width="134" height="36" rx="18"/>
+  <text class="ink small" x="659" y="327">Slicers</text>
+  <rect class="chip" x="498" y="352" width="126" height="36" rx="18"/>
+  <text class="ink small" x="516" y="375">Conditional</text>
+  <rect class="chip" x="636" y="352" width="134" height="36" rx="18"/>
+  <text class="ink small" x="663" y="375">Print setup</text>
+  <rect class="chip" x="498" y="400" width="126" height="36" rx="18"/>
+  <text class="ink small" x="522" y="423">Goal seek</text>
+  <rect class="chip" x="636" y="400" width="134" height="36" rx="18"/>
+  <text class="ink small" x="656" y="423">Scenarios</text>
+  <text class="muted body" x="498" y="486">Best for KPI boards, budgets,</text>
+  <text class="muted body" x="498" y="512">analysis workbooks, and exports.</text>
+
+  <rect class="ppt" x="872" y="146" width="344" height="392" rx="24" stroke-width="2.5"/>
+  <text class="label" fill="#c2410c" x="902" y="190">POWERPOINT / PPTX</text>
+  <text class="ink h2" x="902" y="224">Designed presentations</text>
+  <rect class="chip" x="902" y="256" width="126" height="36" rx="18"/>
+  <text class="ink small" x="926" y="279">Shapes</text>
+  <rect class="chip" x="1040" y="256" width="134" height="36" rx="18"/>
+  <text class="ink small" x="1066" y="279">Masters</text>
+  <rect class="chip" x="902" y="304" width="126" height="36" rx="18"/>
+  <text class="ink small" x="926" y="327">Charts</text>
+  <rect class="chip" x="1040" y="304" width="134" height="36" rx="18"/>
+  <text class="ink small" x="1062" y="327">SmartArt</text>
+  <rect class="chip" x="902" y="352" width="126" height="36" rx="18"/>
+  <text class="ink small" x="921" y="375">Connectors</text>
+  <rect class="chip" x="1040" y="352" width="134" height="36" rx="18"/>
+  <text class="ink small" x="1064" y="375">Animations</text>
+  <rect class="chip" x="902" y="400" width="126" height="36" rx="18"/>
+  <text class="ink small" x="926" y="423">Tables</text>
+  <rect class="chip" x="1040" y="400" width="134" height="36" rx="18"/>
+  <text class="ink small" x="1067" y="423">Notes</text>
+  <text class="muted body" x="902" y="486">Best for decks, explainers, launch</text>
+  <text class="muted body" x="902" y="512">slides, diagrams, and briefings.</text>
+
+  <rect class="shared" x="164" y="584" width="952" height="74" rx="22" stroke-width="2"/>
+  <text class="ink h2" x="204" y="628">Shared contract:</text>
+  <text class="muted body" x="430" y="628">one envelope, stable paths, sandbox, snapshots, render, validate, audit, diff, convert</text>
+</svg>

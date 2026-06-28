@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">AIOffice architecture overview</title>
+  <desc id="desc">CLI, MCP, and plugin entry points feed one contract core, then format handlers and services produce real Office files and render outputs.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7fafc; }
+      .ink { fill: #14213d; }
+      .muted { fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .panel-strong { fill: #eef6ff; stroke: #2f6fbd; stroke-width: 2.5; }
+      .teal { fill: #0f766e; }
+      .coral { fill: #c2410c; }
+      .gold { fill: #b7791f; }
+      .violet { fill: #6d28d9; }
+      .soft-teal { fill: #d9f7f2; stroke: #0f766e; stroke-width: 1.5; }
+      .soft-coral { fill: #fff0e7; stroke: #c2410c; stroke-width: 1.5; }
+      .soft-gold { fill: #fff7d6; stroke: #b7791f; stroke-width: 1.5; }
+      .soft-violet { fill: #f0e9ff; stroke: #6d28d9; stroke-width: 1.5; }
+      .line { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #94a3b8; stroke-width: 2; fill: none; stroke-dasharray: 7 7; }
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      .h1 { font-size: 34px; font-weight: 750; }
+      .h2 { font-size: 20px; font-weight: 750; }
+      .body { font-size: 17px; }
+      .small { font-size: 14px; }
+      .label { font-size: 13px; font-weight: 700; letter-spacing: .5px; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="720"/>
+  <text class="ink h1" x="56" y="66">AIOffice is one contract, two transports, three real Office formats</text>
+  <text class="muted body" x="58" y="98">The CLI and MCP server drive the same handlers. Errors, paths, revisions, snapshots, and rendering stay identical.</text>
+
+  <rect class="panel" x="56" y="146" width="260" height="124" rx="16"/>
+  <text class="teal label" x="84" y="184">ENTRY POINT</text>
+  <text class="ink h2" x="84" y="214">CLI</text>
+  <text class="muted body" x="84" y="244">aioffice create/edit/render</text>
+
+  <rect class="panel" x="56" y="306" width="260" height="124" rx="16"/>
+  <text class="violet label" x="84" y="344">ENTRY POINT</text>
+  <text class="ink h2" x="84" y="374">MCP stdio tools</text>
+  <text class="muted body" x="84" y="404">office_create, office_edit...</text>
+
+  <rect class="panel" x="56" y="466" width="260" height="124" rx="16"/>
+  <text class="gold label" x="84" y="504">INSTALLER</text>
+  <text class="ink h2" x="84" y="534">plugin install</text>
+  <text class="muted body" x="84" y="564">Registers MCP + skill guide</text>
+
+  <rect class="panel-strong" x="410" y="196" width="310" height="300" rx="22"/>
+  <text class="coral label" x="452" y="240">CONTRACT CORE</text>
+  <text class="ink h2" x="452" y="274">AIOffice.Core</text>
+  <text class="muted body" x="452" y="312">- one JSON envelope</text>
+  <text class="muted body" x="452" y="342">- stable 1-based addressing</text>
+  <text class="muted body" x="452" y="372">- workspace sandbox</text>
+  <text class="muted body" x="452" y="402">- snapshots and rev guards</text>
+  <text class="muted body" x="452" y="432">- errors with suggestions</text>
+
+  <path class="line" d="M316 208 C360 208 366 250 410 250"/>
+  <path class="line" d="M316 368 L410 346"/>
+  <path class="line" d="M316 528 C360 528 366 442 410 442"/>
+
+  <rect class="soft-teal" x="806" y="144" width="172" height="106" rx="14"/>
+  <text class="ink h2" x="846" y="185">Word</text>
+  <text class="muted small" x="838" y="214">docx handler</text>
+
+  <rect class="soft-gold" x="806" y="274" width="172" height="106" rx="14"/>
+  <text class="ink h2" x="844" y="315">Excel</text>
+  <text class="muted small" x="838" y="344">xlsx handler</text>
+
+  <rect class="soft-violet" x="806" y="404" width="172" height="106" rx="14"/>
+  <text class="ink h2" x="825" y="445">PowerPoint</text>
+  <text class="muted small" x="838" y="474">pptx handler</text>
+
+  <rect class="soft-coral" x="806" y="544" width="172" height="86" rx="14"/>
+  <text class="ink h2" x="846" y="582">Services</text>
+  <text class="muted small" x="826" y="608">render, audit, diff</text>
+
+  <path class="line" d="M720 274 C760 224 766 198 806 198"/>
+  <path class="line" d="M720 346 L806 328"/>
+  <path class="line" d="M720 418 C760 456 766 456 806 456"/>
+  <path class="line" d="M720 472 C760 548 766 586 806 586"/>
+
+  <rect class="panel" x="1062" y="188" width="160" height="98" rx="14"/>
+  <text class="ink h2" x="1102" y="226">OOXML</text>
+  <text class="muted small" x="1098" y="253">.docx .xlsx .pptx</text>
+
+  <rect class="panel" x="1062" y="336" width="160" height="98" rx="14"/>
+  <text class="ink h2" x="1105" y="374">JSON</text>
+  <text class="muted small" x="1090" y="401">ok, data, error, meta</text>
+
+  <rect class="panel" x="1062" y="484" width="160" height="98" rx="14"/>
+  <text class="ink h2" x="1097" y="522">Preview</text>
+  <text class="muted small" x="1092" y="549">PNG, PDF, browser</text>
+
+  <path class="line" d="M978 198 C1016 198 1024 237 1062 237"/>
+  <path class="line" d="M978 328 C1016 328 1024 385 1062 385"/>
+  <path class="line" d="M978 586 C1016 586 1024 533 1062 533"/>
+  <path class="dash" d="M978 456 C1016 456 1024 385 1062 385"/>
+
+  <text class="muted small" x="58" y="664">Source of truth: command surface + schema/help in the binary. Detailed tables stay in office_help so MCP schemas stay compact.</text>
+</svg>

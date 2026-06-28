@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Agent workflow loop for AIOffice</title>
+  <desc id="desc">The intended agent loop reads, queries, edits, validates, renders, inspects, and fixes Office documents until they are ready to ship.</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfbf7; }
+      .ink { fill: #172033; }
+      .muted { fill: #667085; }
+      .card { fill: #ffffff; stroke: #d0d5dd; stroke-width: 2; }
+      .center { fill: #172033; }
+      .teal { fill: #0f766e; }
+      .blue { fill: #2563eb; }
+      .gold { fill: #b7791f; }
+      .coral { fill: #c2410c; }
+      .violet { fill: #6d28d9; }
+      .green { fill: #15803d; }
+      .arrow { stroke: #475467; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #d0d5dd; stroke-width: 2; fill: none; }
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      .h1 { font-size: 34px; font-weight: 760; }
+      .h2 { font-size: 21px; font-weight: 760; }
+      .body { font-size: 17px; }
+      .small { font-size: 14px; }
+      .num { font-size: 18px; font-weight: 800; fill: white; }
+      .chip { font-size: 14px; font-weight: 700; fill: white; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#475467" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="ink h1" x="56" y="68">The agent loop: orient, edit atomically, see the result, then fix</text>
+  <text class="muted body" x="58" y="102">AIOffice is designed around recoverable turns. Every command returns exactly one envelope, even when the answer is no.</text>
+
+  <rect class="card" x="64" y="170" width="174" height="154" rx="18"/>
+  <circle class="blue" cx="96" cy="204" r="20"/>
+  <text class="num" x="91" y="211">1</text>
+  <text class="ink h2" x="88" y="252">Read</text>
+  <text class="muted small" x="88" y="282">outline, stats,</text>
+  <text class="muted small" x="88" y="304">structure, text</text>
+
+  <rect class="card" x="278" y="170" width="174" height="154" rx="18"/>
+  <circle class="teal" cx="310" cy="204" r="20"/>
+  <text class="num" x="305" y="211">2</text>
+  <text class="ink h2" x="302" y="252">Query / get</text>
+  <text class="muted small" x="302" y="282">selector to path,</text>
+  <text class="muted small" x="302" y="304">then inspect node</text>
+
+  <rect class="card" x="492" y="170" width="174" height="154" rx="18"/>
+  <circle class="coral" cx="524" cy="204" r="20"/>
+  <text class="num" x="519" y="211">3</text>
+  <text class="ink h2" x="516" y="252">Edit</text>
+  <text class="muted small" x="516" y="282">atomic ops,</text>
+  <text class="muted small" x="516" y="304">snapshot first</text>
+
+  <rect class="card" x="706" y="170" width="174" height="154" rx="18"/>
+  <circle class="green" cx="738" cy="204" r="20"/>
+  <text class="num" x="733" y="211">4</text>
+  <text class="ink h2" x="730" y="252">Validate</text>
+  <text class="muted small" x="730" y="282">schema, lint,</text>
+  <text class="muted small" x="730" y="304">audit findings</text>
+
+  <rect class="card" x="920" y="170" width="174" height="154" rx="18"/>
+  <circle class="violet" cx="952" cy="204" r="20"/>
+  <text class="num" x="947" y="211">5</text>
+  <text class="ink h2" x="944" y="252">Render</text>
+  <text class="muted small" x="944" y="282">png, pdf, svg,</text>
+  <text class="muted small" x="944" y="304">live preview</text>
+
+  <rect class="card" x="706" y="430" width="174" height="154" rx="18"/>
+  <circle class="gold" cx="738" cy="464" r="20"/>
+  <text class="num" x="733" y="471">6</text>
+  <text class="ink h2" x="730" y="512">Look / fix</text>
+  <text class="muted small" x="730" y="542">overlap, overflow,</text>
+  <text class="muted small" x="730" y="564">clipping, spacing</text>
+
+  <rect class="center" x="318" y="420" width="294" height="174" rx="24"/>
+  <text class="chip" x="360" y="466">ONE JSON ENVELOPE</text>
+  <text fill="#ffffff" font-size="21" font-weight="760" x="360" y="506">{ ok, data, error, meta }</text>
+  <text fill="#cbd5e1" font-size="15" x="360" y="542">suggestion + candidates</text>
+  <text fill="#cbd5e1" font-size="15" x="360" y="568">rev guard + warnings</text>
+
+  <path class="arrow" d="M238 247 L278 247"/>
+  <path class="arrow" d="M452 247 L492 247"/>
+  <path class="arrow" d="M666 247 L706 247"/>
+  <path class="arrow" d="M880 247 L920 247"/>
+  <path class="arrow" d="M1007 324 C1007 386 916 456 880 493"/>
+  <path class="arrow" d="M706 507 C651 507 650 507 612 507"/>
+  <path class="arrow" d="M318 507 C217 507 151 430 151 324"/>
+
+  <line class="thin" x1="56" y1="640" x2="1224" y2="640"/>
+  <text class="muted small" x="64" y="674">Ship only after the loop converges: validate has no blocking issues, audit is understood, and rendered output has no covered text or off-canvas elements.</text>
+</svg>

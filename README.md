@@ -23,17 +23,18 @@ aioffice edit   report.docx --set '/body/p[1]' text="Revenue grew 12%"
 aioffice read   report.docx --view outline
 aioffice diff   report.docx old.docx        # semantic compare: a sorted change list
 aioffice convert report.docx deck.pptx      # cross-format: a slide per heading, bullets below
-aioffice mcp    # the same 17 capabilities, as MCP tools over stdio
+aioffice mcp    # the same document engine, as MCP tools over stdio
 ```
 
 ### Why AIOffice
 
+- **Illustrated docs** — start with the visual docs hub: [docs/README.md](docs/README.md).
 - **100% self-built single binary** — pure C#/.NET, direct lossless OOXML via DocumentFormat.OpenXml + ClosedXML. No Office, no cloud, no wrapped engines, no runtime to install.
 - **Three real formats, one tool** — author and edit genuine `.docx`, `.xlsx`, `.pptx` that open in real Word, Excel and PowerPoint.
 - **Errors that teach** — every failure returns one JSON envelope with an actionable `suggestion` (and `candidates` for bad paths), so an agent self-corrects instead of guessing.
 - **render → look → fix** — render any node to PNG via the system browser and *see* what you made; over MCP the image comes back inline.
 - **Frozen 1.0 contract** — a stable, machine-readable surface (`surfaceVersion` 1.0) your agent can rely on. See [CONTRACT.md](CONTRACT.md).
-- **CLI = MCP, one mental model** — **18 CLI verbs**, **17 MCP tools** (1:1 with the verbs). Learn it once, drive it from a shell or over stdio.
+- **CLI = MCP, one mental model** — the current source tree exposes **19 CLI verbs** and **19 MCP tools**. Learn it once, drive it from a shell or over stdio.
 
 ## Show, don't tell
 
@@ -184,7 +185,7 @@ Most office libraries are built for programmers. Most office CLIs are built for 
 | **Human-in-the-loop preview** | `preview open` serves a live view on localhost; rendered nodes carry `data-aio-path`, so a human **click** comes back to the agent as a canonical path via `preview selection`. |
 | **Sandboxed by default** | All file args resolve inside a workspace allowlist (`--workspace`, symlink-escape checked). Out-of-bounds access → `sandbox_denied`, exit 4. |
 | **Introspectable surface** | `aioffice schema` returns the entire command surface as machine-readable JSON. Agents read the spec instead of hallucinating it. |
-| **CLI = MCP, one mental model** | 18 CLI verbs (17 map 1:1 to MCP tools; the 18th, `version`, is CLI-only). Learn it once, drive it from a shell or over stdio. |
+| **CLI = MCP, one mental model** | Current main exposes 19 CLI verbs and 19 MCP tools. Learn it once, drive it from a shell or over stdio. |
 
 ### Errors that teach — real output
 
@@ -243,11 +244,11 @@ curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.s
 ```
 
 Windows (PowerShell): `irm https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.ps1 | iex`.
-On macOS, a directly downloaded binary may need `xattr -d com.apple.quarantine <path>` once (the script and Homebrew do this for you; binaries are not yet notarized — see [docs/SIGNING.md](docs/SIGNING.md)). After install, `aioffice version` should print `{"ok":true,"data":{"name":"aioffice","version":"1.7.0",…}}`.
+On macOS, a directly downloaded binary may need `xattr -d com.apple.quarantine <path>` once (the script and Homebrew do this for you; binaries are not yet notarized — see [docs/SIGNING.md](docs/SIGNING.md)). After install, `aioffice version` should print a JSON envelope with the installed package version.
 
 ### Use it from your agent (MCP)
 
-AIOffice exposes the **same surface twice** — a CLI and a stdio **MCP server** with 17 tools that mirror the verbs 1:1. Run `aioffice mcp --workspace <dir>` and point your agent at it:
+AIOffice exposes the **same engine twice** — a CLI and a stdio **MCP server**. Run `aioffice mcp --workspace <dir>` and point your agent at it:
 
 ```bash
 aioffice mcp --workspace /path/to/your/documents     # stdio JSON-RPC, sandboxed to <dir>
@@ -606,7 +607,7 @@ These are surfaced in `schema` / `office_schema`, documented under `aioffice hel
 ## MCP (for Claude and other agents)
 
 ```bash
-aioffice mcp     # stdio MCP server — 17 tools, 1:1 with the CLI verbs
+aioffice mcp     # stdio MCP server — 19 tools over the same document engine
 ```
 
 Claude Desktop / Claude Code config:
@@ -632,11 +633,12 @@ Claude Desktop / Claude Code config:
 | `office_render` | render | `preview_open` | preview open |
 | `office_validate` | validate | `preview_selection` | preview selection |
 | `office_audit` | audit | `office_diff` | diff |
-| `office_convert` | convert | | |
+| `office_convert` | convert | `preview_mark` | preview mark |
+|  |  | `preview_goto` | preview goto |
 
-`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0); `office_diff` (semantic compare) is the 16th tool, added in M8 (v0.9.0); `office_convert` (cross-format conversion) is the 17th tool, added in M9 (v0.10.0). Total tool-schema budget is capped at 3,500 tokens — enforced by a test, and still under it with `office_convert` added.
+`preview_open` / `preview_selection` (live preview with human click-to-select) registered in M1 (v0.2.0); `office_audit` (accessibility + quality lint) is the 15th tool, added in M7 (v0.8.0); `office_diff` (semantic compare) is the 16th tool, added in M8 (v0.9.0); `office_convert` (cross-format conversion) is the 17th tool, added in M9 (v0.10.0). Current main also adds `preview_mark` and `preview_goto`, bringing the MCP tool count to 19 while keeping the document contract on `surfaceVersion: "1.0"`. Total tool-schema budget is capped at 3,500 tokens and enforced by a test.
 
-## Command surface (v1.7.0)
+## Command surface (current main)
 
 | Verb | Summary |
 |---|---|
@@ -652,11 +654,12 @@ Claude Desktop / Claude Code config:
 | `convert <src> <dest>` | **Cross-format conversion** — docx/xlsx/pptx ↔ each other (content-neutral model), docx↔md, xlsx↔csv, any→pdf/png/svg/html. Lossy across formats: `data.dropped` + a `convert_lossy` warning name what didn't survive; same ext → `invalid_args`, unknown target → `unsupported_feature` |
 | `template <file> --data <json\|@file>` | `{{key}}` merge across docx/xlsx/pptx (split-run safe) |
 | `snapshot <list\|restore> <file> [n]` | Pre-edit snapshot ring (20) |
-| `preview <open\|selection\|close> <file> [--port N]` | Live localhost preview; human clicks → canonical paths via `selection` |
+| `preview <open\|selection\|close\|mark\|unmark\|marks\|goto> <file> [path] [--port N]` | Live localhost preview; human clicks -> canonical paths via `selection`; marks and goto support review callouts |
 | `doctor` | Environment / runtime / handler diagnosis |
 | `schema [verb]` | Machine-readable JSON of the whole surface |
 | `help [topic]` | addressing · selectors · properties-docx/xlsx/pptx · errors · **equations** (docx+pptx) · **embeds** · **rtl** · **sections** · **audit** · **diff** · **convert** · **docx/citation** · **docx/effect** · **pptx/media** · **pptx/effect** |
 | `mcp` | stdio MCP server |
+| `plugin <install\|uninstall\|list\|status>` | CLI-only host installer for Claude, Codex, opencode and TonoBraid config |
 | `version` | Version info |
 
 Global flags: `--json` (default when not a TTY) · `--pretty` · `--workspace <dir>` (sandbox root, default cwd, or `AIOFFICE_WORKSPACE`) · `--quiet`.
@@ -706,8 +709,8 @@ The long-term capability ledger (vs. the strongest CLI in the field) lives in [d
 
 ```
                  ┌─────────────────────────────────────────────┐
-   agent/human → │  src/AIOffice.Cli   (aioffice, 18 verbs)    │
-   MCP client  → │  src/AIOffice.Mcp   (stdio, 17 tools, 1:1)  │
+   agent/human → │  src/AIOffice.Cli   (aioffice, 19 verbs)    │
+   MCP client  → │  src/AIOffice.Mcp   (stdio, 19 tools)       │
                  ├─────────────────────────────────────────────┤
                  │  src/AIOffice.Render  (png/pdf via browser) │
                  │  src/AIOffice.Preview  (live click-select)  │
@@ -776,7 +779,7 @@ AIOffice's surface is **deliberately incompatible** with existing office CLIs: c
 
 ## Docs
 
-**Getting started:** [docs/INSTALL.md](docs/INSTALL.md) — all four install paths · [docs/MCP-SETUP.md](docs/MCP-SETUP.md) — wire it into Claude / Cursor / any MCP host · [SKILL.md](SKILL.md) — AI-facing onboarding guide · [docs/COOKBOOK.md](docs/COOKBOOK.md) — 10 copy-paste recipes · [docs/SIGNING.md](docs/SIGNING.md) — code-signing / notarization roadmap
+**Getting started:** [docs/README.md](docs/README.md) — illustrated docs hub · [docs/INSTALL.md](docs/INSTALL.md) — all four install paths · [docs/MCP-SETUP.md](docs/MCP-SETUP.md) — wire it into Claude / Cursor / any MCP host · [SKILL.md](SKILL.md) — AI-facing onboarding guide · [docs/COOKBOOK.md](docs/COOKBOOK.md) — 10 copy-paste recipes · [docs/SIGNING.md](docs/SIGNING.md) — code-signing / notarization roadmap
 
 **Reference:** [docs/DESIGN.md](docs/DESIGN.md) — architecture & surface spec · [docs/MCP.md](docs/MCP.md) — MCP tool spec · [docs/PARITY.md](docs/PARITY.md) — capability ledger · [CONTRACT.md](CONTRACT.md) — frozen v1.0 AI-facing surface · `aioffice help <topic>` — built-in progressive docs · [SMOKE_REPORT.md](SMOKE_REPORT.md) — real end-to-end verification log
 
