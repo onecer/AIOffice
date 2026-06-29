@@ -1043,6 +1043,39 @@ Each closes a write/read asymmetry or a single probe-confirmed gap; the legacy b
 
 Agents that target the 1.18.0 surface are byte-for-byte compatible with 1.19.0.
 
+## 7t. 1.20.0 — read/write parity & customization: xlsx iconSet thresholds, docx cell textDirection, pptx cell formatting read-back (additive, surface 1.0)
+
+Package **1.20.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each closes a customization or read/write-parity gap on an existing cell-or-rule op; the legacy/default
+branch stays first-in-code and byte-stable.
+
+### xlsx — iconSet custom per-icon thresholds
+
+- **An `iconSet` conditional format now accepts `thresholds`** (§5, additive), replacing the hardcoded even
+  split: an array of `{type:percent|num|percentile|formula, value}` with exactly **N** entries for an
+  N-icon set (3/4/5). Omitting it keeps the byte-identical even split (`0/33/67`, `0/25/50/75`,
+  `0/20/40/60/80`, `@type=percent`). `get` reports `thresholds` only when a **non-default** set is present
+  (an explicit even split is indistinguishable from the default and reads back as omitted; a `formula`
+  reads back without its leading `=`). Wrong count, unknown type, or a percent/percentile value outside
+  0–100 → `invalid_args`.
+
+### docx — table-cell text direction
+
+- **A docx table cell `set`/`get` now accepts `textDirection`** (§4, additive) → `w:tcPr/w:textDirection`:
+  `lrTb|tbRl|btLr` (the WordprocessingML set; rotated `lrTbV/tbRlV/tbLrV` also accepted), at parity with the
+  shipped pptx table-cell text direction. `get` reports `textDirection` (null when absent); a cell without
+  it is byte-identical to 1.19. An invalid token → `invalid_args` with candidates.
+
+### pptx — table-cell run formatting on get
+
+- **`get` on a pptx table cell now reports the run formatting it already writes** (§6, read-side parity):
+  `bold` (true|null), `color` (bare `RRGGBB` hex, matching the cell `fill` wire format | null), `fontSize`
+  (points | null), and `align` (left|center|right|justify | null), read from the cell's first run/paragraph.
+  Each is `null` when the value is absent/inherited (a theme/placeholder color projects `null`, not an
+  invented hex; `align` is not defaulted). A bare cell emits none of these keys — byte-identical to 1.19.
+
+Agents that target the 1.19.0 surface are byte-for-byte compatible with 1.20.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

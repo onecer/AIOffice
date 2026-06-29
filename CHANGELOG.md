@@ -70,6 +70,29 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.20.0 — read/write parity & customization: xlsx iconSet thresholds · docx cell textDirection · pptx cell formatting read-back (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a customization or read/write-parity gap
+on an existing cell-or-rule op, byte-stable on its legacy path. Agents that target 1.19.0 are byte-for-byte
+compatible with 1.20.0.
+
+### Added — xlsx
+
+- **iconSet custom per-icon thresholds**: an `iconSet` conditional format now accepts `thresholds`
+  (`[{type:percent|num|percentile|formula, value}]`, N entries for an N-icon set), replacing the hardcoded
+  even split. Omitting it is byte-identical to 1.19; `get` reports them only for a non-default set.
+
+### Added — docx
+
+- **Table-cell `textDirection`**: a table cell `set`/`get` accepts `textDirection` (`lrTb|tbRl|btLr`, +
+  rotated variants) → `w:tcPr/w:textDirection`, at parity with pptx. `get` reports it (null when absent).
+
+### Added — pptx
+
+- **Table-cell run formatting on `get`**: `get` now reports the `bold`/`color`/`fontSize`/`align` a cell
+  already writes (previously write-only) — a read/write-parity fix. `color` is bare hex (matching `fill`);
+  inherited/theme values and absent props project `null`. Bare cells emit no new keys (byte-identical).
+
 ## 1.19.0 — round-trip the writable, evaluate the proven gap: pptx shape fill object · xlsx AVERAGEIF · docx content-control data binding (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a write/read asymmetry or one
