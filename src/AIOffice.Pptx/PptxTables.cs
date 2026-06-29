@@ -1481,9 +1481,9 @@ internal static class PptxTables
             Col = col,
             Text = CellText(cell),
             Bold = firstRunProperties?.Bold?.Value == true ? true : (bool?)null,
-            Color = firstRunProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant() is { } hex
-                ? "#" + hex
-                : null,
+            // Bare uppercase hex (no '#'), matching the sibling Fill (CellFillHex) and border
+            // Color wire format so an agent consuming the cell get sees one consistent shape.
+            Color = firstRunProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant(),
             FontSize = firstRunProperties?.FontSize?.Value is { } sz ? sz / 100.0 : (double?)null,
             Align = AlignToken(firstParagraph?.ParagraphProperties?.Alignment?.Value),
             GridSpan = (cell.GridSpan?.Value ?? 1) > 1 ? cell.GridSpan!.Value : (int?)null,

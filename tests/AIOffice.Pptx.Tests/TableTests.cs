@@ -250,7 +250,7 @@ public sealed class TableTests : IDisposable
         // save-reopen, then get must REPORT each with the right type+value.
         var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
         Assert.True(detail["bold"]!.GetValue<bool>());
-        Assert.Equal("#CC0000", detail["color"]!.GetValue<string>());
+        Assert.Equal("CC0000", detail["color"]!.GetValue<string>()); // bare hex, matching the 'fill' wire format
         Assert.Equal(18.0, detail["fontSize"]!.GetValue<double>());
         Assert.Equal("right", detail["align"]!.GetValue<string>());
     }
@@ -276,19 +276,24 @@ public sealed class TableTests : IDisposable
     public void GetCell_ThemeColoredRun_ProjectsColorNull()
     {
         CreateWithTable();
-        // Build a run whose color is a scheme/theme color (no direct a:srgbClr) by hand.
+        // Make the cell's FIRST run (the one the projection reads) carry a scheme/theme color
+        // and no direct a:srgbClr. Replace the paragraph's runs so the themed run IS first —
+        // appending it as a 2nd run would never be inspected and the test would pass vacuously.
         using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), true))
         {
             var cell = OpenTable(doc).Elements<A.TableRow>().ToList()[1].Elements<A.TableCell>().ToList()[1];
-            var run = new A.Run(
+            var paragraph = cell.TextBody!.Elements<A.Paragraph>().First();
+            paragraph.Elements<A.Run>().ToList().ForEach(r => r.Remove());
+            paragraph.Append(new A.Run(
                 new A.RunProperties(new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.Accent1 })),
-                new A.Text("themed"));
-            cell.TextBody!.Elements<A.Paragraph>().First().Append(run);
+                new A.Text("themed")));
             doc.PresentationPart!.SlideParts.Single().Slide!.Save();
         }
 
         var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
-        // We read ONLY a direct a:srgbClr; a theme color must not be invented as a hex.
+        // The projection DID read the themed run (its text is reported) but must NOT invent a
+        // hex for a theme color — only a direct a:srgbClr surfaces.
+        Assert.Equal("themed", detail["text"]!.GetValue<string>());
         Assert.False(detail.ContainsKey("color"));
     }
 
