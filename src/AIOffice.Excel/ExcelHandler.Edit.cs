@@ -307,6 +307,15 @@ public sealed partial class ExcelHandler
                 ExcelConditionalFormats.ApplyDataBarThresholds(file, post.DataBarRules);
             }
 
+            // (1.20) Rewrite the queued iconSet per-icon thresholds on the saved
+            // bytes. ClosedXML 0.105 only authors the even-split percent cfvo, so
+            // a caller-controlled threshold set is rewritten in place here. iconSet
+            // has no x14 twin, so this never affects the data-bar fix-up.
+            if (post.IconSetRules.Count > 0)
+            {
+                ExcelConditionalFormats.ApplyIconSetThresholds(file, post.IconSetRules);
+            }
+
             // Apply the chart-polish edits (v1.3): a set on a chart path adjusts
             // existing chart XML ClosedXML cannot see. Runs after chart adds so a
             // batch can add a chart and immediately polish it.
@@ -480,6 +489,14 @@ public sealed partial class ExcelHandler
         /// raw on the saved bytes, rewriting the base and x14 cfvo + @showValue.
         /// </summary>
         public List<ExcelConditionalFormats.DataBarThresholdSpec> DataBarRules { get; } = [];
+
+        /// <summary>
+        /// (1.20) iconSet per-icon threshold rules queued for the post-save raw
+        /// pass. ClosedXML 0.105 always writes the even-split percent cfvo, so a
+        /// caller-controlled threshold set is authored raw on the saved bytes,
+        /// rewriting the base cfvo in place (iconSet has no x14 twin).
+        /// </summary>
+        public List<ExcelConditionalFormats.IconSetThresholdSpec> IconSetRules { get; } = [];
 
         /// <summary>
         /// Chart-polish edits queued for the post-save raw pass (v1.3). A <c>set</c>
@@ -2015,7 +2032,7 @@ public sealed partial class ExcelHandler
                 break;
             case "conditionalFormat":
                 details.Add(ExcelConditionalFormats.Add(
-                    ExcelPaths.Resolve(workbook, op.Path), op, index, post.AverageRules, post.DataBarRules));
+                    ExcelPaths.Resolve(workbook, op.Path), op, index, post.AverageRules, post.DataBarRules, post.IconSetRules));
                 break;
             case "dataValidation":
                 details.Add(ExcelDataValidations.Add(workbook, ExcelPaths.Resolve(workbook, op.Path), op, index));

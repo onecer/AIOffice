@@ -86,7 +86,17 @@ internal static partial class ExcelConditionalFormats
 
     private static readonly IReadOnlyList<string> ContainsTextProps = ["kind", "text", "fill", "color", "bold"];
 
-    private static readonly IReadOnlyList<string> IconSetProps = ["kind", "set", "reverse", "showValue"];
+    private static readonly IReadOnlyList<string> IconSetProps = ["kind", "set", "reverse", "showValue", "thresholds"];
+
+    /// <summary>
+    /// The icon-set per-icon threshold content types a caller can pin. The wire
+    /// name IS the OOXML <c>cfvo@type</c> spelling for the pinned types (fixed →
+    /// <c>num</c> stays the colorScale spelling, here re-used as <c>num</c>).
+    /// Omitting the whole <c>thresholds</c> array keeps the byte-stable
+    /// evenly-spaced percent split.
+    /// </summary>
+    private static readonly IReadOnlyList<string> IconSetThresholdTypes =
+        ["percent", "num", "percentile", "formula"];
 
     private static readonly IReadOnlyList<string> FormulaProps = ["kind", "formula", "fill", "color", "bold"];
 
@@ -141,7 +151,8 @@ internal static partial class ExcelConditionalFormats
         EditOp op,
         int opIndex,
         List<AverageRuleSpec> averageRules,
-        List<DataBarThresholdSpec> dataBarRules)
+        List<DataBarThresholdSpec> dataBarRules,
+        List<IconSetThresholdSpec> iconSetRules)
     {
         var range = target.Kind switch
         {
@@ -184,7 +195,7 @@ internal static partial class ExcelConditionalFormats
                 AddContainsText(range, props, opIndex);
                 break;
             case "iconSet":
-                AddIconSet(range, props, opIndex);
+                AddIconSet(target.Sheet.Name, range, props, opIndex, iconSetRules);
                 break;
             case "formula":
                 AddFormula(range, props, opIndex);
@@ -551,13 +562,19 @@ internal static partial class ExcelConditionalFormats
 
     /// <summary>
     /// Adds an iconSet rule: each cell gets one of N icons (3, 4 or 5 depending
-    /// on the set) chosen by where its value falls against evenly-spaced percent
-    /// thresholds. The first threshold is always 0% (covers the lowest band);
-    /// the rest split the 0..100 range evenly (3 icons → 0/33/67, 4 → 0/25/50/75,
-    /// 5 → 0/20/40/60/80). <c>reverse</c> flips icon order; <c>showValue</c>
-    /// (default true) controls whether the cell value stays visible.
+    /// on the set) chosen by where its value falls against the per-icon
+    /// thresholds. By default (no <c>thresholds</c> prop) the bands split the
+    /// 0..100 range evenly with the first at 0% (3 icons → 0/33/67, 4 →
+    /// 0/25/50/75, 5 → 0/20/40/60/80, all <c>@type=percent</c>) — the byte-stable
+    /// v1.19 path. When <c>thresholds</c> is supplied (exactly N entries), the
+    /// rule is still created through ClosedXML (valid even-split cfvo), then
+    /// queued for a raw post-save pass that rewrites the N cfvo in place from the
+    /// caller's spec — ClosedXML 0.105 only authors percent thresholds.
+    /// <c>reverse</c> flips icon order; <c>showValue</c> (default true) controls
+    /// whether the cell value stays visible.
     /// </summary>
-    private static void AddIconSet(IXLRange range, JsonObject props, int opIndex)
+    private static void AddIconSet(
+        string sheetName, IXLRange range, JsonObject props, int opIndex, List<IconSetThresholdSpec> iconSetRules)
     {
         GuardProps(props, IconSetProps, opIndex);
         var setName = OptionalString(props, "set") ?? throw new AiofficeException(
@@ -579,7 +596,30 @@ internal static partial class ExcelConditionalFormats
         var reverse = OptionalBool(props, "reverse") ?? false;
         var showValue = OptionalBool(props, "showValue") ?? true;
 
+        // The caller-controlled per-icon thresholds (null = the byte-stable even
+        // split). Parsed/validated up front so a bad spec fails before the rule
+        // is created; queued for the post-save rewrite only when supplied.
+        var thresholds = ParseIconSetThresholds(sheetName, range, setName, icon.Count, props, opIndex);
+
         var rule = range.AddConditionalFormat().IconSet(icon.Style, reverse, !showValue);
+
+        // DEFAULT path (no thresholds): the v1.19 evenly-spaced percent cfvo,
+        // first-in-code and byte-identical. MUST stay untouched.
+        if (thresholds is null)
+        {
+            foreach (var threshold in EvenPercentThresholds(icon.Count))
+            {
+                rule.AddValue(
+                    XLCFIconSetOperator.EqualOrGreaterThan,
+                    threshold.ToString(CultureInfo.InvariantCulture),
+                    XLCFContentType.Percent);
+            }
+
+            return;
+        }
+
+        // Custom path: create the same valid even-split cfvo (so ClosedXML saves
+        // a well-formed rule with N cfvo), then queue the in-place rewrite.
         foreach (var threshold in EvenPercentThresholds(icon.Count))
         {
             rule.AddValue(
@@ -587,6 +627,110 @@ internal static partial class ExcelConditionalFormats
                 threshold.ToString(CultureInfo.InvariantCulture),
                 XLCFContentType.Percent);
         }
+
+        iconSetRules.Add(thresholds);
+    }
+
+    /// <summary>
+    /// Parses (and validates) the optional caller-controlled iconSet per-icon
+    /// thresholds. Returns null when <c>thresholds</c> is absent (the byte-stable
+    /// even split). When present, the array MUST hold exactly <paramref
+    /// name="iconCount"/> entries (one cfvo per icon, lowest band first); each is
+    /// a {type, value} pair: <c>num</c>/<c>percent</c>/<c>percentile</c> carry a
+    /// number, <c>formula</c> carries an expression string. percent/percentile
+    /// values are clamped to 0..100.
+    /// </summary>
+    private static IconSetThresholdSpec? ParseIconSetThresholds(
+        string sheetName, IXLRange range, string setName, int iconCount, JsonObject props, int opIndex)
+    {
+        if (!props.TryGetPropertyValue("thresholds", out var node) || node is null)
+        {
+            return null;
+        }
+
+        if (node is not JsonArray array)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: iconSet 'thresholds' must be an array of {{type, value}} entries.",
+                "Pass one entry per icon, e.g. {\"thresholds\":[{\"type\":\"percent\",\"value\":0}," +
+                "{\"type\":\"percent\",\"value\":50},{\"type\":\"percent\",\"value\":90}]}.");
+        }
+
+        if (array.Count != iconCount)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: iconSet '{setName}' has {iconCount} icons, so 'thresholds' needs exactly " +
+                $"{iconCount} entries (got {array.Count}).",
+                $"Pass one {{type, value}} entry per icon (the lowest band first), {iconCount} in total.");
+        }
+
+        var bounds = new List<IconSetBound>(iconCount);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject entry)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: iconSet thresholds[{i}] must be a {{type, value}} object.",
+                    "Pass e.g. {\"type\":\"percent\",\"value\":50}.");
+            }
+
+            bounds.Add(ParseIconSetBound(entry, i, opIndex));
+        }
+
+        return new IconSetThresholdSpec(sheetName, range.RangeAddress.ToString()!, setName, bounds);
+    }
+
+    /// <summary>Parses one iconSet threshold entry (a cfvo): validates type, value and range.</summary>
+    private static IconSetBound ParseIconSetBound(JsonObject entry, int slot, int opIndex)
+    {
+        var type = OptionalString(entry, "type");
+        if (type is null || !IconSetThresholdTypes.Contains(type, StringComparer.Ordinal))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: unknown iconSet threshold 'type' '{type}' at thresholds[{slot}].",
+                "Supported types: " + string.Join(", ", IconSetThresholdTypes) + ".",
+                candidates: IconSetThresholdTypes);
+        }
+
+        if (type == "formula")
+        {
+            var formula = OptionalString(entry, "value");
+            if (string.IsNullOrWhiteSpace(formula))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{opIndex}]: iconSet thresholds[{slot}] type is formula, so 'value' must be a non-empty formula string.",
+                    "Pass e.g. {\"type\":\"formula\",\"value\":\"=$A$1\"}.");
+            }
+
+            // Excel's cfvo/@val holds the formula WITHOUT the leading '='.
+            var expression = formula.StartsWith('=') ? formula[1..] : formula;
+            return new IconSetBound(type, expression);
+        }
+
+        // num / percent / percentile: a number.
+        var number = OptionalNumber(entry, "value", opIndex);
+        if (number is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: iconSet thresholds[{slot}] type is {type}, so 'value' must be a number.",
+                "Pass e.g. {\"type\":\"" + type + "\",\"value\":50}.");
+        }
+
+        if ((type == "percent" || type == "percentile") && (number < 0 || number > 100))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: a {type} iconSet threshold 'value' must be between 0 and 100.",
+                "Pass e.g. {\"type\":\"" + type + "\",\"value\":50}.");
+        }
+
+        return new IconSetBound(type, number.Value.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>Evenly-spaced percent thresholds starting at 0 (one per icon).</summary>
@@ -853,7 +997,8 @@ internal static partial class ExcelConditionalFormats
         IXLConditionalFormat format,
         int index,
         AverageRuleDetail? averageDetail = null,
-        DataBarThresholdDetail? dataBarDetail = null)
+        DataBarThresholdDetail? dataBarDetail = null,
+        IconSetThresholdDetail? iconSetDetail = null)
     {
         var kind = KindName(format.ConditionalFormatType);
         var isTop10 = format.ConditionalFormatType == XLConditionalFormatType.Top10;
@@ -912,6 +1057,12 @@ internal static partial class ExcelConditionalFormats
             minValue = isDataBar ? dataBarDetail?.MinValue : null,
             maxType = isDataBar ? dataBarDetail?.MaxType : null,
             maxValue = isDataBar ? dataBarDetail?.MaxValue : null,
+            // iconSet per-icon thresholds (read raw): emitted ONLY when the caller
+            // pinned them (non-default), so a legacy even-split iconSet projects no
+            // 'thresholds' key. Null on every non-iconSet kind.
+            thresholds = format.ConditionalFormatType == XLConditionalFormatType.IconSet
+                ? iconSetDetail?.Entries
+                : null,
         };
     }
 
@@ -932,6 +1083,22 @@ internal static partial class ExcelConditionalFormats
     /// </summary>
     public sealed record DataBarThresholdDetail(
         string MinType, string? MinValue, string MaxType, string? MaxValue, bool ShowValue);
+
+    /// <summary>
+    /// One iconSet per-icon threshold as agents see it (the wire {type, value}
+    /// pair). <c>Value</c> is the cfvo <c>@val</c> text: a number's invariant
+    /// string, or a formula without its leading <c>=</c>.
+    /// </summary>
+    public sealed record IconSetThresholdEntry(string Type, string Value);
+
+    /// <summary>
+    /// The iconSet per-icon thresholds read raw from a saved
+    /// <c>cfRule[@type=iconSet]</c>, in document (lowest-band-first) order — but
+    /// ONLY when they are NOT the legacy even-split default, so legacy iconSet
+    /// rules surface no thresholds. Keyed by 1-based sheet rule index (priority
+    /// order). iconSet has no x14 twin, so this reads the base cfvo directly.
+    /// </summary>
+    public sealed record IconSetThresholdDetail(IReadOnlyList<IconSetThresholdEntry> Entries);
 
     /// <summary>
     /// Reads the aboveAverage rules on a sheet (priority order) so the get handler
@@ -1018,6 +1185,81 @@ internal static partial class ExcelConditionalFormats
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Reads the iconSet per-icon thresholds on a sheet (priority order, the same
+    /// 1-based index ClosedXML surfaces) so the get handler can report the
+    /// caller-controlled bands. Each iconSet cfvo carries the wire type
+    /// (<c>num</c>/<c>percent</c>/<c>percentile</c>/<c>formula</c>) and value in
+    /// document (lowest-band-first) order. A rule whose cfvo are exactly the
+    /// even-split default (all <c>percent</c>, values 0/33/67…) reports NO entry,
+    /// so legacy iconSet rules read byte-unchanged. Keyed by 1-based rule index.
+    /// </summary>
+    public static IReadOnlyDictionary<int, IconSetThresholdDetail> ReadIconSetThresholds(
+        SpreadsheetDocument document, string sheetName)
+    {
+        var result = new Dictionary<int, IconSetThresholdDetail>();
+        var workbookPart = document.WorkbookPart;
+        var sheet = workbookPart?.Workbook?.Descendants<S.Sheet>()
+            .FirstOrDefault(s => string.Equals(s.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        if (sheet?.Id?.Value is not { } relationshipId ||
+            workbookPart!.GetPartById(relationshipId) is not WorksheetPart { Worksheet: { } worksheet })
+        {
+            return result;
+        }
+
+        var rules = worksheet.Descendants<S.ConditionalFormattingRule>()
+            .OrderBy(r => r.Priority?.Value ?? int.MaxValue)
+            .ToList();
+        for (var i = 0; i < rules.Count; i++)
+        {
+            if (rules[i].GetFirstChild<S.IconSet>() is not { } iconSet)
+            {
+                continue;
+            }
+
+            var cfvos = iconSet.Elements<S.ConditionalFormatValueObject>().ToList();
+            var entries = cfvos.Select(ReadIconSetCfvo).ToList();
+            if (IsEvenPercentSplit(entries))
+            {
+                // The legacy even split is omitted so legacy files read unchanged;
+                // only caller-pinned thresholds surface.
+                continue;
+            }
+
+            result[i + 1] = new IconSetThresholdDetail(entries);
+        }
+
+        return result;
+    }
+
+    /// <summary>Wire (type, value) of an iconSet cfvo (num/percent/percentile/formula).</summary>
+    private static IconSetThresholdEntry ReadIconSetCfvo(S.ConditionalFormatValueObject cfvo)
+    {
+        var type = cfvo.Type?.Value;
+        var wire = type == S.ConditionalFormatValueObjectValues.Number ? "num"
+            : type == S.ConditionalFormatValueObjectValues.Percent ? "percent"
+            : type == S.ConditionalFormatValueObjectValues.Percentile ? "percentile"
+            : type == S.ConditionalFormatValueObjectValues.Formula ? "formula"
+            : "percent";
+        return new IconSetThresholdEntry(wire, cfvo.Val?.Value ?? string.Empty);
+    }
+
+    /// <summary>True when an iconSet's cfvo are exactly the even-split default (all percent, 0/33/67…).</summary>
+    private static bool IsEvenPercentSplit(IReadOnlyList<IconSetThresholdEntry> entries)
+    {
+        var expected = EvenPercentThresholds(entries.Count).ToList();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Type != "percent" ||
+                entries[i].Value != expected[i].ToString(CultureInfo.InvariantCulture))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Wire (type, value) of a base data-bar cfvo (min/max → auto, num → fixed).</summary>
@@ -1289,6 +1531,29 @@ internal static partial class ExcelConditionalFormats
         DataBarBound Min,
         DataBarBound Max,
         bool? ShowValue);
+
+    /// <summary>
+    /// One iconSet threshold (a cfvo). <c>Type</c> is the wire spelling
+    /// (num/percent/percentile/formula); <c>RawValue</c> is the cfvo <c>@val</c>
+    /// text (a number's invariant string, or a formula without its leading
+    /// <c>=</c>).
+    /// </summary>
+    internal sealed record IconSetBound(string Type, string RawValue);
+
+    /// <summary>
+    /// An iconSet rule whose caller-supplied per-icon thresholds must be authored
+    /// raw after the save (ClosedXML 0.105 always writes the even-split percent
+    /// cfvo). Matched to the saved cfRule by sheet, sqref and icon-set style, in
+    /// creation order — a default (no-threshold) iconSet is never queued, so only
+    /// the caller-controlled rules are touched. <c>Bounds</c> holds exactly one
+    /// entry per icon, lowest band first. iconSet has NO x14 twin, so only the
+    /// base cfvo are rewritten (simpler than dataBar).
+    /// </summary>
+    internal sealed record IconSetThresholdSpec(
+        string SheetName,
+        string Sqref,
+        string SetName,
+        IReadOnlyList<IconSetBound> Bounds);
 
     /// <summary>
     /// Authors the queued aboveBelowAverage rules on the saved file. ClosedXML
@@ -1633,6 +1898,119 @@ internal static partial class ExcelConditionalFormats
         {
             cfvo.AppendChild(new Xm.Formula(raw));
         }
+    }
+
+    // ----- iconSet threshold raw authoring (v1.20) --------------------------------
+
+    /// <summary>
+    /// Rewrites the cfvo of the queued iconSet rules on the saved file. ClosedXML
+    /// 0.105 always writes the even-split percent cfvo; this pass replaces each of
+    /// the N base cfvo IN PLACE (no add/duplicate) from the caller's spec so Excel
+    /// honors the per-icon bands. iconSet has NO x14 twin, so only the base cfvo
+    /// are touched (simpler than the data-bar pass).
+    ///
+    /// Specs are matched to the saved cfRules per sheet, by sqref and icon-set
+    /// style, in creation order — a default (no-threshold) iconSet is never
+    /// queued, so only the caller-controlled rules are rewritten.
+    /// </summary>
+    public static void ApplyIconSetThresholds(string file, IReadOnlyList<IconSetThresholdSpec> rules)
+    {
+        if (rules.Count == 0)
+        {
+            return;
+        }
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: true);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart is null)
+        {
+            return;
+        }
+
+        foreach (var sheetRules in rules.GroupBy(r => r.SheetName, StringComparer.OrdinalIgnoreCase))
+        {
+            var worksheet = WorksheetFor(workbookPart, sheetRules.Key);
+
+            // The saved base iconSet cfRules in document order, keyed for matching
+            // by sqref + icon-set style.
+            var baseSets = worksheet.Descendants<S.ConditionalFormatting>()
+                .SelectMany(cf => cf.Elements<S.ConditionalFormattingRule>()
+                    .Where(r => r.Type?.Value == S.ConditionalFormatValues.IconSet)
+                    .Select(r => (Cf: cf, Rule: r)))
+                .ToList();
+
+            var consumed = new HashSet<S.ConditionalFormattingRule>();
+            foreach (var spec in sheetRules)
+            {
+                var match = baseSets.FirstOrDefault(b =>
+                    !consumed.Contains(b.Rule) &&
+                    string.Equals(b.Cf.SequenceOfReferences?.InnerText, spec.Sqref, StringComparison.Ordinal) &&
+                    IconSetStyleMatches(b.Rule, spec.SetName));
+                if (match.Rule is null)
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InternalError,
+                        $"The iconSet rule on '{spec.SheetName}!{spec.Sqref}' vanished before its thresholds could be written.",
+                        "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+                }
+
+                consumed.Add(match.Rule);
+                RewriteBaseIconSet(match.Rule, spec);
+            }
+
+            worksheet.Save();
+        }
+    }
+
+    /// <summary>True when a base iconSet cfRule's icon-set style matches the spec's wire set name.</summary>
+    private static bool IconSetStyleMatches(S.ConditionalFormattingRule rule, string setName)
+    {
+        var value = rule.GetFirstChild<S.IconSet>()?.IconSetValue?.InnerText;
+        return string.Equals(value, setName, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Rewrites the base iconSet's N cfvo in place from the spec (one entry per
+    /// icon, lowest band first). The cfvo count MUST already equal the icon count
+    /// (ClosedXML wrote the even-split set), so each existing cfvo is retyped and
+    /// revalued without adding or removing any.
+    /// </summary>
+    private static void RewriteBaseIconSet(S.ConditionalFormattingRule rule, IconSetThresholdSpec spec)
+    {
+        var iconSet = rule.GetFirstChild<S.IconSet>();
+        if (iconSet is null)
+        {
+            return;
+        }
+
+        var cfvos = iconSet.Elements<S.ConditionalFormatValueObject>().ToList();
+        if (cfvos.Count != spec.Bounds.Count)
+        {
+            // Should never happen (ClosedXML wrote exactly N cfvo); guard anyway.
+            throw new AiofficeException(
+                ErrorCodes.InternalError,
+                $"The iconSet rule on '{spec.SheetName}!{spec.Sqref}' has {cfvos.Count} cfvo, expected {spec.Bounds.Count}.",
+                "Retry the edit; if it recurs, restore a snapshot with 'aioffice snapshot restore'.");
+        }
+
+        for (var i = 0; i < cfvos.Count; i++)
+        {
+            ApplyIconSetCfvo(cfvos[i], spec.Bounds[i]);
+        }
+    }
+
+    /// <summary>Sets one iconSet cfvo to the spec threshold (@type + @val) in place.</summary>
+    private static void ApplyIconSetCfvo(S.ConditionalFormatValueObject cfvo, IconSetBound bound)
+    {
+        cfvo.Type = bound.Type switch
+        {
+            "num" => S.ConditionalFormatValueObjectValues.Number,
+            "percent" => S.ConditionalFormatValueObjectValues.Percent,
+            "percentile" => S.ConditionalFormatValueObjectValues.Percentile,
+            "formula" => S.ConditionalFormatValueObjectValues.Formula,
+            _ => S.ConditionalFormatValueObjectValues.Percent,
+        };
+        cfvo.Val = bound.RawValue;
     }
 
     // ----- aboveAverage round-trip preservation (v1.3) ----------------------------

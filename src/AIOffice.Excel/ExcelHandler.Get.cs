@@ -313,6 +313,20 @@ public sealed partial class ExcelHandler
             return ExcelConditionalFormats.Describe(target.Sheet, format, index, dataBarDetail: dataBarDetail);
         }
 
+        // iconSet per-icon thresholds are read raw too (ClosedXML does not surface
+        // the cfvo content type/value get needs); only non-default bands surface.
+        if (format.ConditionalFormatType == ClosedXML.Excel.XLConditionalFormatType.IconSet)
+        {
+            IReadOnlyDictionary<int, ExcelConditionalFormats.IconSetThresholdDetail> iconSets;
+            using (var document = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(file, isEditable: false))
+            {
+                iconSets = ExcelConditionalFormats.ReadIconSetThresholds(document, target.Sheet.Name);
+            }
+
+            iconSets.TryGetValue(index, out var iconSetDetail);
+            return ExcelConditionalFormats.Describe(target.Sheet, format, index, iconSetDetail: iconSetDetail);
+        }
+
         if (format.ConditionalFormatType != ClosedXML.Excel.XLConditionalFormatType.AboveAverage)
         {
             return ExcelConditionalFormats.Describe(target.Sheet, format, index);

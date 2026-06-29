@@ -232,4 +232,194 @@ public sealed class IconSetConditionalFormatTests : ExcelTestBase
         Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
         Assert.Contains("color", envelope.Error.Message, StringComparison.Ordinal);
     }
+
+    // ----- v1.20 caller-controlled per-icon thresholds --------------------------
+
+    /// <summary>One {type, value} threshold entry for the thresholds array.</summary>
+    private static JsonObject Th(string type, JsonNode value) =>
+        new() { ["type"] = type, ["value"] = value };
+
+    private static JsonArray Thresholds(params JsonObject[] entries)
+    {
+        var array = new JsonArray();
+        foreach (var entry in entries)
+        {
+            array.Add(entry);
+        }
+
+        return array;
+    }
+
+    /// <summary>The base iconSet cfvo (in document order) of the sole raw rule.</summary>
+    private static List<S.ConditionalFormatValueObject> IconSetCfvos(SpreadsheetDocument document) =>
+        SingleRawRule(document).GetFirstChild<S.IconSet>()!
+            .Elements<S.ConditionalFormatValueObject>().ToList();
+
+    [Fact]
+    public void IconSet_custom_thresholds_write_percent_cfvo_in_document_order()
+    {
+        var file = CreateDataWorkbook();
+
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(Th("percent", 10), Th("percent", 50), Th("percent", 90))))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var cfvos = IconSetCfvos(document);
+        Assert.Equal(3, cfvos.Count);
+        Assert.All(cfvos, c => Assert.Equal(S.ConditionalFormatValueObjectValues.Percent, c.Type!.Value));
+        Assert.Equal(["10", "50", "90"], cfvos.Select(c => c.Val!.Value));
+    }
+
+    [Fact]
+    public void IconSet_mixed_threshold_types_map_to_cfvo_types()
+    {
+        var file = CreateDataWorkbook();
+
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Symbols"),
+            ("thresholds", Thresholds(
+                Th("num", 0), Th("percentile", 50), Th("formula", "=$A$1"))))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var cfvos = IconSetCfvos(document);
+        Assert.Equal(
+            [
+                S.ConditionalFormatValueObjectValues.Number,
+                S.ConditionalFormatValueObjectValues.Percentile,
+                S.ConditionalFormatValueObjectValues.Formula,
+            ],
+            cfvos.Select(c => c.Type!.Value));
+        // The formula cfvo stores @val WITHOUT the leading '='.
+        Assert.Equal(["0", "50", "$A$1"], cfvos.Select(c => c.Val!.Value));
+    }
+
+    [Fact]
+    public void IconSet_threshold_count_must_match_icon_count()
+    {
+        var file = CreateDataWorkbook();
+
+        // A 4-icon set with only 3 thresholds.
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "4Arrows"),
+            ("thresholds", Thresholds(Th("percent", 0), Th("percent", 33), Th("percent", 67)))));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("4", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IconSet_unknown_threshold_type_is_invalid_args_with_candidates()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(Th("percent", 0), Th("bogus", 50), Th("percent", 90)))));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("percent", envelope.Error.Candidates!);
+        Assert.Contains("formula", envelope.Error.Candidates!);
+    }
+
+    [Theory]
+    [InlineData("percent", 150)]
+    [InlineData("percentile", -5)]
+    public void IconSet_percent_threshold_out_of_range_is_invalid_args(string type, int value)
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(Th("percent", 0), Th(type, value), Th("percent", 90)))));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("between 0 and 100", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IconSet_threshold_missing_value_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(
+                Th("percent", 0), new JsonObject { ["type"] = "num" }, Th("percent", 90)))));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("value", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IconSet_formula_threshold_needs_a_string_value()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(Th("percent", 0), Th("percent", 50), Th("formula", 90)))));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("formula", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IconSet_default_rule_emits_no_thresholds_key()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"))).IsOk);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("iconSet", data["cfKind"]!.GetValue<string>());
+        Assert.Null(data["thresholds"]); // a legacy even-split iconSet projects no thresholds
+    }
+
+    [Fact]
+    public void IconSet_custom_thresholds_survive_save_reopen_and_a_later_edit()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "iconSet"), ("set", "3Arrows"),
+            ("thresholds", Thresholds(
+                Th("num", 0), Th("percent", 50), Th("formula", "=$A$1"))))).IsOk);
+
+        // A later unrelated edit reopens with ClosedXML, strips/re-saves the model
+        // and re-runs every post-save pass. The authored thresholds must survive
+        // (ClosedXML's FixUpAfterSave must not strip/reorder the cfvo).
+        Assert.True(EditOps(file, SetOp("/Sheet1/F1", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var cfvos = IconSetCfvos(document);
+            Assert.Equal(3, cfvos.Count); // no stray/duplicated cfvo
+            Assert.Equal(
+                [
+                    S.ConditionalFormatValueObjectValues.Number,
+                    S.ConditionalFormatValueObjectValues.Percent,
+                    S.ConditionalFormatValueObjectValues.Formula,
+                ],
+                cfvos.Select(c => c.Type!.Value));
+            Assert.Equal(["0", "50", "$A$1"], cfvos.Select(c => c.Val!.Value));
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        var thresholds = data["thresholds"]!.AsArray();
+        Assert.Equal(3, thresholds.Count);
+        Assert.Equal("num", thresholds[0]!["type"]!.GetValue<string>());
+        Assert.Equal("0", thresholds[0]!["value"]!.GetValue<string>());
+        Assert.Equal("percent", thresholds[1]!["type"]!.GetValue<string>());
+        Assert.Equal("50", thresholds[1]!["value"]!.GetValue<string>());
+        Assert.Equal("formula", thresholds[2]!["type"]!.GetValue<string>());
+        Assert.Equal("$A$1", thresholds[2]!["value"]!.GetValue<string>());
+    }
 }
