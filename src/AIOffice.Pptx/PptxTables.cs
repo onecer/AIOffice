@@ -1472,12 +1472,20 @@ internal static class PptxTables
     {
         var covered = IsCovered(cell);
         var tcPr = cell.TableCellProperties;
+        var firstParagraph = cell.TextBody?.Elements<A.Paragraph>().FirstOrDefault();
+        var firstRunProperties = firstParagraph?.Elements<A.Run>().FirstOrDefault()?.RunProperties;
         return new
         {
             Path = Units.Inv($"{tablePath}/tr[{row}]/tc[{col}]"),
             Row = row,
             Col = col,
             Text = CellText(cell),
+            Bold = firstRunProperties?.Bold?.Value == true ? true : (bool?)null,
+            Color = firstRunProperties?.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant() is { } hex
+                ? "#" + hex
+                : null,
+            FontSize = firstRunProperties?.FontSize?.Value is { } sz ? sz / 100.0 : (double?)null,
+            Align = AlignToken(firstParagraph?.ParagraphProperties?.Alignment?.Value),
             GridSpan = (cell.GridSpan?.Value ?? 1) > 1 ? cell.GridSpan!.Value : (int?)null,
             RowSpan = (cell.RowSpan?.Value ?? 1) > 1 ? cell.RowSpan!.Value : (int?)null,
             Covered = covered ? true : (bool?)null,
@@ -1536,6 +1544,35 @@ internal static class PptxTables
             Color = line.GetFirstChild<A.SolidFill>()?.RgbColorModelHex?.Val?.Value?.ToUpperInvariant(),
             WidthPt = line.Width?.Value is { } w ? Math.Round(w / (double)BorderWidthEmu, 4) : (double?)null,
         };
+    }
+
+    /// <summary>
+    /// The a:pPr @algn of the cell's first paragraph as left|center|right|justify, or null when
+    /// @algn is absent (alignment inherited) — read-side mirror of the <c>align</c> SetCell prop.
+    /// </summary>
+    internal static string? AlignToken(A.TextAlignmentTypeValues? alignment)
+    {
+        if (alignment is null)
+        {
+            return null;
+        }
+
+        if (alignment.Value == A.TextAlignmentTypeValues.Left)
+        {
+            return "left";
+        }
+
+        if (alignment.Value == A.TextAlignmentTypeValues.Center)
+        {
+            return "center";
+        }
+
+        if (alignment.Value == A.TextAlignmentTypeValues.Right)
+        {
+            return "right";
+        }
+
+        return alignment.Value == A.TextAlignmentTypeValues.Justified ? "justify" : null;
     }
 
     internal static string? VAlignToken(A.TextAnchoringTypeValues? anchor)

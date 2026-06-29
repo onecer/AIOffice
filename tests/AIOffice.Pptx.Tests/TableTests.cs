@@ -232,6 +232,101 @@ public sealed class TableTests : IDisposable
     }
 
     [Fact]
+    public void GetCell_RunFormatting_RoundTripsBoldColorSizeAlign()
+    {
+        CreateWithTable();
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(
+            ("text", "42"), ("bold", true), ("color", "CC0000"), ("fontSize", 18), ("align", "right"))));
+
+        // The OOXML the write path produced carries the run props on the first run/paragraph.
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var cell = OpenTable(doc).Elements<A.TableRow>().ToList()[1].Elements<A.TableCell>().ToList()[1];
+            var runProps = cell.TextBody!.Elements<A.Paragraph>().First().Elements<A.Run>().First().RunProperties!;
+            Assert.True(runProps.Bold!.Value);
+            Assert.Equal(1800, runProps.FontSize!.Value); // 18pt -> sz hundredths
+        }
+
+        // save-reopen, then get must REPORT each with the right type+value.
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
+        Assert.True(detail["bold"]!.GetValue<bool>());
+        Assert.Equal("#CC0000", detail["color"]!.GetValue<string>());
+        Assert.Equal(18.0, detail["fontSize"]!.GetValue<double>());
+        Assert.Equal("right", detail["align"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void GetCell_BareCell_OmitsRunFormattingKeys()
+    {
+        CreateWithTable();
+        // A body cell with only text: no direct bold/color/size, no explicit @algn.
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(("text", "plain"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
+        Assert.Equal("plain", detail["text"]!.GetValue<string>());
+        // Byte-stable: WhenWritingNull drops the four keys entirely for a bare cell.
+        Assert.False(detail.ContainsKey("bold"));
+        Assert.False(detail.ContainsKey("color"));
+        Assert.False(detail.ContainsKey("fontSize"));
+        // align MUST NOT default to 'left' when inherited.
+        Assert.False(detail.ContainsKey("align"));
+    }
+
+    [Fact]
+    public void GetCell_ThemeColoredRun_ProjectsColorNull()
+    {
+        CreateWithTable();
+        // Build a run whose color is a scheme/theme color (no direct a:srgbClr) by hand.
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), true))
+        {
+            var cell = OpenTable(doc).Elements<A.TableRow>().ToList()[1].Elements<A.TableCell>().ToList()[1];
+            var run = new A.Run(
+                new A.RunProperties(new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.Accent1 })),
+                new A.Text("themed"));
+            cell.TextBody!.Elements<A.Paragraph>().First().Append(run);
+            doc.PresentationPart!.SlideParts.Single().Slide!.Save();
+        }
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
+        // We read ONLY a direct a:srgbClr; a theme color must not be invented as a hex.
+        Assert.False(detail.ContainsKey("color"));
+    }
+
+    [Fact]
+    public void GetTable_MixedCells_DistinguishesStyledFromBare()
+    {
+        var path = CreateWithTable(headerRow: false);
+        Edit(
+            TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[1]", props: TestEnv.Props(
+                ("text", "styled"), ("bold", true), ("align", "center"))),
+            TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(("text", "bare"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        var row2 = detail["rowsDetail"]![1]!["cells"]!.AsArray();
+
+        var styled = row2[0]!.AsObject();
+        Assert.True(styled["bold"]!.GetValue<bool>());
+        Assert.Equal("center", styled["align"]!.GetValue<string>());
+
+        var bare = row2[1]!.AsObject();
+        Assert.False(bare.ContainsKey("bold"));
+        Assert.False(bare.ContainsKey("align"));
+    }
+
+    [Fact]
+    public void GetCell_VAlignAndTextDirection_RoundTrip()
+    {
+        CreateWithTable();
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(
+            ("valign", "middle"), ("textDirection", "vertical270"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", "/slide[1]/table[1]/tr[2]/tc[2]"))));
+        Assert.Equal("middle", detail["vAlign"]!.GetValue<string>());
+        Assert.Equal("vertical270", detail["textDirection"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
     public void SetCell_UnknownProp_IsInvalidArgs()
     {
         CreateWithTable();
