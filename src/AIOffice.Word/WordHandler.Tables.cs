@@ -12,7 +12,22 @@ public sealed partial class WordHandler
         ["borders", "borderColor", "borderWidthPt", "shading", "headerRow", "columnWidths", "width", "alignment", "cellPaddingCm", "rtl"];
 
     private static readonly string[] CellProps =
-        ["text", "formula", "numberFormat", "mergeRight", "mergeDown", "shading", "valign", "borders"];
+        ["text", "formula", "numberFormat", "mergeRight", "mergeDown", "shading", "valign", "borders", "textDirection"];
+
+    /// <summary>
+    /// The cell text-flow tokens we accept (the common WordprocessingML w:textDirection
+    /// values), mapped to their SDK enum. lrTb is Word's default left-to-right flow,
+    /// tbRl rotates text into a vertical column (top→bottom), btLr flows bottom→top.
+    /// </summary>
+    private static readonly Dictionary<string, TextDirectionValues> CellTextDirections = new(StringComparer.Ordinal)
+    {
+        ["lrTb"] = TextDirectionValues.LefToRightTopToBottom,
+        ["tbRl"] = TextDirectionValues.TopToBottomRightToLeft,
+        ["btLr"] = TextDirectionValues.BottomToTopLeftToRight,
+        ["lrTbV"] = TextDirectionValues.LefttoRightTopToBottomRotated,
+        ["tbRlV"] = TextDirectionValues.TopToBottomRightToLeftRotated,
+        ["tbLrV"] = TextDirectionValues.TopToBottomLeftToRightRotated,
+    };
 
     /// <summary>The per-cell border styles we accept, mapped to their w:border value.</summary>
     private static readonly Dictionary<string, BorderValues> CellBorderStyles = new(StringComparer.OrdinalIgnoreCase)
@@ -642,6 +657,10 @@ public sealed partial class WordHandler
                         "use \"all\" for the four outer sides and style \"none\" to clear an edge."));
                     break;
 
+                case "textDirection":
+                    SetCellTextDirection(EnsureTcPr(cell), NodeToString(value));
+                    break;
+
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
@@ -682,6 +701,27 @@ public sealed partial class WordHandler
             ErrorCodes.InvalidArgs,
             $"{name} must be a whole number ≥ 1, got '{NodeToString(value)}'.",
             $"{name} is the total number of cells the merged cell covers; 1 unmerges.");
+    }
+
+    /// <summary>
+    /// Sets w:tcPr/w:textDirection (@w:val) from a flow token. The typed
+    /// TableCellProperties.TextDirection setter places the element at its
+    /// schema-ordered position in CT_TcPr (after tcMar, before vAlign), so it
+    /// coexists with shading/borders/valign/merges and passes OpenXmlValidator.
+    /// </summary>
+    private static void SetCellTextDirection(TableCellProperties tcPr, string value)
+    {
+        if (!CellTextDirections.TryGetValue(value.Trim(), out var direction))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Unknown textDirection '{value}'.",
+                $"Use one of: {string.Join(", ", CellTextDirections.Keys)} " +
+                "(lrTb is the default left-to-right flow, tbRl/btLr rotate text into a column).",
+                candidates: [.. CellTextDirections.Keys]);
+        }
+
+        tcPr.TextDirection = new TextDirection { Val = direction };
     }
 
     // ----------------------------------------------------------------- merges
@@ -996,6 +1036,7 @@ public sealed partial class WordHandler
             ["shading"] = tcPr?.Shading?.Fill?.Value,
             ["valign"] = CellValignName(tcPr?.TableCellVerticalAlignment),
             ["borders"] = CellBordersShape(tcPr?.TableCellBorders),
+            ["textDirection"] = CellTextDirectionToken(tcPr?.TextDirection),
         };
 
         // A formula cell reports its expression plus the cached computed value
@@ -1079,6 +1120,29 @@ public sealed partial class WordHandler
         }
 
         return val == TableVerticalAlignmentValues.Bottom ? "bottom" : "top";
+    }
+
+    /// <summary>
+    /// Inverse of CellTextDirections for get: the w:textDirection @w:val as its flow
+    /// token (null when the cell has no w:textDirection, like shading/valign). Unknown
+    /// values fall back to their raw token so nothing is silently dropped.
+    /// </summary>
+    private static string? CellTextDirectionToken(TextDirection? textDirection)
+    {
+        if (textDirection?.Val?.Value is not { } val)
+        {
+            return null;
+        }
+
+        foreach (var (token, value) in CellTextDirections)
+        {
+            if (value == val)
+            {
+                return token;
+            }
+        }
+
+        return val.ToString();
     }
 
     /// <summary>
