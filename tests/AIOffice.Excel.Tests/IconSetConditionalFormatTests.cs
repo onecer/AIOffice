@@ -207,8 +207,8 @@ public sealed class IconSetConditionalFormatTests : ExcelTestBase
     {
         // The pre-1.1 suite asserted iconSet was unsupported; confirm it is now
         // accepted while a genuinely-unknown kind still names the expanded set
-        // (which v1.3 grew with formula/topBottom/aboveBelowAverage and v1.21
-        // with duplicateValues/uniqueValues).
+        // (which v1.3 grew with formula/topBottom/aboveBelowAverage, v1.21 with
+        // duplicateValues/uniqueValues and v1.22 with the text-match completers).
         var file = CreateDataWorkbook();
 
         var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat", ("kind", "timePeriod")));
@@ -217,7 +217,8 @@ public sealed class IconSetConditionalFormatTests : ExcelTestBase
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Equal(
             ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom",
-                "aboveBelowAverage", "duplicateValues", "uniqueValues"],
+                "aboveBelowAverage", "duplicateValues", "uniqueValues", "notContainsText", "startsWith",
+                "endsWith"],
             envelope.Error.Candidates!);
         Assert.Contains("iconSet", envelope.Error.Suggestion, StringComparison.Ordinal);
     }

@@ -19,7 +19,9 @@ namespace AIOffice.Excel;
 /// completers <c>formula</c> (an <c>=expression</c> rule), <c>topBottom</c>
 /// (top/bottom N or N%) and <c>aboveBelowAverage</c> (above/below the range
 /// average, optionally ±N standard deviations), plus (v1.21, additive) the
-/// value-occurrence pair <c>duplicateValues</c>/<c>uniqueValues</c>; everything
+/// value-occurrence pair <c>duplicateValues</c>/<c>uniqueValues</c> and (v1.22,
+/// additive) the text-match completers <c>notContainsText</c>/<c>startsWith</c>/
+/// <c>endsWith</c> alongside the cellIs <c>notBetween</c> operator; everything
 /// else is a typed <c>unsupported_feature</c>.
 ///
 /// Two of the v1.3 kinds save natively through ClosedXML (<c>formula</c> →
@@ -49,10 +51,11 @@ internal static partial class ExcelConditionalFormats
     public static readonly IReadOnlyList<string> Kinds =
     [
         "cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage",
-        "duplicateValues", "uniqueValues",
+        "duplicateValues", "uniqueValues", "notContainsText", "startsWith", "endsWith",
     ];
 
-    private static readonly IReadOnlyList<string> Operators = [">", "<", ">=", "<=", "==", "!=", "between"];
+    private static readonly IReadOnlyList<string> Operators =
+        [">", "<", ">=", "<=", "==", "!=", "between", "notBetween"];
 
     /// <summary>topBottom modes: highest-ranked N (top) or lowest-ranked N (bottom).</summary>
     private static readonly IReadOnlyList<string> TopBottomModes = ["top", "bottom"];
@@ -226,6 +229,15 @@ internal static partial class ExcelConditionalFormats
             case "uniqueValues":
                 AddDuplicateUnique(range, props, opIndex, duplicate: false);
                 break;
+            case "notContainsText":
+                AddNotContainsText(range, props, opIndex);
+                break;
+            case "startsWith":
+                AddStartsWith(range, props, opIndex);
+                break;
+            case "endsWith":
+                AddEndsWith(range, props, opIndex);
+                break;
             default:
                 throw new AiofficeException(
                     ErrorCodes.UnsupportedFeature,
@@ -274,19 +286,20 @@ internal static partial class ExcelConditionalFormats
 
         var value = RequiredNumber(props, "value", opIndex);
         var value2 = OptionalNumber(props, "value2", opIndex);
-        if (op == "between" && value2 is null)
+        var needsPair = op is "between" or "notBetween";
+        if (needsPair && value2 is null)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                $"ops[{opIndex}]: operator 'between' needs both value and value2.",
+                $"ops[{opIndex}]: operator '{op}' needs both value and value2.",
                 "Pass e.g. {\"operator\":\"between\",\"value\":10,\"value2\":20}.");
         }
 
-        if (op != "between" && value2 is not null)
+        if (!needsPair && value2 is not null)
         {
             throw new AiofficeException(
                 ErrorCodes.InvalidArgs,
-                $"ops[{opIndex}]: 'value2' only applies to the between operator.",
+                $"ops[{opIndex}]: 'value2' only applies to between/notBetween.",
                 "Drop value2, or switch the operator to between.");
         }
 
@@ -299,7 +312,9 @@ internal static partial class ExcelConditionalFormats
             "<=" => format.WhenEqualOrLessThan(value),
             "==" => format.WhenEquals(value),
             "!=" => format.WhenNotEquals(value),
-            _ => format.WhenBetween(value, value2!.Value),
+            "between" => format.WhenBetween(value, value2!.Value),
+            // notBetween — the only token left; the operator guard rejected the rest.
+            _ => format.WhenNotBetween(value, value2!.Value),
         };
         ApplyStyle(style, props, opIndex);
     }
@@ -574,6 +589,51 @@ internal static partial class ExcelConditionalFormats
         }
 
         ApplyStyle(range.AddConditionalFormat().WhenContains(text), props, opIndex);
+    }
+
+    private static void AddNotContainsText(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, ContainsTextProps, opIndex);
+        var text = OptionalString(props, "text");
+        if (string.IsNullOrEmpty(text))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: notContainsText needs a non-empty 'text'.",
+                "Pass e.g. {\"kind\":\"notContainsText\",\"text\":\"paid\",\"fill\":\"FFC7CE\"}.");
+        }
+
+        ApplyStyle(range.AddConditionalFormat().WhenNotContains(text), props, opIndex);
+    }
+
+    private static void AddStartsWith(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, ContainsTextProps, opIndex);
+        var text = OptionalString(props, "text");
+        if (string.IsNullOrEmpty(text))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: startsWith needs a non-empty 'text'.",
+                "Pass e.g. {\"kind\":\"startsWith\",\"text\":\"ERR\",\"fill\":\"FFC7CE\"}.");
+        }
+
+        ApplyStyle(range.AddConditionalFormat().WhenStartsWith(text), props, opIndex);
+    }
+
+    private static void AddEndsWith(IXLRange range, JsonObject props, int opIndex)
+    {
+        GuardProps(props, ContainsTextProps, opIndex);
+        var text = OptionalString(props, "text");
+        if (string.IsNullOrEmpty(text))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{opIndex}]: endsWith needs a non-empty 'text'.",
+                "Pass e.g. {\"kind\":\"endsWith\",\"text\":\"(late)\",\"fill\":\"FFC7CE\"}.");
+        }
+
+        ApplyStyle(range.AddConditionalFormat().WhenEndsWith(text), props, opIndex);
     }
 
     /// <summary>
@@ -1044,7 +1104,13 @@ internal static partial class ExcelConditionalFormats
                 : null,
             value = ValueAt(format, 1),
             value2 = format.ConditionalFormatType == XLConditionalFormatType.CellIs ? ValueAt(format, 2) : null,
-            text = format.ConditionalFormatType == XLConditionalFormatType.ContainsText ? ValueAt(format, 1) : null,
+            text = format.ConditionalFormatType
+                is XLConditionalFormatType.ContainsText
+                or XLConditionalFormatType.NotContainsText
+                or XLConditionalFormatType.StartsWith
+                or XLConditionalFormatType.EndsWith
+                ? ValueAt(format, 1)
+                : null,
             // formula (Expression) rules carry their expression in Values[1].
             formula = format.ConditionalFormatType == XLConditionalFormatType.Expression ? ValueAt(format, 1) : null,
             // topBottom (Top10) rules: highest-ranked = top, Bottom flag = bottom;
@@ -1322,6 +1388,11 @@ internal static partial class ExcelConditionalFormats
         // OOXML spelling, NOT the lowercase fallback ('isDuplicate'/'isUnique').
         XLConditionalFormatType.IsDuplicate => "duplicateValues",
         XLConditionalFormatType.IsUnique => "uniqueValues",
+        // Surface spelling, pinned like IsDuplicate above — startsWith stays the
+        // aioffice kind even though the wire cfRule@type is 'beginsWith'.
+        XLConditionalFormatType.NotContainsText => "notContainsText",
+        XLConditionalFormatType.StartsWith => "startsWith",
+        XLConditionalFormatType.EndsWith => "endsWith",
         _ => char.ToLowerInvariant(type.ToString()[0]) + type.ToString()[1..],
     };
 
@@ -1348,6 +1419,7 @@ internal static partial class ExcelConditionalFormats
         XLCFOperator.Equal => "==",
         XLCFOperator.NotEqual => "!=",
         XLCFOperator.Between => "between",
+        XLCFOperator.NotBetween => "notBetween",
         _ => char.ToLowerInvariant(op.ToString()[0]) + op.ToString()[1..],
     };
 

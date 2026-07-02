@@ -119,7 +119,7 @@ public sealed class ConditionalFormatTests : ExcelTestBase
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
-        Assert.Equal([">", "<", ">=", "<=", "==", "!=", "between"], envelope.Error.Candidates!);
+        Assert.Equal([">", "<", ">=", "<=", "==", "!=", "between", "notBetween"], envelope.Error.Candidates!);
     }
 
     [Fact]
@@ -372,8 +372,9 @@ public sealed class ConditionalFormatTests : ExcelTestBase
 
         // iconSet joined the supported set in v1.1; formula/topBottom/
         // aboveBelowAverage joined in v1.3; duplicateValues/uniqueValues in
-        // v1.21. A genuinely-unknown kind still names every supported kind (the
-        // now-expanded set) as candidates.
+        // v1.21; notContainsText/startsWith/endsWith in v1.22. A genuinely-
+        // unknown kind still names every supported kind (the now-expanded set)
+        // as candidates.
         var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
             ("kind", "timePeriod")));
 
@@ -381,7 +382,8 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Equal(
             ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom",
-                "aboveBelowAverage", "duplicateValues", "uniqueValues"],
+                "aboveBelowAverage", "duplicateValues", "uniqueValues", "notContainsText", "startsWith",
+                "endsWith"],
             envelope.Error.Candidates!);
         Assert.Contains("cellIs", envelope.Error.Suggestion, StringComparison.Ordinal);
     }
@@ -975,5 +977,153 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
         Assert.Contains("fill", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    // ----- notBetween + text-match kinds (v1.22) --------------------------------
+
+    [Fact]
+    public void CellIs_notBetween_writes_two_formulas_and_reopens()
+    {
+        var file = CreateDataWorkbook();
+
+        Assert.True(EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "cellIs"), ("operator", "notBetween"), ("value", 5), ("value2", 15),
+            ("fill", "FFC7CE"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            // Wire tokens pinned as literal strings so a ClosedXML upgrade
+            // cannot silently change what lands in the file.
+            var rule = Assert.Single(RawRules(document));
+            Assert.Equal("cellIs", rule.Type!.InnerText);
+            Assert.Equal("notBetween", rule.Operator!.InnerText);
+            Assert.Equal(["5", "15"], rule.Elements<S.Formula>().Select(f => f.Text));
+        }
+
+        // ClosedXML reads its own native save back as NotBetween.
+        using (var workbook = new XLWorkbook(file))
+        {
+            Assert.Equal(
+                XLCFOperator.NotBetween,
+                workbook.Worksheet("Sheet1").ConditionalFormats.Single().Operator);
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("cellIs", data["cfKind"]!.GetValue<string>());
+        Assert.Equal("notBetween", data["operator"]!.GetValue<string>());
+        Assert.Equal("5", data["value"]!.GetValue<string>());
+        Assert.Equal("15", data["value2"]!.GetValue<string>());
+        Assert.Equal("FFC7CE", data["fill"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void NotBetween_without_value2_fails_actionably()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "cellIs"), ("operator", "notBetween"), ("value", 5), ("fill", "C6EFCE")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("notBetween", envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("value2", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Value2_with_a_scalar_operator_is_still_rejected()
+    {
+        var file = CreateDataWorkbook();
+
+        // Widened-guard regression: pair operators grew notBetween, but value2
+        // on a scalar operator must stay refused.
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
+            ("kind", "cellIs"), ("operator", ">"), ("value", 5), ("value2", 15), ("fill", "C6EFCE")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("'value2' only applies to between/notBetween", envelope.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("notContainsText", "notContainsText", "notContains", "ISERROR(SEARCH(\"paid\"")]
+    [InlineData("startsWith", "beginsWith", "beginsWith", "LEFT(")]
+    [InlineData("endsWith", "endsWith", "endsWith", "RIGHT(")]
+    public void Text_match_kinds_write_their_wire_type_operator_and_formula(
+        string kind, string wireType, string wireOperator, string formulaStart)
+    {
+        var file = CreateDataWorkbook();
+
+        Assert.True(EditOps(file, AddOp("/Sheet1/D1:D3", "conditionalFormat",
+            ("kind", kind), ("text", "paid"), ("fill", "FFC7CE"))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var rule = Assert.Single(RawRules(document));
+        // The aioffice kind 'startsWith' rides the OOXML type/operator
+        // 'beginsWith' — assert the exact wire strings, not enum identity.
+        Assert.Equal(wireType, rule.Type!.InnerText);
+        Assert.Equal(wireOperator, rule.Operator!.InnerText);
+        Assert.Equal("paid", rule.Text?.Value);
+        var formula = Assert.Single(rule.Elements<S.Formula>());
+        Assert.StartsWith(formulaStart, formula.Text, StringComparison.Ordinal);
+        Assert.Contains("\"paid\"", formula.Text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("containsText")]
+    [InlineData("notContainsText")]
+    [InlineData("startsWith")]
+    [InlineData("endsWith")]
+    public void Text_match_kinds_roundtrip_through_get_like_containsText(string kind)
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, AddOp("/Sheet1/D1:D3", "conditionalFormat",
+            ("kind", kind), ("text", "overdue"), ("fill", "FFC7CE"), ("color", "9C0006"),
+            ("bold", true))).IsOk);
+
+        // A later unrelated edit forces a full ClosedXML load/save cycle, so
+        // the rule must survive a reopen — and every text kind must project the
+        // same shape containsText does (containsText rides along as the pin).
+        Assert.True(EditOps(file, SetOp("/Sheet1/F1", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal(kind, data["cfKind"]!.GetValue<string>());
+        Assert.Equal("overdue", data["text"]!.GetValue<string>());
+        Assert.Equal("FFC7CE", data["fill"]!.GetValue<string>());
+        Assert.Equal("9C0006", data["color"]!.GetValue<string>());
+        Assert.True(data["bold"]!.GetValue<bool>());
+        Assert.Null(data["operator"]);
+        Assert.Null(data["value2"]);
+        Assert.Null(data["formula"]);
+
+        var structure = OkData(Handler.Read(Ctx(file, ("view", "structure"))));
+        var format = structure["sheets"]![0]!["conditionalFormats"]![0]!;
+        Assert.Equal(kind, format["cfKind"]!.GetValue<string>());
+        Assert.Equal("overdue", format["text"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("notContainsText")]
+    [InlineData("startsWith")]
+    [InlineData("endsWith")]
+    public void Text_match_kinds_need_a_non_empty_text(string kind)
+    {
+        var file = CreateDataWorkbook();
+
+        foreach (var op in new[]
+        {
+            AddOp("/Sheet1/D1:D3", "conditionalFormat", ("kind", kind), ("fill", "FFC7CE")),
+            AddOp("/Sheet1/D1:D3", "conditionalFormat", ("kind", kind), ("text", ""), ("fill", "FFC7CE")),
+        })
+        {
+            var envelope = EditOps(file, op);
+            Assert.False(envelope.IsOk);
+            Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+            Assert.Contains(kind, envelope.Error.Message, StringComparison.Ordinal);
+            Assert.Contains("text", envelope.Error.Message, StringComparison.Ordinal);
+        }
     }
 }
