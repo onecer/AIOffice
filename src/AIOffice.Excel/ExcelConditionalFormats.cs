@@ -18,8 +18,9 @@ namespace AIOffice.Excel;
 /// <c>containsText</c>, <c>iconSet</c>, and (v1.3, additive) the rule-family
 /// completers <c>formula</c> (an <c>=expression</c> rule), <c>topBottom</c>
 /// (top/bottom N or N%) and <c>aboveBelowAverage</c> (above/below the range
-/// average, optionally ±N standard deviations); everything else is a typed
-/// <c>unsupported_feature</c>.
+/// average, optionally ±N standard deviations), plus (v1.21, additive) the
+/// value-occurrence pair <c>duplicateValues</c>/<c>uniqueValues</c>; everything
+/// else is a typed <c>unsupported_feature</c>.
 ///
 /// Two of the v1.3 kinds save natively through ClosedXML (<c>formula</c> →
 /// <c>cfRule@type=expression</c>, <c>topBottom</c> → <c>cfRule@type=top10</c>),
@@ -46,7 +47,10 @@ internal static partial class ExcelConditionalFormats
 {
     /// <summary>The conditional-format kinds aioffice can create.</summary>
     public static readonly IReadOnlyList<string> Kinds =
-        ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage"];
+    [
+        "cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage",
+        "duplicateValues", "uniqueValues",
+    ];
 
     private static readonly IReadOnlyList<string> Operators = [">", "<", ">=", "<=", "==", "!=", "between"];
 
@@ -105,6 +109,12 @@ internal static partial class ExcelConditionalFormats
 
     private static readonly IReadOnlyList<string> AboveBelowAverageProps =
         ["kind", "mode", "stdDev", "fill", "color", "bold"];
+
+    /// <summary>
+    /// duplicateValues/uniqueValues take only the shared styling props: the rule
+    /// condition is the kind itself (no operator/value/text/formula).
+    /// </summary>
+    private static readonly IReadOnlyList<string> DuplicateUniqueProps = ["kind", "fill", "color", "bold"];
 
     /// <summary>
     /// The icon-set names aioffice accepts, in OOXML spelling, mapped to the
@@ -209,6 +219,12 @@ internal static partial class ExcelConditionalFormats
                 // already holds on the sheet, plus any average rules queued before
                 // it on the same sheet, plus one.
                 averageRules.Add(ParseAverageRule(target.Sheet.Name, range, props, opIndex));
+                break;
+            case "duplicateValues":
+                AddDuplicateUnique(range, props, opIndex, duplicate: true);
+                break;
+            case "uniqueValues":
+                AddDuplicateUnique(range, props, opIndex, duplicate: false);
                 break;
             default:
                 throw new AiofficeException(
@@ -776,6 +792,19 @@ internal static partial class ExcelConditionalFormats
     }
 
     /// <summary>
+    /// Adds a duplicateValues/uniqueValues rule (<c>cfRule@type=duplicateValues</c>
+    /// / <c>uniqueValues</c>): the cells whose value occurs more than once
+    /// (duplicate) or exactly once (unique) in the range get the fill/color/bold.
+    /// The condition IS the kind — no operator/value/text/formula props.
+    /// </summary>
+    private static void AddDuplicateUnique(IXLRange range, JsonObject props, int opIndex, bool duplicate)
+    {
+        GuardProps(props, DuplicateUniqueProps, opIndex);
+        var format = range.AddConditionalFormat();
+        ApplyStyle(duplicate ? format.WhenIsDuplicate() : format.WhenIsUnique(), props, opIndex);
+    }
+
+    /// <summary>
     /// Adds a top/bottom rule (<c>cfRule@type=top10</c>): the highest- (mode
     /// "top") or lowest- (mode "bottom") ranked N values in the range get the
     /// fill/color/bold. With <c>percent:true</c>, N is a percentage of the cell
@@ -1290,6 +1319,9 @@ internal static partial class ExcelConditionalFormats
         XLConditionalFormatType.Expression => "formula",
         XLConditionalFormatType.Top10 => "topBottom",
         XLConditionalFormatType.AboveAverage => "aboveBelowAverage",
+        // OOXML spelling, NOT the lowercase fallback ('isDuplicate'/'isUnique').
+        XLConditionalFormatType.IsDuplicate => "duplicateValues",
+        XLConditionalFormatType.IsUnique => "uniqueValues",
         _ => char.ToLowerInvariant(type.ToString()[0]) + type.ToString()[1..],
     };
 

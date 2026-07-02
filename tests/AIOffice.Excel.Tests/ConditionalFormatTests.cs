@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AIOffice.Core;
+using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
 using S = DocumentFormat.OpenXml.Spreadsheet;
@@ -370,15 +371,17 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         var file = CreateDataWorkbook();
 
         // iconSet joined the supported set in v1.1; formula/topBottom/
-        // aboveBelowAverage joined in v1.3. A genuinely-unknown kind still names
-        // every supported kind (the now-expanded set) as candidates.
+        // aboveBelowAverage joined in v1.3; duplicateValues/uniqueValues in
+        // v1.21. A genuinely-unknown kind still names every supported kind (the
+        // now-expanded set) as candidates.
         var envelope = EditOps(file, AddOp("/Sheet1/A1:A10", "conditionalFormat",
             ("kind", "timePeriod")));
 
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.UnsupportedFeature, envelope.Error!.Code);
         Assert.Equal(
-            ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom", "aboveBelowAverage"],
+            ["cellIs", "colorScale", "dataBar", "containsText", "iconSet", "formula", "topBottom",
+                "aboveBelowAverage", "duplicateValues", "uniqueValues"],
             envelope.Error.Candidates!);
         Assert.Contains("cellIs", envelope.Error.Suggestion, StringComparison.Ordinal);
     }
@@ -800,5 +803,177 @@ public sealed class ConditionalFormatTests : ExcelTestBase
         Assert.Equal("10", data["minValue"]!.GetValue<string>());
         Assert.Equal("percent", data["maxType"]!.GetValue<string>());
         Assert.Equal("80", data["maxValue"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DuplicateValues_writes_rule_and_dxf_fill()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "duplicateValues"), ("fill", "FFC7CE")));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        Assert.Equal("duplicateValues", Json(envelope)["data"]!["ops"]![0]!["kind"]!.GetValue<string>());
+        AssertValidatorClean(file);
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var rule = Assert.Single(RawRules(document));
+        Assert.Equal(S.ConditionalFormatValues.DuplicateValues, rule.Type!.Value);
+        Assert.Empty(rule.Elements<S.Formula>()); // the condition IS the kind
+        Assert.Equal("A1:C10", ((S.ConditionalFormatting)rule.Parent!).SequenceOfReferences!.InnerText);
+
+        // The dxf the rule points at must carry the requested fill.
+        var dxf = document.WorkbookPart!.WorkbookStylesPart!.Stylesheet!
+            .DifferentialFormats!.Elements<S.DifferentialFormat>().ElementAt((int)rule.FormatId!.Value);
+        Assert.Contains("FFC7CE", dxf.OuterXml, StringComparison.OrdinalIgnoreCase);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("duplicateValues", data["cfKind"]!.GetValue<string>());
+        Assert.Equal("FFC7CE", data["fill"]!.GetValue<string>());
+        Assert.Equal(["A1:C10"], data["ranges"]!.AsArray().Select(n => n!.GetValue<string>()));
+        // Kind-conditional fields stay absent — including the UNCONDITIONAL
+        // value slot: these rules carry no formula child to surface.
+        Assert.Null(data["operator"]);
+        Assert.Null(data["value"]);
+        Assert.Null(data["value2"]);
+        Assert.Null(data["text"]);
+        Assert.Null(data["formula"]);
+    }
+
+    [Fact]
+    public void UniqueValues_writes_rule_and_dxf_style()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", "uniqueValues"), ("fill", "C6EFCE"), ("color", "006100"), ("bold", true)));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var rule = Assert.Single(RawRules(document));
+        Assert.Equal(S.ConditionalFormatValues.UniqueValues, rule.Type!.Value);
+        Assert.Empty(rule.Elements<S.Formula>());
+        var dxf = document.WorkbookPart!.WorkbookStylesPart!.Stylesheet!
+            .DifferentialFormats!.Elements<S.DifferentialFormat>().ElementAt((int)rule.FormatId!.Value);
+        Assert.Contains("C6EFCE", dxf.OuterXml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("006100", dxf.OuterXml, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(dxf.Font?.Bold);
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("uniqueValues", data["cfKind"]!.GetValue<string>());
+        Assert.Equal("C6EFCE", data["fill"]!.GetValue<string>());
+        Assert.Equal("006100", data["color"]!.GetValue<string>());
+        Assert.True(data["bold"]!.GetValue<bool>());
+        Assert.Null(data["value"]);
+    }
+
+    [Fact]
+    public void DuplicateUnique_overlapping_rules_survive_save_reopen_intact()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(
+            file,
+            AddOp("/Sheet1/A1:C10", "conditionalFormat", ("kind", "duplicateValues"), ("fill", "FFC7CE")),
+            AddOp("/Sheet1/A1:B5", "conditionalFormat", ("kind", "uniqueValues"), ("fill", "C6EFCE"))).IsOk);
+
+        // A later unrelated edit reopens the file with ClosedXML and re-saves
+        // the whole model, so both rules must survive a full load/save cycle.
+        Assert.True(EditOps(file, SetOp("/Sheet1/F1", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        using (var workbook = new XLWorkbook(file))
+        {
+            Assert.Equal(
+                [XLConditionalFormatType.IsDuplicate, XLConditionalFormatType.IsUnique],
+                workbook.Worksheet("Sheet1").ConditionalFormats.Select(f => f.ConditionalFormatType));
+        }
+
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            Assert.Equal(
+                [S.ConditionalFormatValues.DuplicateValues, S.ConditionalFormatValues.UniqueValues],
+                RawRules(document).Select(r => r.Type!.Value));
+        }
+
+        // The overlapping rules stay independent — each keeps its own range,
+        // kind and style through get.
+        var first = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))));
+        Assert.Equal("duplicateValues", first["cfKind"]!.GetValue<string>());
+        Assert.Equal("FFC7CE", first["fill"]!.GetValue<string>());
+        Assert.Equal(["A1:C10"], first["ranges"]!.AsArray().Select(n => n!.GetValue<string>()));
+        var second = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[2]"))));
+        Assert.Equal("uniqueValues", second["cfKind"]!.GetValue<string>());
+        Assert.Equal("C6EFCE", second["fill"]!.GetValue<string>());
+        Assert.Equal(["A1:B5"], second["ranges"]!.AsArray().Select(n => n!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void DuplicateUnique_wire_names_never_use_the_lowercase_fallback()
+    {
+        // The KindName lowercase fallback would spell ClosedXML's enum members
+        // as 'isDuplicate'/'isUnique'; the wire MUST use the OOXML cfRule@type
+        // spelling ('duplicateValues'/'uniqueValues') instead.
+        Assert.Equal("duplicateValues", ExcelConditionalFormats.KindName(XLConditionalFormatType.IsDuplicate));
+        Assert.Equal("uniqueValues", ExcelConditionalFormats.KindName(XLConditionalFormatType.IsUnique));
+
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(
+            file,
+            AddOp("/Sheet1/A1:C10", "conditionalFormat", ("kind", "duplicateValues"), ("fill", "FFC7CE")),
+            AddOp("/Sheet1/D1:D3", "conditionalFormat", ("kind", "uniqueValues"), ("bold", true))).IsOk);
+
+        var structure = Handler.Read(Ctx(file, ("view", "structure")));
+        Assert.True(structure.IsOk, structure.ToJson());
+        Assert.Contains("duplicateValues", structure.ToJson(), StringComparison.Ordinal);
+        Assert.Contains("uniqueValues", structure.ToJson(), StringComparison.Ordinal);
+        var wires = new[]
+        {
+            Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[1]"))).ToJson(),
+            Handler.Get(Ctx(file, ("path", "/Sheet1/conditionalFormat[2]"))).ToJson(),
+            structure.ToJson(),
+        };
+        foreach (var wire in wires)
+        {
+            Assert.DoesNotContain("isDuplicate", wire, StringComparison.Ordinal);
+            Assert.DoesNotContain("isUnique", wire, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("duplicateValues", "operator")]
+    [InlineData("duplicateValues", "value")]
+    [InlineData("duplicateValues", "text")]
+    [InlineData("uniqueValues", "value2")]
+    [InlineData("uniqueValues", "formula")]
+    public void DuplicateUnique_condition_props_are_invalid_args_with_candidates(string kind, string prop)
+    {
+        var file = CreateDataWorkbook();
+
+        // These kinds have no condition props: the kind IS the condition, so
+        // any operator/value/value2/text/formula is refused with the allowed set.
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat",
+            ("kind", kind), (prop, ">"), ("fill", "FFC7CE")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains(prop, envelope.Error.Message, StringComparison.Ordinal);
+        Assert.Equal(["kind", "fill", "color", "bold"], envelope.Error.Candidates!);
+    }
+
+    [Theory]
+    [InlineData("duplicateValues")]
+    [InlineData("uniqueValues")]
+    public void DuplicateUnique_without_style_props_is_refused(string kind)
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, AddOp("/Sheet1/A1:C10", "conditionalFormat", ("kind", kind)));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("fill", envelope.Error.Message, StringComparison.Ordinal);
     }
 }
