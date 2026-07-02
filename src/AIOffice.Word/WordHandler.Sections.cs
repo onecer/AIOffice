@@ -10,7 +10,7 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] SectionProps =
-        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap", "pageBorder", "lineNumbers"];
+        ["orientation", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight", "columns", "columnGap", "pageBorder", "lineNumbers", "verticalAlign"];
 
     /// <summary>Known page sizes as portrait (width, height) in twentieths of a point.</summary>
     private static readonly Dictionary<string, (uint Width, uint Height)> PageSizes = new(StringComparer.OrdinalIgnoreCase)
@@ -102,6 +102,7 @@ public sealed partial class WordHandler
         var pageBorderSet = false;
         JsonNode? lineNumbersNode = null;
         var lineNumbersSet = false;
+        VerticalJustificationValues? verticalAlign = null;
 
         foreach (var (key, node) in props)
         {
@@ -156,6 +157,22 @@ public sealed partial class WordHandler
                     margins.Add((key, (uint)Math.Max(1, Math.Round(ParseLengthEmu(key, value) / 635.0))));
                     break;
 
+                case "verticalAlign":
+                    // Surface token 'justify' is OOXML w:val="both"; the XML name never leaks out.
+                    verticalAlign = value.ToLowerInvariant() switch
+                    {
+                        "top" => VerticalJustificationValues.Top,
+                        "center" => VerticalJustificationValues.Center,
+                        "justify" => VerticalJustificationValues.Both,
+                        "bottom" => VerticalJustificationValues.Bottom,
+                        _ => throw new AiofficeException(
+                            ErrorCodes.InvalidArgs,
+                            $"Unknown verticalAlign '{value}'.",
+                            "Use verticalAlign top, center, justify or bottom.",
+                            candidates: ["top", "center", "justify", "bottom"]),
+                    };
+                    break;
+
                 default:
                     throw new AiofficeException(
                         ErrorCodes.UnsupportedFeature,
@@ -203,6 +220,12 @@ public sealed partial class WordHandler
         if (lineNumbersSet)
         {
             ApplyLineNumbers(sectPr, lineNumbersNode);
+        }
+
+        if (verticalAlign is { } vAlign)
+        {
+            sectPr.RemoveAllChildren<VerticalTextAlignmentOnPage>();
+            InsertSectionChild(sectPr, new VerticalTextAlignmentOnPage { Val = vAlign });
         }
 
         var canonical = path.ToCanonicalString();
@@ -831,7 +854,7 @@ public sealed partial class WordHandler
         var landscape = pgSz?.Orient?.Value == PageOrientationValues.Landscape;
         var sizeName = MatchPageSizeName(width, height);
 
-        return new Dictionary<string, object?>
+        var properties = new Dictionary<string, object?>
         {
             ["index"] = index,
             ["sections"] = Math.Max(sections.Count, 1),
@@ -850,6 +873,41 @@ public sealed partial class WordHandler
             ["pageBorder"] = PageBorderShape(sectPr),
             ["lineNumbers"] = LineNumbersShape(sectPr),
         };
+
+        // Only sections that carry w:vAlign surface the key at all; legacy shapes stay byte-stable.
+        if (VerticalAlignName(sectPr) is { } verticalAlign)
+        {
+            properties["verticalAlign"] = verticalAlign;
+        }
+
+        return properties;
+    }
+
+    /// <summary>Surface token for w:vAlign (OOXML "both" reads back as "justify"), or null when absent.</summary>
+    private static string? VerticalAlignName(SectionProperties? sectPr)
+    {
+        var value = sectPr?.GetFirstChild<VerticalTextAlignmentOnPage>()?.Val?.Value;
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value == VerticalJustificationValues.Center)
+        {
+            return "center";
+        }
+
+        if (value == VerticalJustificationValues.Both)
+        {
+            return "justify";
+        }
+
+        if (value == VerticalJustificationValues.Bottom)
+        {
+            return "bottom";
+        }
+
+        return "top";
     }
 
     /// <summary>The number of columns the section declares (1 when absent — single column).</summary>
