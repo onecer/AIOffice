@@ -495,6 +495,7 @@ public static class HelpTopics
                 kinds: cellIs      {operator:"> >= < <= == != between", value, value2 (between only), fill?, color?, bold?}
                        colorScale  {minColor, maxColor, midColor?}   dataBar {color}   containsText {text, fill?, color?, bold?}
                        iconSet     {set:"3TrafficLights1|3Arrows|4Rating|5Quarters|…", reverse?, showValue?}  (1.1: 3/4/5-icon glyph per cell)
+                       duplicateValues / uniqueValues  {fill?, color?, bold?}  (1.21: highlight repeated / one-off values in the range)
                 Get: office_get {path:"/Sheet1/conditionalFormat[1]"}; remove by the same path (later indices shift down).
                 """,
                 ["xlsx/cell", "edit-ops"]),

@@ -514,7 +514,11 @@ internal static class PptxRenderer
                 var cellY = y + (rowHeights.Take(r).Sum() * scaleY);
                 var cellW = colWidths.Skip(c).Take(gridSpan).Sum() * scaleX;
                 var cellH = rowHeights.Skip(r).Take(rowSpan).Sum() * scaleY;
-                var fill = PptxTables.CellFillHex(cell)?.ToLowerInvariant();
+                // Solid renders true; a 1.21 gradient cell fill renders as its start-stop
+                // colour (the same flat approximation shapes/backgrounds use) so the agent's
+                // render→look→fix loop sees the fill rather than a blank cell.
+                var fill = (PptxTables.CellFillHex(cell)
+                    ?? GradientStartHex(cell.TableCellProperties?.GetFirstChild<A.GradientFill>()))?.ToLowerInvariant();
 
                 var path = Units.Inv($"/slide[{slideIndex}]/table[{tableIndex}]/tr[{r + 1}]/tc[{c + 1}]");
                 svg.Append(Units.Inv($"    <g data-aio-path=\"{Escape(path)}\">\n"));

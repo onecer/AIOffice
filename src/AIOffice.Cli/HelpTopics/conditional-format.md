@@ -16,6 +16,8 @@
 | `formula` | **1.3** | `formula` (an `=expression` using the top-left cell, e.g. `=$B1>100`), `fill?`, `color?`, `bold?` |
 | `topBottom` | **1.3** | `mode` (`top`/`bottom`), `rank` (the N), `percent?` (N is a %), `fill?`, `color?`, `bold?` |
 | `aboveBelowAverage` | **1.3** | `mode` (`above`/`below`/`aboveOrEqual`/`belowOrEqual`), `stdDev?` (whole number of standard deviations), `fill?`, `color?`, `bold?` |
+| `duplicateValues` | **1.21** | `fill?`, `color?`, `bold?` — highlights values that appear more than once in the range |
+| `uniqueValues` | **1.21** | `fill?`, `color?`, `bold?` — highlights values that appear exactly once in the range |
 
 ## the 1.3 kinds
 

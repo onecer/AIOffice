@@ -706,6 +706,20 @@ public sealed class FillTests : IDisposable
     }
 
     [Fact]
+    public void CellGradient_RendersStartColorIntoSvg()
+    {
+        // The SVG render approximates a gradient cell fill as its start-stop colour
+        // (the same flat fallback shapes/backgrounds use) — never a blank fill="none".
+        CreateWithTable();
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]",
+            props: TestEnv.Props(("fill", GradientFillProp(LinearGradient())))));
+
+        var data = TestEnv.AssertOk(_handler.Render(_ws.Ctx("deck.pptx", ("to", "svg"), ("scope", "/slide[1]"))));
+        var svg = data["slides"]![0]!["svg"]!.GetValue<string>();
+        Assert.Contains("fill=\"#0ea5e9\"", svg, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SetCellFill_LinearGradient_WritesGradFill_EdgesFirstFillLast()
     {
         CreateWithTable();
