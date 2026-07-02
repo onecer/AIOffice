@@ -70,6 +70,31 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.22.0 — finish the vocabulary: xlsx CF bundle · docx content-control lock · pptx adjust handles (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — three vocabulary completions on existing ops,
+byte-stable on legacy paths. Agents that target 1.21.0 are byte-for-byte compatible with 1.22.0.
+
+### Added — xlsx
+
+- **CF vocabulary bundle**: the `cellIs` operator `notBetween` (two formulas, `value2` required) plus
+  three text-match kinds `notContainsText` / `startsWith` / `endsWith` (`{text, fill?, color?, bold?}`,
+  siblings of `containsText`). Surface tokens stay stable (`startsWith` serializes as OOXML
+  `beginsWith`); all four round-trip natively.
+
+### Added — docx
+
+- **Content-control `lock`**: `sdtLocked|contentLocked|sdtContentLocked|unlocked` →
+  `w:sdtPr/w:lock`, reported on `get` when present. Honest semantics: the lock affects Word's UI only —
+  AIOffice can still edit/remove a locked control (pinned by tests).
+
+### Added — pptx
+
+- **Preset-shape adjust handles**: `adjust` on `roundRect` (corner radius), `arrow` (`{adj1?, adj2?}`),
+  and `triangle` (apex) writes `a:avLst/a:gd` guides (raw ECMA units 0–100000), read back on `get`
+  (incl. group children and foreign decks). Non-adjustable presets reject with candidates. The SVG
+  render approximation does not reflect adjusts (OOXML is authoritative).
+
 ## 1.21.0 — completing the pairs: pptx cell gradient/image fill · docx section vAlign · xlsx duplicate/unique CF (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each format gains the missing counterpart of a

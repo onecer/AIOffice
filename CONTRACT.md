@@ -1111,6 +1111,43 @@ first-in-code and byte-stable.
 
 Agents that target the 1.20.0 surface are byte-for-byte compatible with 1.21.0.
 
+## 7v. 1.22.0 — finish the vocabulary: xlsx CF bundle, docx content-control lock, pptx adjust handles (additive, surface 1.0)
+
+Package **1.22.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Three vocabulary completions on existing ops; legacy branches stay first-in-code and byte-stable.
+
+### xlsx — conditional-format vocabulary bundle
+
+- **`cellIs` gains the `notBetween` operator** (§5, additive): two formulas like `between` (`value` +
+  `value2` required; `value2` on any scalar operator still rejected). **Three text-match kinds** join
+  `containsText`: `notContainsText`, `startsWith`, `endsWith` (each `{text, fill?, color?, bold?}`).
+  Surface tokens are stable even where the OOXML wire spelling differs (`startsWith` serializes as
+  `beginsWith` on the wire; `get` always reports the surface token). All four round-trip natively (no
+  post-save pass). Unknown-operator candidates now list 8; unknown-kind candidates list 13.
+
+### docx — content-control lock
+
+- **`add type:contentControl` accepts an optional `lock`** (§4, additive): `sdtLocked | contentLocked |
+  sdtContentLocked | unlocked` → `w:sdtPr/w:lock @w:val`, placed at the ECMA-canonical position (after
+  `w:alias`, before `w:dataBinding`; validator-clean alone and combined with a data binding). `get`
+  reports `lock` only when present. **Honest semantics: `w:lock` affects Word's UI only** — AIOffice (or
+  any OOXML writer) can still `set`/`remove` a locked control, and tests pin that behavior. An unknown
+  token → `invalid_args` with the four candidates.
+
+### pptx — preset-shape adjust handles
+
+- **Shape `add`/`set` accept an optional `adjust`** (§4, additive) for the three presets that take
+  guides: `roundRect` (corner radius, guide `adj`), `arrow` (`{adj1?, adj2?}` head width / arrow length),
+  `triangle` (apex position, `adj`) — written as `a:avLst/a:gd @name @fmla='val N'` with N in raw ECMA
+  units 0–100000 (roundRect default 16667). Guide names are pinned from the ECMA presetShapeDefinitions.
+  `adjust` on `rect`/`ellipse`/`diamond`/`line` → `invalid_args` naming the adjustable presets; setting
+  twice replaces. `get` projects `adjust` (number, or `{adj1?, adj2?}` for arrow) only when guides are
+  present — including on group children and foreign decks (unknown guide names are ignored, never
+  invented). **Render note:** the SVG approximation does not read `a:avLst` — an adjusted shape renders
+  with default handles; the OOXML is authoritative (open in PowerPoint to see the adjusted geometry).
+
+Agents that target the 1.21.0 surface are byte-for-byte compatible with 1.22.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:
