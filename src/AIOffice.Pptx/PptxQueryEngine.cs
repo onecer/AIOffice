@@ -608,6 +608,7 @@ internal static class PptxQueryEngine
             AltTitle = PptxDoc.AltTitle(view.Element),
             Geometry = PptxDoc.GeometryToken(view.Element),
             Flip = PptxDoc.FlipToken(view.Element),
+            Adjust = PptxDoc.Adjust(view.Element),
             Text = PptxDoc.ShapeText(view.Element),
             X = geometry is { } g1 ? Units.EmuToCm(g1.X) : (double?)null,
             Y = geometry is { } g2 ? Units.EmuToCm(g2.Y) : (double?)null,

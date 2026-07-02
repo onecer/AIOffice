@@ -1,3 +1,4 @@
+using System.Globalization;
 using AIOffice.Core;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -628,6 +629,52 @@ internal static class PptxDoc
             "rightArrow" => "arrow",
             { } token => token, // rect/roundRect/ellipse/triangle/diamond/line pass through unchanged
         };
+    }
+
+    /// <summary>
+    /// The adjust guides read back from a shape's a:prstGeom/a:avLst, projected per
+    /// preset: a bare number for roundRect/triangle (guide 'adj'), {adj1?, adj2?} for
+    /// arrow (rightArrow). Only the pinned guide names are projected — foreign decks
+    /// may carry others, which are ignored — and null (no adjust key) when the avLst
+    /// is empty/absent or the preset takes no adjust handles.
+    /// </summary>
+    public static object? Adjust(OpenXmlCompositeElement element)
+    {
+        var geometry = (element as P.Shape)?.ShapeProperties?.GetFirstChild<A.PresetGeometry>();
+        if (geometry?.AdjustValueList is not { } avLst)
+        {
+            return null;
+        }
+
+        var guides = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var guide in avLst.Elements<A.ShapeGuide>())
+        {
+            if (guide.Name?.Value is { } name && TryParseGuideValue(guide.Formula?.Value, out var value))
+            {
+                guides[name] = value; // a duplicated guide name keeps the last value, like PowerPoint
+            }
+        }
+
+        switch (geometry.Preset?.InnerText)
+        {
+            case "roundRect" or "triangle":
+                return guides.TryGetValue("adj", out var adj) ? adj : null;
+            case "rightArrow":
+                var adj1 = guides.TryGetValue("adj1", out var head) ? head : (long?)null;
+                var adj2 = guides.TryGetValue("adj2", out var length) ? length : (long?)null;
+                return adj1 is null && adj2 is null ? null : new { Adj1 = adj1, Adj2 = adj2 };
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Parses an a:gd @fmla of the literal "val N" form; other formula kinds are not projected.</summary>
+    private static bool TryParseGuideValue(string? formula, out long value)
+    {
+        value = 0;
+        return formula is not null
+            && formula.StartsWith("val ", StringComparison.Ordinal)
+            && long.TryParse(formula["val ".Length..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value);
     }
 
     /// <summary>"h", "v" or "hv" when the shape's transform flips it; null otherwise.</summary>

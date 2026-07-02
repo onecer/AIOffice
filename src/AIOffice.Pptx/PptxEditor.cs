@@ -33,7 +33,7 @@ internal static class PptxEditor
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "gradient", "image", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
          "shadow", "glow", "reflection", "outline", "autofit",
-         "vAlign", "textDirection", "marginLeft", "marginRight", "marginTop", "marginBottom"];
+         "vAlign", "textDirection", "marginLeft", "marginRight", "marginTop", "marginBottom", "adjust"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
     private static readonly IReadOnlyList<string> AddShapePropKeys = [.. ShapePropKeys, "shape", "flip"];
@@ -52,6 +52,9 @@ internal static class PptxEditor
 
     private static readonly IReadOnlyList<string> GeometryTokens =
         ["rect", "roundRect", "ellipse", "triangle", "diamond", "arrow", "line"];
+
+    /// <summary>The presets whose a:avLst takes adjust guides (error-candidate order).</summary>
+    private static readonly IReadOnlyList<string> AdjustablePresets = ["roundRect", "arrow", "triangle"];
 
     private static readonly IReadOnlyList<string> ZOrderPositions = ["front", "back", "forward", "backward"];
 
@@ -1786,6 +1789,13 @@ internal static class PptxEditor
                 Preset = geometry is null ? A.ShapeTypeValues.Rectangle : GeometryPresets[geometry],
             });
 
+        // Adjust guides live in the preset's a:avLst; only roundRect/arrow/triangle
+        // take them, so validate against the preset just built (default is rect).
+        if (props.TryGetPropertyValue("adjust", out var adjustNode))
+        {
+            ApplyAdjust(shapeProperties.GetFirstChild<A.PresetGeometry>()!, adjustNode);
+        }
+
         // A gradient fill at add time wins over a solid fill (gradient needs no host
         // part); an image fill at add time only works on the slide overload, which
         // applies it after the shape is in the tree (see AddTextBox(SlidePart, …)).
@@ -1873,6 +1883,11 @@ internal static class PptxEditor
             }
         }
 
+        if (props.ContainsKey("adjust"))
+        {
+            throw AdjustUnsupported("line");
+        }
+
         var id = PptxDoc.NextShapeId(tree);
 
         var x = props.TryGetPropertyValue("x", out var xNode) ? Units.ParseLengthEmu("x", xNode) : Units.CmToEmu(2.5);
@@ -1954,6 +1969,128 @@ internal static class PptxEditor
             transform.VerticalFlip = true;
         }
     }
+
+    /// <summary>Routes a set-op adjust prop to the shape's preset geometry (shapes only; lines/pictures have no handles).</summary>
+    private static void SetAdjust(ShapeView view, JsonNode? value)
+    {
+        if (view.Element is not P.Shape shape || shape.ShapeProperties?.GetFirstChild<A.PresetGeometry>() is not { } geometry)
+        {
+            throw AdjustUnsupported(view.Kind);
+        }
+
+        ApplyAdjust(geometry, value);
+    }
+
+    /// <summary>
+    /// Writes the adjust guides into the preset's a:avLst, replacing any existing
+    /// a:gd children (replace, never accumulate). roundRect and triangle take a
+    /// bare number (one guide 'adj'); arrow takes {adj1?, adj2?} (at least one key)
+    /// and writes exactly the supplied guides. Values are raw ECMA preset units.
+    /// </summary>
+    private static void ApplyAdjust(A.PresetGeometry geometry, JsonNode? value)
+    {
+        var preset = geometry.Preset?.InnerText;
+        var token = preset == "rightArrow" ? "arrow" : preset;
+        if (token is null || !AdjustablePresets.Contains(token, StringComparer.Ordinal))
+        {
+            throw AdjustUnsupported(token ?? "shape without a preset geometry");
+        }
+
+        List<A.ShapeGuide> guides;
+        if (string.Equals(token, "arrow", StringComparison.Ordinal))
+        {
+            guides = BuildArrowGuides(value);
+        }
+        else if (value is JsonObject)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"adjust on a {token} takes a bare number (its single guide 'adj'), not an object.",
+                "Pass the guide value directly, e.g. {\"adjust\": 16667}; the {adj1, adj2} object form applies to arrow.");
+        }
+        else
+        {
+            guides = [BuildAdjustGuide("adj", value)];
+        }
+
+        var avLst = geometry.AdjustValueList ??= new A.AdjustValueList();
+        foreach (var existing in avLst.Elements<A.ShapeGuide>().ToList())
+        {
+            existing.Remove();
+        }
+
+        foreach (var guide in guides)
+        {
+            avLst.Append(guide);
+        }
+    }
+
+    /// <summary>The arrow guides ({adj1: head width, adj2: arrow length}, at least one key) in deterministic adj1-then-adj2 order.</summary>
+    private static List<A.ShapeGuide> BuildArrowGuides(JsonNode? value)
+    {
+        if (value is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"adjust on an arrow takes an object, not {value?.ToJsonString() ?? "null"}.",
+                "Use {\"adjust\":{\"adj1\":60000,\"adj2\":40000}} — adj1 is the head width, adj2 the arrow length, " +
+                "each 0..100000 (both keys optional, at least one required).",
+                candidates: ["adj1", "adj2"]);
+        }
+
+        foreach (var (key, _) in obj)
+        {
+            if (key is not ("adj1" or "adj2"))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown arrow adjust guide '{key}'.",
+                    "arrow adjust takes {adj1 (head width), adj2 (arrow length)}, each 0..100000.",
+                    candidates: ["adj1", "adj2"]);
+            }
+        }
+
+        var guides = new List<A.ShapeGuide>();
+        foreach (var name in new[] { "adj1", "adj2" })
+        {
+            if (obj.TryGetPropertyValue(name, out var guideValue))
+            {
+                guides.Add(BuildAdjustGuide(name, guideValue));
+            }
+        }
+
+        if (guides.Count == 0)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "adjust on an arrow needs at least one of adj1/adj2.",
+                "Use {\"adjust\":{\"adj1\":60000,\"adj2\":40000}} or supply just the guide you want to change.",
+                candidates: ["adj1", "adj2"]);
+        }
+
+        return guides;
+    }
+
+    /// <summary>One a:gd with @fmla="val N", N validated to the raw ECMA unit range.</summary>
+    private static A.ShapeGuide BuildAdjustGuide(string name, JsonNode? value)
+    {
+        if (value is JsonValue number && Units.TryNumber(number, out var raw) && raw is >= 0 and <= 100000)
+        {
+            return new A.ShapeGuide { Name = name, Formula = Units.Inv($"val {(long)Math.Round(raw)}") };
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"adjust guide '{name}' is not a valid value: {value?.ToJsonString() ?? "null"}.",
+            "Use a raw preset unit 0..100000, e.g. the roundRect default corner radius is 16667.");
+    }
+
+    private static AiofficeException AdjustUnsupported(string what) => new(
+        ErrorCodes.InvalidArgs,
+        $"Prop 'adjust' does not apply to a '{what}'.",
+        "Adjust handles exist on roundRect (corner radius, guide adj), arrow (head width/length, guides adj1/adj2) " +
+        "and triangle (apex position, guide adj); values are raw preset units 0..100000.",
+        candidates: AdjustablePresets);
 
     internal static void SetShapeProps(ShapeView view, JsonObject props, OpenXmlPartContainer? host = null, Workspace? workspace = null)
     {
@@ -2051,6 +2188,9 @@ internal static class PptxEditor
                     break;
                 case "marginBottom" when view.Element is P.Shape marginBottomShape:
                     EnsureBodyProperties(marginBottomShape).BottomInset = PptxTables.ParseMarginEmu(key, value);
+                    break;
+                case "adjust":
+                    SetAdjust(view, value);
                     break;
                 default:
                     throw new AiofficeException(
