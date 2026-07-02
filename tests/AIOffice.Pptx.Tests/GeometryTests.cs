@@ -246,6 +246,53 @@ public sealed class GeometryTests : IDisposable
     }
 
     [Fact]
+    public void GroupChildAdjust_RoundTripsThroughGet()
+    {
+        // The group-child projection must carry Adjust like the top-level shape detail
+        // does — set on /group[@id]/shape[@id] then get the SAME path (a group needs
+        // two shapes to form).
+        Create();
+        var a = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "roundRect"), ("x", JsonValue.Create(2)), ("y", JsonValue.Create(2)),
+            ("w", JsonValue.Create(6)), ("h", JsonValue.Create(4)))));
+        var aId = a["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var b = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create(10)), ("y", JsonValue.Create(2)),
+            ("w", JsonValue.Create(6)), ("h", JsonValue.Create(4)))));
+        var bId = b["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group", props: TestEnv.Props(
+            ("shapes", new JsonArray("@" + aId, "@" + bId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+        var childPath = $"{groupPath}/shape[@id={aId}]";
+
+        Edit(TestEnv.Op("set", childPath, props: TestEnv.Props(("adjust", JsonValue.Create(60000)))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", childPath))));
+        Assert.Equal(60000, detail["adjust"]!.GetValue<long>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetAdjust_OutOfRangeAndWrongTarget_AreInvalidArgs()
+    {
+        // The set path shares BuildAdjustGuide with add, but pin its negatives directly.
+        Create();
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("shape", "roundRect"))));
+        var canonical = added["results"]![0]!["target"]!.GetValue<string>();
+
+        var over = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", canonical, props: TestEnv.Props(("adjust", JsonValue.Create(100001))))]);
+        TestEnv.AssertFail(over, ErrorCodes.InvalidArgs);
+
+        var rect = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(("shape", "rect"))));
+        var rectPath = rect["results"]![0]!["target"]!.GetValue<string>();
+        var wrongTarget = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", rectPath, props: TestEnv.Props(("adjust", JsonValue.Create(20000))))]);
+        var error = TestEnv.AssertFail(wrongTarget, ErrorCodes.InvalidArgs);
+        Assert.Contains("roundRect", error.Candidates ?? [], StringComparer.Ordinal);
+    }
+
+    [Fact]
     public void SetAdjustTwice_ReplacesNotAccumulates()
     {
         Create();

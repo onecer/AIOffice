@@ -8,7 +8,7 @@
 
 | kind | since | props |
 |------|-------|-------|
-| `cellIs` | M2 | `operator` (`>` `>=` `<` `<=` `==` `!=` `between`), `value`, `value2` (between), `fill?`, `color?`, `bold?` |
+| `cellIs` | M2 | `operator` (`>` `>=` `<` `<=` `==` `!=` `between`, `notBetween` **1.22**), `value`, `value2` (between/notBetween), `fill?`, `color?`, `bold?` |
 | `colorScale` | M2 | `minColor`, `maxColor`, `midColor?` |
 | `dataBar` | M2 | `color` |
 | `containsText` | M2 | `text`, `fill?`, `color?`, `bold?` |
@@ -18,6 +18,9 @@
 | `aboveBelowAverage` | **1.3** | `mode` (`above`/`below`/`aboveOrEqual`/`belowOrEqual`), `stdDev?` (whole number of standard deviations), `fill?`, `color?`, `bold?` |
 | `duplicateValues` | **1.21** | `fill?`, `color?`, `bold?` — highlights values that appear more than once in the range |
 | `uniqueValues` | **1.21** | `fill?`, `color?`, `bold?` — highlights values that appear exactly once in the range |
+| `notContainsText` | **1.22** | `text`, `fill?`, `color?`, `bold?` — highlights cells NOT containing the text |
+| `startsWith` | **1.22** | `text`, `fill?`, `color?`, `bold?` — highlights cells beginning with the text |
+| `endsWith` | **1.22** | `text`, `fill?`, `color?`, `bold?` — highlights cells ending with the text |
 
 ## the 1.3 kinds
 

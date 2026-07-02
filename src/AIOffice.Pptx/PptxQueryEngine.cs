@@ -675,6 +675,7 @@ internal static class PptxQueryEngine
                 Name = child.Name,
                 AltText = PptxDoc.AltText(child.Element),
                 Geometry = PptxDoc.GeometryToken(child.Element),
+                Adjust = PptxDoc.Adjust(child.Element),
                 Text = PptxDoc.ShapeText(child.Element),
                 X = childGeometry is { } cg1 ? Units.EmuToCm(cg1.X) : (double?)null,
                 Y = childGeometry is { } cg2 ? Units.EmuToCm(cg2.Y) : (double?)null,
