@@ -1,6 +1,6 @@
 {
   "name": "aioffice",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "description": "AIOffice — an AI-native CLI + MCP server for creating, reading, editing, rendering and validating real Office documents (.docx/.xlsx/.pptx). Installs a single self-contained native binary downloaded and SHA256-verified from the GitHub release.",
   "bin": {
     "aioffice": "bin/aioffice.js"

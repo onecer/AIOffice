@@ -1076,6 +1076,41 @@ branch stays first-in-code and byte-stable.
 
 Agents that target the 1.19.0 surface are byte-for-byte compatible with 1.20.0.
 
+## 7u. 1.21.0 — completing the pairs: pptx cell gradient/image fill, docx section vAlign, xlsx duplicate/unique CF (additive, surface 1.0)
+
+Package **1.21.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each format gains the missing counterpart of a surface it already ships; legacy branches stay
+first-in-code and byte-stable.
+
+### pptx — table-cell gradient & image fills
+
+- **The table-cell `fill` prop is widened** (§4, additive) from a bare hex string to
+  `hex | {gradient:{type, angle?, stops:[{color, at}]}} | {image:{src, mode?, tint?}}` — the same fill
+  vocabulary shapes (1.8) and slide backgrounds (1.14) use, via the same builders. The bare-hex solid
+  branch is byte-identical to 1.20. `a:tcPr` child order holds (border edges first, exactly one fill
+  last); replacing a fill never stacks and prunes an orphaned image part. `get` projects the cell fill
+  as bare hex (solid, unchanged) | the gradient/image object (the 1.19 shapes) | null. The SVG render
+  approximates a gradient cell as its start-stop colour (like shapes/backgrounds). An unknown gradient
+  `type` returns `unsupported_feature` (the shared 1.8 builder contract); other bad input →
+  `invalid_args`; an out-of-workspace image `src` → `sandbox_denied`.
+
+### docx — section vertical page alignment
+
+- **The section `set`/`get` now accepts `verticalAlign`** (§4, additive): `top|center|justify|bottom`
+  → `w:sectPr/w:vAlign` (the surface token `justify` maps to OOXML `both`, symmetrically on read).
+  `get` reports it only when present; omitting the prop writes nothing (legacy sections byte-stable);
+  setting twice keeps exactly one element. An invalid token → `invalid_args` with candidates.
+
+### xlsx — duplicate/unique-values conditional formats
+
+- **Two new `conditionalFormat` kinds** (§5, additive): `duplicateValues` and `uniqueValues`, with the
+  shared `fill`/`color`/`bold` styling. They round-trip (`cfRule @type='duplicateValues'/'uniqueValues'`)
+  and `get` reports the kind under those OOXML-aligned names — which also corrects the read-side
+  spelling for Excel-authored rules of these types (previously projected via the lowercase fallback as
+  `isDuplicate`/`isUnique`). `operator`/`value`/`text` props on these kinds → `invalid_args`.
+
+Agents that target the 1.20.0 surface are byte-for-byte compatible with 1.21.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

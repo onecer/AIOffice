@@ -70,6 +70,31 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.21.0 — completing the pairs: pptx cell gradient/image fill · docx section vAlign · xlsx duplicate/unique CF (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each format gains the missing counterpart of a
+surface it already ships, byte-stable on its legacy path. Agents that target 1.20.0 are byte-for-byte
+compatible with 1.21.0.
+
+### Added — pptx
+
+- **Table-cell gradient & image fills**: the cell `fill` prop widens from a bare hex to
+  `hex | {gradient:{…}} | {image:{…}}` (the same vocabulary/builders as shapes and slide backgrounds),
+  with the object read back on `get` and rendered as its start colour in SVG. Border-edge/fill child
+  order holds; replacing a fill prunes orphaned image parts.
+
+### Added — docx
+
+- **Section vertical page alignment**: `verticalAlign` (`top|center|justify|bottom`) →
+  `w:sectPr/w:vAlign` (`justify` ↔ OOXML `both`, symmetric). Reported on `get` only when present.
+
+### Added — xlsx
+
+- **duplicateValues / uniqueValues conditional formats**: two new kinds with the shared
+  `fill`/`color`/`bold` styling, full round-trip. Also corrects the read-side spelling for
+  Excel-authored rules of these types (previously projected as `isDuplicate`/`isUnique` via the
+  lowercase fallback; now the OOXML-aligned `duplicateValues`/`uniqueValues`).
+
 ## 1.20.0 — read/write parity & customization: xlsx iconSet thresholds · docx cell textDirection · pptx cell formatting read-back (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each closes a customization or read/write-parity gap
