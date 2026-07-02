@@ -5,6 +5,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using W14 = DocumentFormat.OpenXml.Office2010.Word;
+using WordLock = DocumentFormat.OpenXml.Wordprocessing.Lock; // 'Lock' alone clashes with System.Threading.Lock
 
 namespace AIOffice.Word;
 
@@ -19,6 +20,9 @@ namespace AIOffice.Word;
 public sealed partial class WordHandler
 {
     private static readonly string[] ContentControlKinds = ["text", "dropdown", "date", "checkbox"];
+
+    private static readonly string[] ContentControlLockTokens =
+        ["sdtLocked", "contentLocked", "sdtContentLocked", "unlocked"];
 
     // ------------------------------------------------------------------- add
 
@@ -113,6 +117,14 @@ public sealed partial class WordHandler
         if (title is { Length: > 0 })
         {
             sdtPr.AppendChild(new SdtAlias { Val = title });
+        }
+
+        // Optional editing lock (w:lock): placed in the ECMA-canonical slot after
+        // w:alias and before w:dataBinding — pinned by the SdtPr_ChildOrdering test
+        // and validator-clean both alone and combined with a dataBinding.
+        if (BuildContentControlLock(props["lock"]) is { } sdtLock)
+        {
+            sdtPr.AppendChild(sdtLock);
         }
 
         // Optional external XML data binding (w:dataBinding): after w:alias, before the kind child.
@@ -236,6 +248,38 @@ public sealed partial class WordHandler
         }
 
         return binding;
+    }
+
+    /// <summary>
+    /// Parses props.lock (sdtLocked = Word won't delete, contentLocked = Word won't
+    /// edit contents, sdtContentLocked = both, unlocked = explicitly none) into a
+    /// w:lock, or returns null when no lock was requested. HONEST semantics: the
+    /// lock is Word-UI metadata only — Word greys out the matching commands, but
+    /// AIOffice set/remove (and any other OOXML tool) still edit the control.
+    /// </summary>
+    private static WordLock? BuildContentControlLock(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        var value = NodeToString(node);
+        return new WordLock
+        {
+            Val = value switch
+            {
+                "sdtLocked" => LockingValues.SdtLocked,
+                "contentLocked" => LockingValues.ContentLocked,
+                "sdtContentLocked" => LockingValues.SdtContentLocked,
+                "unlocked" => LockingValues.Unlocked,
+                _ => throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Content-control lock '{value}' is not supported.",
+                    "Use lock sdtLocked (Word won't delete), contentLocked (Word won't edit contents), sdtContentLocked (both) or unlocked.",
+                    candidates: ContentControlLockTokens),
+            },
+        };
     }
 
     // -------------------------------------------------------------------- set
@@ -500,6 +544,13 @@ public sealed partial class WordHandler
             }
 
             shape["dataBinding"] = dataBinding;
+        }
+
+        // Editing lock (w:lock), only when the control carries one — legacy controls
+        // emit no key. A w:lock without @w:val means unlocked (ECMA-376 §17.5.2.23).
+        if (sdt.SdtProperties?.GetFirstChild<WordLock>() is { } sdtLock)
+        {
+            shape["lock"] = sdtLock.Val?.InnerText ?? "unlocked";
         }
 
         return shape;

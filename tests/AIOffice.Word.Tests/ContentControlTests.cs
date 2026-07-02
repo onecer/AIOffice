@@ -3,6 +3,7 @@ using AIOffice.Core;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using W14 = DocumentFormat.OpenXml.Office2010.Word;
+using WordLock = DocumentFormat.OpenXml.Wordprocessing.Lock; // 'Lock' alone clashes with System.Threading.Lock
 using Xunit;
 
 namespace AIOffice.Word.Tests;
@@ -326,5 +327,110 @@ public sealed class ContentControlTests : WordTestBase
 
         Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
         Assert.Contains("xpath", ex.Candidates!);
+    }
+
+    // ----------------------------------------------------------------- lock (v1.22)
+
+    [Fact]
+    public void Control_without_lock_writes_no_lock_and_omits_the_key()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"plain","title":"Plain"}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var sdtPr = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>().Single().SdtProperties!;
+            Assert.Null(sdtPr.GetFirstChild<WordLock>());
+            // sdtPr children identical to v1.21: id, tag, alias, kind child — nothing appended.
+            var kinds = sdtPr.ChildElements.Select(c => c.GetType().Name).ToList();
+            Assert.Equal(["SdtId", "Tag", "SdtAlias", "SdtContentText"], kinds);
+        }
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=plain]" })));
+        Assert.False(got["properties"]!.AsObject().ContainsKey("lock"));
+        AssertValidatesClean(file);
+    }
+
+    [Theory]
+    [InlineData("sdtLocked")]
+    [InlineData("contentLocked")]
+    [InlineData("sdtContentLocked")]
+    [InlineData("unlocked")]
+    public void Lock_round_trips_on_every_kind(string token)
+    {
+        var file = DocWithControl($$$"""
+            [{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"t","lock":"{{{token}}}"}},
+             {"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"dropdown","tag":"dd","items":["A","B"],"lock":"{{{token}}}"}},
+             {"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"date","tag":"dt","lock":"{{{token}}}"}},
+             {"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"checkbox","tag":"cb","lock":"{{{token}}}"}}]
+            """);
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            // Every kind wrote w:lock with the token as its literal @w:val.
+            var vals = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>()
+                .Select(s => s.SdtProperties!.GetFirstChild<WordLock>()!.Val!.InnerText)
+                .ToList();
+            Assert.Equal(4, vals.Count);
+            Assert.All(vals, v => Assert.Equal(token, v));
+        }
+
+        foreach (var tag in (string[])["t", "dd", "dt", "cb"])
+        {
+            var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = $"/sdt[@tag={tag}]" })));
+            Assert.Equal(token, got["properties"]!["lock"]!.GetValue<string>());
+        }
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void SdtPr_ChildOrdering_puts_lock_after_alias_and_before_dataBinding()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"ord","title":"Ordered","lock":"sdtLocked","dataBinding":{"xpath":"/r/o"}}}]""");
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var sdtPr = doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>().Single().SdtProperties!;
+            // w:lock sits in the ECMA-canonical slot: after w:alias, before w:dataBinding.
+            var kinds = sdtPr.ChildElements.Select(c => c.GetType().Name).ToList();
+            Assert.Equal(["SdtId", "Tag", "SdtAlias", "Lock", "DataBinding", "SdtContentText"], kinds);
+        }
+
+        // lock + dataBinding combined on one control still validates clean.
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Lock_with_bad_token_is_invalid_args_with_all_four_candidates()
+    {
+        var file = CreateDoc(title: "BadLock");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"x","lock":"badToken"}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.Equal(["sdtLocked", "contentLocked", "sdtContentLocked", "unlocked"], ex.Candidates!);
+    }
+
+    [Fact]
+    public void Locked_control_is_word_ui_metadata_only_set_and_remove_still_work()
+    {
+        var file = DocWithControl(
+            """[{"op":"add","path":"/body/p[1]","type":"contentControl","props":{"kind":"text","tag":"locked","lock":"sdtContentLocked"}}]""");
+
+        // HONEST semantics: w:lock only affects Word's UI; AIOffice still edits.
+        Edit(file, """[{"op":"set","path":"/sdt[@tag=locked]","props":{"text":"Still editable"}}]""");
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/sdt[@tag=locked]" })));
+        Assert.Equal("Still editable", got["properties"]!["value"]!.GetValue<string>());
+        Assert.Equal("sdtContentLocked", got["properties"]!["lock"]!.GetValue<string>());
+        AssertValidatesClean(file);
+
+        // remove works too — the lock never blocks AIOffice.
+        Edit(file, """[{"op":"remove","path":"/sdt[@tag=locked]"}]""");
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<SdtBlock>());
     }
 }
