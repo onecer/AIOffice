@@ -733,7 +733,7 @@ internal static class PptxEditor
 
         if (address.IsTable)
         {
-            return PptxTables.Set(presentation, address, op.Props);
+            return PptxTables.Set(presentation, address, op.Props, workspace);
         }
 
         if (address.IsAnimation)

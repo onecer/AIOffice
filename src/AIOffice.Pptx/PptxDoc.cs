@@ -495,25 +495,33 @@ internal static class PptxDoc
     public static object? BackgroundDetail(SlidePart slidePart)
     {
         var properties = slidePart.Slide?.CommonSlideData?.Background?.BackgroundProperties;
-        if (properties is null)
-        {
-            return null;
-        }
+        return properties is null ? null : FillElementDetail(properties, slidePart);
+    }
 
-        // Solid stays first-in-code and byte-stable: the bare hex BackgroundHex returns today.
-        if (properties.GetFirstChild<A.SolidFill>() is { } solid)
+    /// <summary>
+    /// The fill-element-level core the background (v1.14), shape (v1.19) and table-cell (v1.21)
+    /// projections share: reverses the first solid/gradient/blip fill child of
+    /// <paramref name="container"/> (a p:bgPr, spPr or a:tcPr) into the wire shape the write
+    /// side consumes. Solid stays first-in-code and byte-stable (the bare RRGGBB hex string);
+    /// gradient/image go through <see cref="GradientDetail"/> / <see cref="ImageDetail"/>
+    /// (relationships resolved off <paramref name="part"/>); none/pattFill/no fill child → null.
+    /// </summary>
+    public static object? FillElementDetail(OpenXmlCompositeElement container, OpenXmlPartContainer part)
+    {
+        // Solid stays first-in-code and byte-stable: the bare hex the legacy readers return.
+        if (container.GetFirstChild<A.SolidFill>() is { } solid)
         {
             return solid.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
         }
 
-        if (properties.GetFirstChild<A.GradientFill>() is { } gradient)
+        if (container.GetFirstChild<A.GradientFill>() is { } gradient)
         {
             return GradientDetail(gradient);
         }
 
-        if (properties.GetFirstChild<A.BlipFill>() is { } blip)
+        if (container.GetFirstChild<A.BlipFill>() is { } blip)
         {
-            return ImageDetail(slidePart, blip);
+            return ImageDetail(part, blip);
         }
 
         return null;
@@ -591,28 +599,7 @@ internal static class PptxDoc
         var properties = (element as P.Shape)?.ShapeProperties
             ?? (element as P.Picture)?.ShapeProperties
             ?? (element as P.ConnectionShape)?.ShapeProperties;
-        if (properties is null)
-        {
-            return null;
-        }
-
-        // Solid stays first-in-code and byte-stable: the bare hex FillHex returns today.
-        if (properties.GetFirstChild<A.SolidFill>() is { } solid)
-        {
-            return solid.RgbColorModelHex?.Val?.Value?.ToUpperInvariant();
-        }
-
-        if (properties.GetFirstChild<A.GradientFill>() is { } gradient)
-        {
-            return GradientDetail(gradient);
-        }
-
-        if (properties.GetFirstChild<A.BlipFill>() is { } blip)
-        {
-            return ImageDetail(part, blip);
-        }
-
-        return null;
+        return properties is null ? null : FillElementDetail(properties, part);
     }
 
     /// <summary>Solid RRGGBB outline (stroke) color of a shape, when one is set explicitly.</summary>

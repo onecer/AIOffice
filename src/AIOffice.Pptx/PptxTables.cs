@@ -499,14 +499,14 @@ internal static class PptxTables
     // ----- set -------------------------------------------------------------------
 
     /// <summary>set on /slide[i]/table[k] (columnWidths) or a /tr[r]/tc[c] cell beneath it.</summary>
-    public static string Set(PresentationPart presentation, PptxAddress address, JsonObject props)
+    public static string Set(PresentationPart presentation, PptxAddress address, JsonObject props, Workspace workspace)
     {
         var slidePart = PptxDoc.ResolveSlide(presentation, address.SlideIndex, address.Raw);
         var (_, view, table) = Resolve(slidePart, address);
 
         if (address.TableCellIndex is not null)
         {
-            return SetCell(table, address, props);
+            return SetCell(table, address, props, slidePart, workspace);
         }
 
         if (address.TableRowIndex is not null)
@@ -636,7 +636,7 @@ internal static class PptxTables
         }
     }
 
-    private static string SetCell(A.Table table, PptxAddress address, JsonObject props)
+    private static string SetCell(A.Table table, PptxAddress address, JsonObject props, SlidePart slidePart, Workspace workspace)
     {
         var row = ResolveRow(table, address);
         var cell = ResolveCell(row, address);
@@ -707,7 +707,7 @@ internal static class PptxTables
 
                     break;
                 case "fill":
-                    SetCellFill(cell, Units.ParseColorHex(key, value));
+                    SetCellFillValue(cell, value, slidePart, workspace);
                     break;
                 case "valign":
                     EnsureCellProperties(cell).Anchor = ParseVAlign(value);
@@ -872,7 +872,114 @@ internal static class PptxTables
         runProperties.InsertAt(new A.SolidFill(new A.RgbColorModelHex { Val = hex }), 0);
     }
 
-    private static void SetCellFill(A.TableCell cell, string hex)
+    /// <summary>
+    /// The cell <c>fill</c> prop (v1.21 widening): a bare hex string stays the legacy solid
+    /// path (FIRST-in-code, byte-stable), while a <c>{gradient:{…}}</c> / <c>{image:{…}}</c>
+    /// object reuses the <see cref="PptxFill"/> builders shapes (v1.8) and slide backgrounds
+    /// (v1.14) consume. Every variant replaces the prior fill and lands LAST in a:tcPr (after
+    /// the a:ln* edges); replacing an image fill prunes its now-orphaned image part, mirroring
+    /// the v1.14 background orphan-pruning lifecycle.
+    /// </summary>
+    private static void SetCellFillValue(A.TableCell cell, JsonNode? value, SlidePart slidePart, Workspace workspace)
+    {
+        // Replacing an image fill must not orphan its media part — capture the old blip
+        // rel ids BEFORE the swap, prune them after (the slide-background discipline).
+        var staleImageRelIds = CellImageRelIds(cell);
+
+        // Legacy solid path FIRST and byte-stable: any non-object value flows through
+        // ParseColorHex exactly as before (bad scalars keep its invalid_args error). The
+        // XML it writes is unchanged; the prune only fires when it replaces an image fill.
+        if (value is not JsonObject spec)
+        {
+            SetCellFill(cell, Units.ParseColorHex("fill", value));
+            PruneStaleCellImages(slidePart, staleImageRelIds);
+            return;
+        }
+
+        OpenXmlElement fill;
+        if (spec.TryGetPropertyValue("gradient", out var gradientNode))
+        {
+            EnsureSingleCellFillKey(spec, "gradient");
+            fill = PptxFill.BuildGradientFill(gradientNode);
+        }
+        else if (spec.TryGetPropertyValue("image", out var imageNode))
+        {
+            EnsureSingleCellFillKey(spec, "image");
+            fill = PptxFill.BuildImageFill(imageNode, slidePart, workspace);
+        }
+        else
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "An object cell 'fill' must carry a 'gradient' or an 'image' fill.",
+                "Use a solid hex (\"fill\":\"FFF7E6\"), a gradient " +
+                "(\"fill\":{\"gradient\":{\"type\":\"linear\",\"angle\":90,\"stops\":[…]}}) " +
+                "or an image (\"fill\":{\"image\":{\"src\":\"texture.png\",\"mode\":\"tile\"}}).",
+                candidates: ["gradient", "image"]);
+        }
+
+        ApplyCellFill(cell, fill);
+        PruneStaleCellImages(slidePart, staleImageRelIds);
+    }
+
+    /// <summary>Rejects a cell fill object carrying more than the one chosen fill key.</summary>
+    private static void EnsureSingleCellFillKey(JsonObject spec, string chosen)
+    {
+        foreach (var (key, _) in spec)
+        {
+            if (key != chosen)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"An object cell 'fill' takes a single '{chosen}' fill, not also '{key}'.",
+                    "Set one fill per cell: a solid hex, {\"gradient\":{…}} or {\"image\":{…}}.",
+                    candidates: ["gradient", "image"]);
+            }
+        }
+    }
+
+    /// <summary>The rel ids of any image blips the cell's current fill references (pruned on replace).</summary>
+    private static List<string> CellImageRelIds(A.TableCell cell)
+    {
+        var ids = new List<string>();
+        foreach (var blip in cell.TableCellProperties?.Elements<A.BlipFill>().SelectMany(f => f.Descendants<A.Blip>()) ?? [])
+        {
+            if (blip.Embed?.Value is { Length: > 0 } embed)
+            {
+                ids.Add(embed);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// Deletes the now-unreferenced image parts a replaced cell fill used to embed. Unlike a
+    /// slide background there can be many cells (and a PowerPoint-authored deck may share one
+    /// image part across blips), so a part still referenced by any a:blip on the slide is kept.
+    /// </summary>
+    private static void PruneStaleCellImages(SlidePart slidePart, List<string> relIds)
+    {
+        foreach (var relId in relIds)
+        {
+            var stillReferenced = slidePart.Slide?.Descendants<A.Blip>().Any(b => b.Embed?.Value == relId) == true;
+            if (!stillReferenced && slidePart.Parts.Any(p => p.RelationshipId == relId))
+            {
+                slidePart.DeletePart(relId);
+            }
+        }
+    }
+
+    private static void SetCellFill(A.TableCell cell, string hex) =>
+        ApplyCellFill(cell, new A.SolidFill(new A.RgbColorModelHex { Val = hex }));
+
+    /// <summary>
+    /// Replaces the cell's fill with <paramref name="fill"/>: removes every stale fill child
+    /// (the six-element group <see cref="PptxFill.IsFillElement"/> enumerates) and APPENDS the
+    /// fresh one LAST, keeping it after the a:lnL/lnR/lnT/lnB edges CT_TableCellProperties
+    /// orders first (see <see cref="EnsureCellBorders"/> for the front-insert counterpart).
+    /// </summary>
+    private static void ApplyCellFill(A.TableCell cell, OpenXmlElement fill)
     {
         var properties = cell.TableCellProperties;
         if (properties is null)
@@ -881,14 +988,12 @@ internal static class PptxTables
             cell.Append(properties);
         }
 
-        foreach (var fill in properties.ChildElements
-            .Where(c => c is A.NoFill or A.SolidFill or A.GradientFill or A.BlipFill or A.PatternFill or A.GroupFill)
-            .ToList())
+        foreach (var stale in properties.ChildElements.Where(PptxFill.IsFillElement).ToList())
         {
-            fill.Remove();
+            stale.Remove();
         }
 
-        properties.Append(new A.SolidFill(new A.RgbColorModelHex { Val = hex }));
+        properties.Append(fill);
     }
 
     /// <summary>
@@ -1369,7 +1474,7 @@ internal static class PptxTables
         {
             var row = ResolveRow(table, address);
             var cell = ResolveCell(row, address);
-            return CellProjection(cell, tablePath, address.TableRowIndex!.Value, address.TableCellIndex.Value, table);
+            return CellProjection(cell, tablePath, address.TableRowIndex!.Value, address.TableCellIndex.Value, table, slidePart);
         }
 
         if (address.TableRowIndex is not null)
@@ -1381,7 +1486,7 @@ internal static class PptxTables
                 Index = address.TableRowIndex.Value,
                 HeightCm = row.Height?.Value is { } height ? Units.EmuToCm(height) : (double?)null,
                 Cells = row.Elements<A.TableCell>()
-                    .Select((cell, c) => CellProjection(cell, tablePath, address.TableRowIndex.Value, c + 1, table))
+                    .Select((cell, c) => CellProjection(cell, tablePath, address.TableRowIndex.Value, c + 1, table, slidePart))
                     .ToList(),
             };
         }
@@ -1412,7 +1517,7 @@ internal static class PptxTables
             {
                 Path = Units.Inv($"{tablePath}/tr[{r + 1}]"),
                 Cells = row.Elements<A.TableCell>()
-                    .Select((cell, c) => CellProjection(cell, tablePath, r + 1, c + 1, table))
+                    .Select((cell, c) => CellProjection(cell, tablePath, r + 1, c + 1, table, slidePart))
                     .ToList(),
             }).ToList(),
         };
@@ -1468,7 +1573,7 @@ internal static class PptxTables
         };
     }
 
-    private static object CellProjection(A.TableCell cell, string tablePath, int row, int col, A.Table table)
+    private static object CellProjection(A.TableCell cell, string tablePath, int row, int col, A.Table table, SlidePart slidePart)
     {
         var covered = IsCovered(cell);
         var tcPr = cell.TableCellProperties;
@@ -1490,7 +1595,9 @@ internal static class PptxTables
             RowSpan = (cell.RowSpan?.Value ?? 1) > 1 ? cell.RowSpan!.Value : (int?)null,
             Covered = covered ? true : (bool?)null,
             MergedInto = covered ? MergeOriginPath(table, tablePath, row, col) : null,
-            Fill = CellFillHex(cell),
+            // Solid → the same bare hex string CellFillHex returns (byte-stable); gradient/image →
+            // the v1.19 FillDetail object shapes (the write side's wire format); none → null.
+            Fill = tcPr is null ? null : PptxDoc.FillElementDetail(tcPr, slidePart),
             VAlign = VAlignToken(tcPr?.Anchor?.Value),
             MarginLeft = tcPr?.LeftMargin is { } ml ? Units.EmuToCm(ml) : (double?)null,
             MarginRight = tcPr?.RightMargin is { } mr ? Units.EmuToCm(mr) : (double?)null,

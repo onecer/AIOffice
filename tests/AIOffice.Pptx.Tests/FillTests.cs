@@ -645,4 +645,358 @@ public sealed class FillTests : IDisposable
         var data = TestEnv.AssertOk(_handler.Query(_ws.Ctx("deck.pptx", ("selector", "shape[fill=0EA5E9]"))));
         Assert.Equal(0, data["count"]!.GetValue<int>());
     }
+
+    // ---- table-cell fills (v1.21): hex | {gradient:{…}} | {image:{…}} ----------
+
+    /// <summary>deck.pptx with one 3x3 direct-paint (light) table; cell paths are /slide[1]/table[1]/tr[r]/tc[c].</summary>
+    private void CreateWithTable(string? style = null)
+    {
+        TestEnv.AssertOk(_handler.Create(_ws.Ctx("deck.pptx")));
+        var props = TestEnv.Props(("rows", 3), ("cols", 3), ("headerRow", true), ("x", "2cm"), ("y", "5cm"), ("w", "24cm"));
+        if (style is not null)
+        {
+            props["style"] = style;
+        }
+
+        Edit(TestEnv.Op("add", "/slide[1]", type: "table", props: props));
+    }
+
+    private static A.TableCell Cell(PresentationDocument doc, int row, int col) =>
+        doc.PresentationPart!.SlideParts.Single().Slide!.CommonSlideData!.ShapeTree!
+            .Elements<P.GraphicFrame>().Single().Graphic!.GraphicData!.GetFirstChild<A.Table>()!
+            .Elements<A.TableRow>().ElementAt(row - 1).Elements<A.TableCell>().ElementAt(col - 1);
+
+    private static JsonObject GradientFillProp(JsonNode gradient) => new() { ["gradient"] = gradient };
+
+    private static JsonObject ImageFillProp(JsonNode image) => new() { ["image"] = image };
+
+    [Fact]
+    public void SetCellFill_BareHex_KeepsTheV120ByteShape_AndGetsTheBareString()
+    {
+        // BYTE-STABLE pin: a bare hex 'fill' stays the legacy solid branch — the look's four
+        // 1pt a:ln* edges first, then EXACTLY one a:solidFill appended LAST, identical to v1.20.
+        CreateWithTable();
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(("fill", "ABC123"))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var expected =
+                "<a:tcPr xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
+                "<a:lnL w=\"12700\"><a:solidFill><a:srgbClr val=\"BFBFBF\" /></a:solidFill></a:lnL>" +
+                "<a:lnR w=\"12700\"><a:solidFill><a:srgbClr val=\"BFBFBF\" /></a:solidFill></a:lnR>" +
+                "<a:lnT w=\"12700\"><a:solidFill><a:srgbClr val=\"BFBFBF\" /></a:solidFill></a:lnT>" +
+                "<a:lnB w=\"12700\"><a:solidFill><a:srgbClr val=\"BFBFBF\" /></a:solidFill></a:lnB>" +
+                "<a:solidFill><a:srgbClr val=\"ABC123\" /></a:solidFill></a:tcPr>";
+            Assert.Equal(expected, Cell(doc, 2, 2).TableCellProperties!.OuterXml);
+        }
+
+        // get keeps the bare hex STRING wire shape (not an object).
+        var fill = Get("/slide[1]/table[1]/tr[2]/tc[2]")["fill"];
+        var value = Assert.IsType<JsonValue>(fill, exactMatch: false);
+        Assert.Equal("ABC123", value.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetCell_NoFill_ProjectsNull()
+    {
+        // A preset-styled table's neutral cells carry no direct fill → the projection stays null.
+        CreateWithTable(style: "none");
+        Assert.Null(Get("/slide[1]/table[1]/tr[2]/tc[2]")["fill"]);
+    }
+
+    [Fact]
+    public void SetCellFill_LinearGradient_WritesGradFill_EdgesFirstFillLast()
+    {
+        CreateWithTable();
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]",
+            props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(90))))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var tcPr = Cell(doc, 2, 2).TableCellProperties!;
+            var gradient = tcPr.GetFirstChild<A.GradientFill>()!;
+            Assert.NotNull(gradient);
+            Assert.Equal(90 * 60000, gradient.GetFirstChild<A.LinearGradientFill>()!.Angle!.Value); // 5400000
+            var stops = gradient.GradientStopList!.Elements<A.GradientStop>().ToList();
+            Assert.Equal(2, stops.Count);
+            Assert.Equal(0, stops[0].Position!.Value);
+            Assert.Equal("0EA5E9", stops[0].RgbColorModelHex!.Val!.Value);
+            Assert.Equal(100000, stops[1].Position!.Value);
+            Assert.Equal("6366F1", stops[1].RgbColorModelHex!.Val!.Value);
+
+            // Child-order discipline: exactly one fill child, LAST, after the look's a:ln* edges.
+            var children = tcPr.ChildElements.ToList();
+            Assert.Single(children, IsFill);
+            Assert.Equal(children.Count - 1, children.IndexOf(gradient));
+            Assert.True(children.IndexOf(tcPr.GetFirstChild<A.BottomBorderLineProperties>()!) < children.IndexOf(gradient));
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetCellFill_RadialGradient_WritesPathFill_GetOmitsAngle()
+    {
+        CreateWithTable();
+        var gradient = new JsonObject
+        {
+            ["type"] = "radial",
+            ["stops"] = new JsonArray(
+                new JsonObject { ["color"] = "FFFFFF", ["at"] = 0 },
+                new JsonObject { ["color"] = "0F172A", ["at"] = 100 }),
+        };
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[3]/tc[1]",
+            props: TestEnv.Props(("fill", GradientFillProp(gradient)))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var grad = Cell(doc, 3, 1).TableCellProperties!.GetFirstChild<A.GradientFill>()!;
+            Assert.Equal(A.PathShadeValues.Circle, grad.GetFirstChild<A.PathGradientFill>()!.Path!.Value);
+        }
+
+        var fill = Assert.IsType<JsonObject>(Get("/slide[1]/table[1]/tr[3]/tc[1]")["fill"]);
+        Assert.Equal("radial", fill["type"]!.GetValue<string>());
+        Assert.False(fill.ContainsKey("angle"), "radial writes a:path, not a:lin — there is NO angle key");
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetCellFill_ImageTileWithTint_EmbedsBlipFillOnTheSlidePart()
+    {
+        CreateWithTable();
+        WriteImage("tile.jpg", TestImages.Jpeg(48, 48));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[3]", props: TestEnv.Props(
+            ("fill", ImageFillProp(new JsonObject { ["src"] = "tile.jpg", ["mode"] = "tile", ["tint"] = "1E40AF" })))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            var slidePart = doc.PresentationPart!.SlideParts.Single();
+            var imagePart = Assert.Single(slidePart.ImageParts);
+            var blipFill = Cell(doc, 2, 3).TableCellProperties!.GetFirstChild<A.BlipFill>()!;
+            // @r:embed resolves to the image part on the SLIDE part (the a:tbl's host).
+            Assert.Equal(slidePart.GetIdOfPart(imagePart), blipFill.Blip!.Embed!.Value);
+            Assert.NotNull(blipFill.GetFirstChild<A.Tile>());
+            Assert.Null(blipFill.GetFirstChild<A.Stretch>());
+            Assert.Contains(
+                blipFill.Blip!.GetFirstChild<A.Duotone>()!.Elements<A.RgbColorModelHex>(),
+                c => c.Val!.Value == "1E40AF");
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void CellFillAndBorders_BothOrders_KeepEdgesFirstAndExactlyOneFillLast()
+    {
+        CreateWithTable();
+        var border = new JsonObject { ["all"] = new JsonObject { ["color"] = "C00000", ["widthPt"] = 1.5 } };
+
+        // Cell A: fill first, then borders (EnsureCellBorders re-homes the edges to the FRONT).
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[1]",
+            props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(90))))));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[1]", props: TestEnv.Props(("borders", border.DeepClone()))));
+
+        // Cell B: borders first, then fill — set the fill TWICE (repeat must replace, not stack).
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(("borders", border.DeepClone()))));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]",
+            props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(45))))));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]",
+            props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(45))))));
+
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false))
+        {
+            foreach (var col in new[] { 1, 2 })
+            {
+                var tcPr = Cell(doc, 2, col).TableCellProperties!;
+                var children = tcPr.ChildElements.ToList();
+                var fill = Assert.Single(children, IsFill);
+                Assert.IsType<A.GradientFill>(fill);
+                // DOM order: lnL/lnR/lnT/lnB first, the ONE fill LAST.
+                Assert.Equal(children.Count - 1, children.IndexOf(fill));
+                foreach (var edge in new DocumentFormat.OpenXml.OpenXmlElement?[]
+                {
+                    tcPr.GetFirstChild<A.LeftBorderLineProperties>(),
+                    tcPr.GetFirstChild<A.RightBorderLineProperties>(),
+                    tcPr.GetFirstChild<A.TopBorderLineProperties>(),
+                    tcPr.GetFirstChild<A.BottomBorderLineProperties>(),
+                })
+                {
+                    Assert.NotNull(edge);
+                    Assert.True(children.IndexOf(edge!) < children.IndexOf(fill));
+                }
+            }
+        }
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetCellFill_HexGradientImageHex_ReplacesNotStacks_AndPrunesImageParts()
+    {
+        CreateWithTable();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        var path = "/slide[1]/table[1]/tr[2]/tc[2]";
+
+        void AssertOneFill<T>(int expectedImageParts)
+            where T : DocumentFormat.OpenXml.OpenXmlElement
+        {
+            using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+            var slidePart = doc.PresentationPart!.SlideParts.Single();
+            Assert.Equal(expectedImageParts, slidePart.ImageParts.Count());
+            var fill = Assert.Single(Cell(doc, 2, 2).TableCellProperties!.ChildElements.ToList(), IsFill);
+            Assert.IsType<T>(fill);
+        }
+
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", "112233"))));
+        AssertOneFill<A.SolidFill>(expectedImageParts: 0);
+
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(90))))));
+        AssertOneFill<A.GradientFill>(expectedImageParts: 0);
+
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", ImageFillProp(new JsonObject { ["src"] = "banner.png" })))));
+        AssertOneFill<A.BlipFill>(expectedImageParts: 1);
+
+        // image → image: the replaced blip's part is pruned, so the count does NOT grow.
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", ImageFillProp(new JsonObject { ["src"] = "banner.png" })))));
+        AssertOneFill<A.BlipFill>(expectedImageParts: 1);
+
+        // image → hex: back to a solid, the orphaned image part is deleted.
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", "445566"))));
+        AssertOneFill<A.SolidFill>(expectedImageParts: 0);
+
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetCell_GradientFill_ProjectsTheFillDetailShape_AndRoundTrips()
+    {
+        CreateWithTable();
+        var path = "/slide[1]/table[1]/tr[2]/tc[2]";
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", GradientFillProp(LinearGradient(45))))));
+
+        var fill = Assert.IsType<JsonObject>(Get(path)["fill"]);
+        Assert.Equal("linear", fill["type"]!.GetValue<string>());
+        Assert.Equal(45.0, fill["angle"]!.GetValue<double>(), 1);
+        var stops = Assert.IsType<JsonArray>(fill["stops"]);
+        Assert.Equal(2, stops.Count);
+        Assert.Equal("0EA5E9", stops[0]!["color"]!.GetValue<string>());
+        Assert.Equal(0.0, stops[0]!["at"]!.GetValue<double>(), 1);
+        Assert.Equal("6366F1", stops[1]!["color"]!.GetValue<string>());
+        Assert.Equal(100.0, stops[1]!["at"]!.GetValue<double>(), 1);
+
+        // Re-feed the projected object back into set → byte-identical a:gradFill (true round-trip).
+        string GradXml()
+        {
+            using var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), false);
+            return Cell(doc, 2, 2).TableCellProperties!.GetFirstChild<A.GradientFill>()!.OuterXml;
+        }
+
+        var before = GradXml();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("fill", GradientFillProp(fill.DeepClone())))));
+        Assert.Equal(before, GradXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void GetCell_ImageFill_ProjectsSrcModeTint_AndOmitsTintWhenAbsent()
+    {
+        CreateWithTable();
+        WriteImage("banner.png", TestImages.Png(40, 20));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[1]", props: TestEnv.Props(
+            ("fill", ImageFillProp(new JsonObject { ["src"] = "banner.png", ["mode"] = "tile", ["tint"] = "1E40AF" })))));
+        Edit(TestEnv.Op("set", "/slide[1]/table[1]/tr[2]/tc[2]", props: TestEnv.Props(
+            ("fill", ImageFillProp(new JsonObject { ["src"] = "banner.png" })))));
+
+        var tinted = Assert.IsType<JsonObject>(Get("/slide[1]/table[1]/tr[2]/tc[1]")["fill"]);
+        // src is the embedded media-part filename (the caller path is not stored in OOXML).
+        Assert.EndsWith(".png", tinted["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("tile", tinted["mode"]!.GetValue<string>());
+        Assert.Equal("1E40AF", tinted["tint"]!.GetValue<string>());
+
+        var plain = Assert.IsType<JsonObject>(Get("/slide[1]/table[1]/tr[2]/tc[2]")["fill"]);
+        Assert.EndsWith(".png", plain["src"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("stretch", plain["mode"]!.GetValue<string>());
+        Assert.False(plain.ContainsKey("tint"), "tint is OMITTED when no a:duotone is present");
+    }
+
+    // ---- table-cell fill negatives --------------------------------------------
+
+    private Envelope SetCellFill(JsonNode value) => _handler.Edit(
+        _ws.Ctx("deck.pptx"),
+        [TestEnv.Op("set", "/slide[1]/table[1]/tr[1]/tc[1]", props: TestEnv.Props(("fill", value)))]);
+
+    [Fact]
+    public void CellGradient_SingleStop_IsInvalidArgs()
+    {
+        CreateWithTable();
+        var gradient = new JsonObject
+        {
+            ["type"] = "linear",
+            ["stops"] = new JsonArray(new JsonObject { ["color"] = "0EA5E9", ["at"] = 0 }),
+        };
+        TestEnv.AssertFail(SetCellFill(GradientFillProp(gradient)), ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void CellGradient_UnknownType_IsUnsupportedFeature()
+    {
+        // Same typed error the shared builder gives shapes/backgrounds since v1.8.
+        CreateWithTable();
+        var gradient = new JsonObject
+        {
+            ["type"] = "conic",
+            ["stops"] = new JsonArray(
+                new JsonObject { ["color"] = "0EA5E9", ["at"] = 0 },
+                new JsonObject { ["color"] = "6366F1", ["at"] = 100 }),
+        };
+        var error = TestEnv.AssertFail(SetCellFill(GradientFillProp(gradient)), ErrorCodes.UnsupportedFeature);
+        Assert.Contains("linear", error.Candidates!);
+    }
+
+    [Fact]
+    public void CellGradient_BadAngle_IsInvalidArgs()
+    {
+        CreateWithTable();
+        var gradient = LinearGradient(90);
+        gradient["angle"] = "steep";
+        TestEnv.AssertFail(SetCellFill(GradientFillProp(gradient)), ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void CellImage_MissingSrc_IsInvalidArgs()
+    {
+        CreateWithTable();
+        TestEnv.AssertFail(
+            SetCellFill(ImageFillProp(new JsonObject { ["mode"] = "tile" })),
+            ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void CellFill_UnknownObjectKey_IsInvalidArgs_WithCandidates()
+    {
+        CreateWithTable();
+        var error = TestEnv.AssertFail(
+            SetCellFill(new JsonObject { ["pattern"] = new JsonObject() }),
+            ErrorCodes.InvalidArgs);
+        Assert.Equal(["gradient", "image"], error.Candidates!);
+    }
+
+    [Fact]
+    public void CellFill_GradientPlusImage_IsInvalidArgs()
+    {
+        CreateWithTable();
+        var both = GradientFillProp(LinearGradient(90));
+        both["image"] = new JsonObject { ["src"] = "banner.png" };
+        TestEnv.AssertFail(SetCellFill(both), ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void CellImage_OutsideSandbox_IsSandboxDenied()
+    {
+        CreateWithTable();
+        TestEnv.AssertFail(
+            SetCellFill(ImageFillProp(new JsonObject { ["src"] = "../escape.png" })),
+            ErrorCodes.SandboxDenied);
+    }
 }
