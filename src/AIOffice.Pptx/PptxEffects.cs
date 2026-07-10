@@ -292,8 +292,11 @@ internal static class PptxEffects
         var glow = EffectColor(effectList?.GetFirstChild<A.Glow>());
         var hasReflection = effectList?.GetFirstChild<A.Reflection>() is not null;
         var outline = ReadOutline(properties.GetFirstChild<A.Outline>());
+        // Trim to 3 decimals so a foreign deck's arbitrary EMU radius projects a clean "N.NNNpt"
+        // rather than a float-noise string like "3.1496062992125984pt"; the documented values
+        // (2.5pt=31750, 5pt=63500) are exact and unaffected.
         var softEdge = effectList?.GetFirstChild<A.SoftEdge>()?.Radius?.Value is { } rad
-            ? Units.Inv($"{rad / EmuPerPoint}pt")
+            ? Units.Inv($"{rad / EmuPerPoint:0.###}pt")
             : null;
 
         if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null)
