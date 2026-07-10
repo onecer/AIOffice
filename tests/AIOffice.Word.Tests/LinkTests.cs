@@ -182,6 +182,109 @@ public sealed class LinkTests : WordTestBase
     }
 
     [Fact]
+    public void External_link_tooltip_round_trips_as_screentip()
+    {
+        var file = CreateDoc(title: "Tip");
+
+        var envelope = Edit(
+            file,
+            """[{"op":"add","path":"/body/p[1]","type":"link","props":{"text":"Docs","url":"https://example.com/docs","tooltip":"Open the docs"}}]""");
+
+        // add-response echoes the tooltip.
+        Assert.Equal("Open the docs", Data(envelope)["ops"]!.AsArray()[0]!["tooltip"]!.GetValue<string>());
+
+        // Written as w:hyperlink/@w:tooltip and survives save+reload.
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var hyperlink = Assert.Single(doc.MainDocumentPart!.Document!.Body!.Descendants<Hyperlink>());
+            Assert.Equal("Open the docs", hyperlink.Tooltip!.Value);
+        }
+
+        // get surfaces it alongside url + text.
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/body/p[1]/link[1]" })));
+        Assert.Equal("Open the docs", got["properties"]!["tooltip"]!.GetValue<string>());
+        Assert.Equal("https://example.com/docs", got["properties"]!["url"]!.GetValue<string>());
+        Assert.Equal("Docs", got["properties"]!["text"]!.GetValue<string>());
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Internal_anchor_link_tooltip_round_trips()
+    {
+        var file = CreateDoc(title: "TipAnchor");
+        Edit(file, """[{"op":"add","path":"/body","type":"p","props":{"text":"The results section"}}]""");
+
+        Edit(file, """
+            [
+              {"op":"add","path":"/body/p[3]","type":"bookmark","props":{"name":"Results"}},
+              {"op":"add","path":"/body/p[1]","type":"link","props":{"text":"see results","anchor":"Results","tooltip":"Jump to results"}}
+            ]
+            """);
+
+        using (var doc = WordprocessingDocument.Open(file, isEditable: false))
+        {
+            var hyperlink = Assert.Single(doc.MainDocumentPart!.Document!.Body!.Descendants<Hyperlink>());
+            Assert.Equal("Results", hyperlink.Anchor!.Value);
+            Assert.Null(hyperlink.Id);
+            Assert.Equal("Jump to results", hyperlink.Tooltip!.Value);
+        }
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/body/p[1]/link[1]" })));
+        Assert.Equal("Jump to results", got["properties"]!["tooltip"]!.GetValue<string>());
+        Assert.Equal("Results", got["properties"]!["anchor"]!.GetValue<string>());
+
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void Link_without_tooltip_writes_no_tooltip_attribute()
+    {
+        var file = CreateDoc(title: "NoTip");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"link","props":{"text":"plain","url":"https://example.com"}}]""");
+
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        var hyperlink = Assert.Single(doc.MainDocumentPart!.Document!.Body!.Descendants<Hyperlink>());
+        Assert.Null(hyperlink.Tooltip); // no w:tooltip attribute at all
+    }
+
+    [Fact]
+    public void Get_on_tooltipless_link_omits_tooltip_key()
+    {
+        // The read-side trap: a null Dictionary value would emit tooltip:null; the key must be absent.
+        var file = CreateDoc(title: "TrapGuard");
+        Edit(file, """[{"op":"add","path":"/body/p[1]","type":"link","props":{"text":"home","url":"https://example.org"}}]""");
+
+        var got = Data(Handler.Get(Ctx(file, new JsonObject { ["path"] = "/body/p[1]/link[1]" })));
+        var properties = got["properties"]!.AsObject();
+
+        Assert.False(properties.ContainsKey("tooltip"));
+    }
+
+    [Fact]
+    public void Empty_or_non_string_tooltip_is_invalid_args()
+    {
+        var file = CreateDoc(title: "BadTip");
+
+        foreach (var badProps in (string[])
+                 [
+                     """{"text":"x","url":"https://example.com","tooltip":""}""",
+                     """{"text":"x","url":"https://example.com","tooltip":"   "}""",
+                     """{"text":"x","url":"https://example.com","tooltip":42}""",
+                     """{"text":"x","url":"https://example.com","tooltip":true}""",
+                 ])
+        {
+            var ops = $$"""[{"op":"add","path":"/body/p[1]","type":"link","props":{{badProps}}}]""";
+            var ex = Assert.Throws<AiofficeException>(() => Edit(file, ops));
+            Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        }
+
+        // And no partial hyperlink was written by any of the rejected attempts.
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<Hyperlink>());
+    }
+
+    [Fact]
     public void Link_text_is_required()
     {
         var file = CreateDoc(title: "Empty");

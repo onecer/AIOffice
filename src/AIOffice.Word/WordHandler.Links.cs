@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using AIOffice.Core;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -32,6 +33,21 @@ public sealed partial class WordHandler
 
         var url = props["url"] is { } urlNode ? NodeToString(urlNode) : null;
         var bookmark = props["anchor"] is { } anchorNode ? NodeToString(anchorNode) : null;
+        string? tooltip = null;
+        if (props["tooltip"] is { } tooltipNode)
+        {
+            if (tooltipNode is not JsonValue tipValue ||
+                !tipValue.TryGetValue<string>(out var tip) ||
+                string.IsNullOrWhiteSpace(tip))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "props.tooltip must be a non-empty string (the hyperlink ScreenTip shown on hover).",
+                    "Example: {\"op\":\"add\",\"path\":\"/body/p[2]\",\"type\":\"link\",\"props\":{\"text\":\"Docs\",\"url\":\"https://example.com\",\"tooltip\":\"Open the docs\"}}.");
+            }
+
+            tooltip = tip;
+        }
         if ((url is null) == (bookmark is null))
         {
             throw new AiofficeException(
@@ -85,6 +101,11 @@ public sealed partial class WordHandler
             hyperlink.Anchor = bookmark;
         }
 
+        if (tooltip is not null)
+        {
+            hyperlink.Tooltip = tooltip; // w:hyperlink/@w:tooltip — the Word ScreenTip
+        }
+
         EnsureHyperlinkStyle(doc);
         hyperlink.AppendChild(new Run(
             new RunProperties(new RunStyle { Val = "Hyperlink" }),
@@ -95,7 +116,7 @@ public sealed partial class WordHandler
             .FirstOrDefault(n => ReferenceEquals(n.Element, hyperlink))?.CanonicalPath
             ?? target.CanonicalPath;
 
-        return new { op = "add", type = "link", path = canonical, url, anchor = bookmark, text };
+        return new { op = "add", type = "link", path = canonical, url, anchor = bookmark, text, tooltip };
     }
 
     /// <summary>The classic blue/underlined Hyperlink character style, defined once on demand.</summary>
@@ -124,13 +145,22 @@ public sealed partial class WordHandler
     private static Dictionary<string, object?> LinkProperties(WordprocessingDocument doc, ResolvedNode node)
     {
         var hyperlink = (Hyperlink)node.Element;
-        return new Dictionary<string, object?>
+        var props = new Dictionary<string, object?>
         {
             ["kind"] = "link",
             ["url"] = ResolveLinkUrl(doc, hyperlink),
             ["anchor"] = hyperlink.Anchor?.Value,
             ["text"] = hyperlink.InnerText,
         };
+
+        // Conditional: a null value in a Dictionary is NOT dropped by DefaultIgnoreCondition,
+        // so add the key only when a real ScreenTip exists — legacy links stay tooltip-free.
+        if (hyperlink.Tooltip?.Value is { Length: > 0 } tip)
+        {
+            props["tooltip"] = tip;
+        }
+
+        return props;
     }
 
     /// <summary>The external url behind a hyperlink's r:id, resolved on its owning part.</summary>
