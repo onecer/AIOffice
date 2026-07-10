@@ -343,10 +343,11 @@ legacy note fallback for old clients. Remove the root to drop the whole thread.
 ## csv bridge (M5)
 
 `aioffice create orders.xlsx --from orders.csv` imports RFC 4180 csv (quoted
-commas/newlines, sniffed `, ; tab |` delimiter, `--title` names the sheet):
+commas/newlines, sniffed `, ; tab` delimiter, `--title` names the sheet):
 numbers/dates/booleans are typed, leading-zero codes like `007` stay text,
 >50k cells stream through the SAX writer. `aioffice read orders.xlsx --view csv
-[--sheet NAME] [--range A1:C10]` exports one sheet back as csv.
+[--sheet NAME] [--range A1:C10] [--delimiter tab|;|,]` exports one sheet back as
+csv (`--delimiter` **1.23** emits TSV/semicolon; default comma).
 
 ## named cell styles (M7, `add type:cellStyle`, `read --view styles`)
 

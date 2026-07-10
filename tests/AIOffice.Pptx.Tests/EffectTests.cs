@@ -451,7 +451,9 @@ public sealed class EffectTests : IDisposable
 
         var effects = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["effects"]!;
         Assert.Equal("404040", effects["shadow"]!.GetValue<string>());
-        Assert.Null(effects["softEdge"]); // absent, not present-and-null
+        // The key must be genuinely ABSENT (not present-with-JSON-null): the indexer can't tell
+        // those apart, so assert on the object's key set to prove the anonymous-object null dropped.
+        Assert.False(effects.AsObject().ContainsKey("softEdge"));
         Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.SoftEdge>());
         TestEnv.AssertValid(_ws, "deck.pptx");
     }

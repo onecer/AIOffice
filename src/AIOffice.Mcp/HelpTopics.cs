@@ -196,7 +196,7 @@ public static class HelpTopics
                         links, images (sandbox-resolved), blockquotes, code blocks, horizontal rules. Raw HTML and
                         missing images degrade to meta.warnings, never failures.
                         office_create {file:"orders.xlsx", from:"orders.csv"} — RFC 4180 (quotes, embedded commas/newlines),
-                        delimiter sniffed (, ; tab |) or forced via delimiter:",". Cells are typed: numbers/dates/booleans
+                        delimiter sniffed (, ; tab) or forced via delimiter:"," on import; read --view csv takes the same delimiter (1.23) to emit TSV/semicolon. Cells are typed: numbers/dates/booleans
                         convert, leading-zero codes like "007" STAY TEXT; >50k cells stream through the SAX writer.
                 Matrix: .md/.markdown → .docx, .csv/.tsv → .xlsx — any other pair is invalid_args naming this matrix.
                 Export: office_read {view:"markdown"} (docx) — GFM of the body; structure round-trips with the importer.

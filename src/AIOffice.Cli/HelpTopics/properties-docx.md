@@ -200,6 +200,7 @@ shows `1.` / `•` markers; `render --to html` emits real `<ol>`/`<ul>`.
 
 `{op:"add", path:"/body/p[3]", type:"link", props:{text:"site", url:"https://…"}}`;
 internal jump: `props:{text:"see intro", anchor:"Intro"}` (a bookmark name).
+Optional `tooltip` (**1.23**) adds a Word ScreenTip / hover hint on either link kind.
 
 ## section (M3 page setup + M6 columns, `/section[1]`)
 
