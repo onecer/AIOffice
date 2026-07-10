@@ -70,6 +70,18 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.23.1 — patch: wire the CSV export delimiter through the CLI
+
+`surfaceVersion` stays **1.0**; byte-for-byte compatible with 1.23.0.
+
+### Fixed
+
+- **`read --view csv --delimiter` now works on the CLI**: 1.23.0 shipped the CSV export delimiter on the
+  handler + MCP surface (`office_read {view:"csv", delimiter:"tab"}`), but the CLI `read` verb never
+  forwarded `--delimiter` to the handler context, so `aioffice read … --view csv --delimiter tab` silently
+  emitted comma. The CLI now threads `--delimiter` through (and declares the option). Added an end-to-end
+  `FileVerbs`-level regression test — the handler-level tests could not catch a missing CLI forward.
+
 ## 1.23.0 — complete the half-shipped: docx hyperlink ScreenTip · xlsx CSV export delimiter · pptx shape soft-edge (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each format gains the one missing facet of an

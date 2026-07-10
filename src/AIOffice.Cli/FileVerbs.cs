@@ -50,6 +50,7 @@ public sealed class FileVerbs
             ["view"] = args.GetOption("view"),
             ["range"] = args.GetOption("range"),
             ["sheet"] = args.GetOption("sheet"),
+            ["delimiter"] = args.GetOption("delimiter"),
             ["maxBytes"] = ParseOptionalInt(args, "max-bytes"),
         });
         var handler = ResolveHandler(file, kindOverride: null);

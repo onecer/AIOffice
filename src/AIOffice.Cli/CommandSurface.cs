@@ -55,13 +55,14 @@ public static class CommandSurface
 
         new("read",
             "Read a document as outline, plain text, stats, structure, properties or embeds (docx adds revisions/comments/styles/markdown/fields; xlsx adds csv/styles).",
-            "aioffice read <file> [--view outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--max-bytes N]",
+            "aioffice read <file> [--view outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--delimiter comma|semicolon|tab] [--max-bytes N]",
             [new("file", true, "Document to read.")],
             [
                 new("view", "outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv",
                     "Projection to return (default: outline). properties = core + custom document properties (docx/xlsx/pptx); embeds = embedded OLE/package objects (docx/xlsx/pptx); comments works on all three formats. revisions/markdown/fields are docx views (fields = content controls); styles is docx (style defs) or xlsx (named cell styles); csv is xlsx-only (one sheet, RFC 4180)."),
                 new("range", "a..b", "Limit to an element range, e.g. paragraphs 3..10 or slides 1..4; the csv view also takes a cell range like A1:C10."),
                 new("sheet", "<name>", "csv view: which sheet to emit (default: the first sheet)."),
+                new("delimiter", "comma|semicolon|tab", "csv view: field delimiter to emit (default: comma; 1.23)."),
                 new("max-bytes", "N", "Truncate the response payload to at most N bytes."),
             ],
             "office_read"),
