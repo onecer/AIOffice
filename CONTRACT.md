@@ -1148,6 +1148,39 @@ Three vocabulary completions on existing ops; legacy branches stay first-in-code
 
 Agents that target the 1.21.0 surface are byte-for-byte compatible with 1.22.0.
 
+## 7w. 1.23.0 — complete the half-shipped: docx hyperlink ScreenTip, xlsx CSV export delimiter, pptx shape soft-edge (additive, surface 1.0)
+
+Package **1.23.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each format gains the one missing facet of an already-shipped feature (links, CSV, effects); legacy
+branches stay first-in-code and byte-stable.
+
+### docx — hyperlink ScreenTip
+
+- **`add type:link` accepts an optional `tooltip`** (§4, additive) → `w:hyperlink/@w:tooltip` (Word
+  ScreenTip / hover hint), on both external (`url`) and internal (`anchor`) links. `get` reports
+  `tooltip` only when present (added conditionally — a tooltip-less link is byte-identical to 1.22 on
+  both write and read). An empty/whitespace/non-string tooltip → `invalid_args`. Mirrors the xlsx
+  cell `hyperlinkTooltip` that already shipped.
+
+### xlsx — CSV export delimiter
+
+- **`read --view csv` accepts an optional `delimiter`** (§5, additive) reusing the same
+  `comma|semicolon|tab` vocabulary the CSV *import* path already parses — export was previously
+  hardcoded to comma. Omitting it is byte-identical to 1.22 (comma, RFC 4180 minimal quoting); quoting
+  is delimiter-aware (a field is quoted when it contains the *active* delimiter). An unsupported token
+  (e.g. `pipe`) → `invalid_args` (the delimiter vocabulary is unchanged).
+
+### pptx — shape soft-edge effect
+
+- **A shape `set`/`add` accepts an optional `softEdge`** (§6, additive) → `a:effectLst/a:softEdge` — the
+  last unfilled slot in the shadow/glow/reflection/outline effect roster (its ordering anchor was already
+  reserved). `true` = 2.5pt (`@rad=31750`); a size like `"5pt"` = `@rad=63500`; `false`/`""` clears it
+  and drops a now-empty `a:effectLst`. `get` projects `softEdge` alongside the other effects (null when
+  absent → key drops). Works on shapes and pictures. An unsupported kind → `unsupported_feature`; a
+  non-size/non-bool value → `invalid_args`.
+
+Agents that target the 1.22.0 surface are byte-for-byte compatible with 1.23.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

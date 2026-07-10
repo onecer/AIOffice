@@ -70,6 +70,34 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.23.0 — complete the half-shipped: docx hyperlink ScreenTip · xlsx CSV export delimiter · pptx shape soft-edge (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each format gains the one missing facet of an
+already-shipped feature, byte-stable on legacy paths. Agents that target 1.22.0 are byte-for-byte
+compatible with 1.23.0.
+
+### Added — docx
+
+- **Hyperlink ScreenTip**: `add type:link` accepts an optional `tooltip` → `w:hyperlink/@w:tooltip`
+  (external + internal links), reported on `get` when present. Mirrors the shipped xlsx cell tooltip.
+
+### Added — xlsx
+
+- **CSV export delimiter**: `read --view csv` accepts an optional `delimiter` (`comma|semicolon|tab`,
+  the same vocabulary CSV import already parses) — export was previously comma-only. Delimiter-aware
+  quoting; omitting it is byte-identical.
+
+### Added — pptx
+
+- **Shape soft-edge effect**: `softEdge` on a shape `set`/`add` writes `a:softEdge` (`true` = 2.5pt,
+  a size like `"5pt"`, `false` clears) — the last slot in the shadow/glow/reflection/outline roster,
+  read back on `get`.
+
+### Fixed
+
+- **Honesty**: the CSV help topics advertised a `|` pipe delimiter the parser never accepted; the docs
+  now match the real `comma|semicolon|tab` vocabulary.
+
 ## 1.22.0 — finish the vocabulary: xlsx CF bundle · docx content-control lock · pptx adjust handles (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — three vocabulary completions on existing ops,
