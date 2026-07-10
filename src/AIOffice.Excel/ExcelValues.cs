@@ -210,9 +210,9 @@ internal static partial class ExcelValues
         }
     }
 
-    /// <summary>Escapes one CSV field (RFC 4180 style).</summary>
-    public static string CsvEscape(string field) =>
-        field.Contains(',') || field.Contains('"') || field.Contains('\n') || field.Contains('\r')
+    /// <summary>Escapes one CSV field (RFC 4180 style); quotes on the active delimiter.</summary>
+    public static string CsvEscape(string field, char delimiter = ',') =>
+        field.Contains(delimiter) || field.Contains('"') || field.Contains('\n') || field.Contains('\r')
             ? "\"" + field.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
             : field;
 

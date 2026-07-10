@@ -235,7 +235,7 @@ internal static class ExcelCsv
     /// One sheet window as RFC 4180 csv (CRLF records, minimal quoting). The
     /// window is rectangular: blank cells inside it become empty fields.
     /// </summary>
-    public static (string Content, bool Truncated) Build(IXLRange? range, int maxBytes)
+    public static (string Content, bool Truncated) Build(IXLRange? range, int maxBytes, char delimiter = ',')
     {
         if (range is null)
         {
@@ -251,10 +251,10 @@ internal static class ExcelCsv
             {
                 if (column > 1)
                 {
-                    sb.Append(',');
+                    sb.Append(delimiter);
                 }
 
-                sb.Append(ExcelValues.CsvEscape(FieldText(row.Cell(column))));
+                sb.Append(ExcelValues.CsvEscape(FieldText(row.Cell(column)), delimiter));
             }
 
             sb.Append("\r\n");

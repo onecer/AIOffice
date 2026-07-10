@@ -148,7 +148,8 @@ public sealed partial class ExcelHandler
     {
         var (sheet, range) = ResolveCsvWindow(workbook, ArgString(ctx, "sheet"), ArgString(ctx, "range"));
         var maxBytes = ArgInt(ctx, "maxBytes") ?? DefaultMaxTextBytes;
-        var (content, truncated) = ExcelCsv.Build(range, maxBytes);
+        var delimiter = ExcelCsv.ParseDelimiterArg(ArgString(ctx, "delimiter")) ?? ',';
+        var (content, truncated) = ExcelCsv.Build(range, maxBytes, delimiter);
 
         List<Warning>? warnings = truncated
             ? [new Warning(

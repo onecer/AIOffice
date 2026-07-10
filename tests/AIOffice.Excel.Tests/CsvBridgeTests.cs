@@ -345,4 +345,110 @@ public sealed class CsvBridgeTests : ExcelTestBase
         var warnings = Json(envelope)["meta"]!["warnings"]!.AsArray();
         Assert.Contains(warnings, w => w!["code"]!.GetValue<string>() == "result_truncated");
     }
+
+    // ----- export delimiter -------------------------------------------------
+
+    [Fact]
+    public void Export_without_delimiter_is_byte_identical_comma_output()
+    {
+        // Acceptance 1: no delimiter prop -> the shipped comma output, unchanged envelope.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1:C2", ("values", new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("plain", "with, comma", "say \"hi\""),
+                new System.Text.Json.Nodes.JsonArray(1.5, true, "2024-05-01"))))).IsOk);
+
+        var data = OkData(Handler.Read(Ctx(file, ("view", "csv"))));
+        Assert.Equal("csv", data["view"]!.GetValue<string>());
+        Assert.Equal("Sheet1", data["sheet"]!.GetValue<string>());
+        Assert.Equal("A1:C2", data["range"]!.GetValue<string>());
+        Assert.False(data["truncated"]!.GetValue<bool>());
+        Assert.Equal(
+            "plain,\"with, comma\",\"say \"\"hi\"\"\"\r\n1.5,true,2024-05-01\r\n",
+            data["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Export_delimiter_emits_tab_or_semicolon_separated_output()
+    {
+        // Acceptance 3: tab (via both spellings) and semicolon separators.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1:C1", ("values", new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("a", "b", "c"))))).IsOk);
+
+        var tab = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "tab"))))["content"]!.GetValue<string>();
+        Assert.Equal("a\tb\tc\r\n", tab);
+
+        var tabEscape = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "\\t"))))["content"]!.GetValue<string>();
+        Assert.Equal("a\tb\tc\r\n", tabEscape);
+
+        var semiWord = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "semicolon"))))["content"]!.GetValue<string>();
+        Assert.Equal("a;b;c\r\n", semiWord);
+
+        var semiSymbol = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", ";"))))["content"]!.GetValue<string>();
+        Assert.Equal("a;b;c\r\n", semiSymbol);
+    }
+
+    [Fact]
+    public void Export_delimiter_tab_round_trips_through_import()
+    {
+        // Acceptance 4: export tab-separated, re-import with delimiter='tab', identical grid.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1:D2", ("values", new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("Name", "Qty", "Active", "When"),
+                new System.Text.Json.Nodes.JsonArray("ant, the first", 5, true, "2024-05-01")))),
+            SetOp("/Sheet1/A3", ("value", "007"))).IsOk);
+
+        var tsvText = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "tab"))))["content"]!.GetValue<string>();
+        var tsvPath = Path.Combine(Dir, "roundtrip.tsv");
+        File.WriteAllText(tsvPath, tsvText);
+        var reimported = OkData(Import(tsvPath, "roundtrip-tsv.xlsx", ("delimiter", "tab")))["file"]!.GetValue<string>();
+
+        using var before = new XLWorkbook(file);
+        using var after = new XLWorkbook(reimported);
+        var b = before.Worksheet(1);
+        var a = after.Worksheet(1);
+        foreach (var address in new[] { "A1", "B1", "C1", "D1", "A2", "B2", "C2", "D2", "A3" })
+        {
+            Assert.Equal(b.Cell(address).Value.Type, a.Cell(address).Value.Type);
+            Assert.Equal(b.Cell(address).Value, a.Cell(address).Value);
+        }
+
+        // The comma inside "ant, the first" is NOT the tab delimiter, so it lands whole in one cell.
+        Assert.Equal("ant, the first", a.Cell("A2").GetText());
+    }
+
+    [Fact]
+    public void Export_delimiter_quoting_follows_the_active_delimiter()
+    {
+        // Acceptance 5: with delimiter='tab', a comma is NOT special (unquoted); a tab IS.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(
+            file,
+            SetOp("/Sheet1/A1:B1", ("values", new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("has, comma", "has\ttab"))))).IsOk);
+
+        var tab = OkData(Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "tab"))))["content"]!.GetValue<string>();
+        // Field with a comma stays bare; field with the active tab delimiter is quoted.
+        Assert.Equal("has, comma\t\"has\ttab\"\r\n", tab);
+    }
+
+    [Fact]
+    public void Export_rejects_an_unsupported_delimiter_token()
+    {
+        // Acceptance 6: reuse ParseDelimiterArg's vocabulary — 'pipe'/'|' is invalid_args.
+        var file = CreateWorkbook();
+        Assert.True(EditOps(file, SetOp("/Sheet1/A1", ("value", "x"))).IsOk);
+
+        var pipe = Handler.Read(Ctx(file, ("view", "csv"), ("delimiter", "|")));
+        Assert.False(pipe.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, pipe.Error!.Code);
+        Assert.NotNull(pipe.Error.Candidates);
+        Assert.Equal(ExcelCsv.DelimiterNames, pipe.Error.Candidates);
+    }
 }
