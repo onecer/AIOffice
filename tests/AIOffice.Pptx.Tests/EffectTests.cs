@@ -349,4 +349,141 @@ public sealed class EffectTests : IDisposable
         Assert.Equal("202020", detail["effects"]!["shadow"]!.GetValue<string>());
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
+
+    // ---- soft edge (v1.23.0): a:softEdge, the trailing effect in a:effectLst ----
+
+    [Fact]
+    public void SetSoftEdgeTrue_WritesDefaultRadius_AndSurvivesReload()
+    {
+        // true -> a:softEdge @rad=31750 (PowerPoint's 2.5pt default), asserted after save+reload.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("softEdge", true))));
+
+        var softEdge = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.SoftEdge>()!;
+        Assert.Equal(31_750L, softEdge.Radius!.Value);
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Equal("2.5pt", detail["effects"]!["softEdge"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetSoftEdgeSize_WritesRadius_AndReadsBackAlongsideOtherEffects()
+    {
+        // '5pt' -> @rad=63500; get returns softEdge:'5pt' next to shadow/glow/reflection.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(
+            ("glow", "00FF00"), ("shadow", "303030"), ("reflection", true), ("softEdge", "5pt"))));
+
+        var softEdge = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.SoftEdge>()!;
+        Assert.Equal(63_500L, softEdge.Radius!.Value); // 5pt * 12700 EMU/pt
+
+        var effects = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["effects"]!;
+        Assert.Equal("5pt", effects["softEdge"]!.GetValue<string>());
+        Assert.Equal("00FF00", effects["glow"]!.GetValue<string>());
+        Assert.Equal("303030", effects["shadow"]!.GetValue<string>());
+        Assert.True(effects["reflection"]!.GetValue<bool>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData("")]
+    public void SetSoftEdgeFalseOrEmpty_ClearsSoftEdge_AndDropsEmptyEffectList(object clearValue)
+    {
+        // false or '' removes a:softEdge and drops the now-empty a:effectLst.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("softEdge", true))));
+        Assert.NotNull(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>());
+
+        var clear = clearValue is bool b ? JsonValue.Create(b) : JsonValue.Create((string)clearValue);
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["softEdge"] = clear }));
+
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()); // empty list dropped
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Null(detail["effects"]);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetSoftEdge_TrailsReflection_InSchemaChildOrder()
+    {
+        // softEdge coexists with shadow/glow/reflection; a:softEdge must be the last child.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(
+            ("glow", "00FF00"), ("shadow", "303030"), ("reflection", true), ("softEdge", true))));
+
+        var effectList = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!;
+        var order = effectList.ChildElements.Select(e => e.LocalName).ToList();
+        Assert.True(order.IndexOf("glow") < order.IndexOf("outerShdw"));
+        Assert.True(order.IndexOf("outerShdw") < order.IndexOf("reflection"));
+        Assert.True(order.IndexOf("reflection") < order.IndexOf("softEdge"));
+        Assert.Equal("softEdge", order[^1]); // softEdge is the trailing anchor
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SoftEdge_OnPicture_RoundTrips()
+    {
+        Create();
+        File.WriteAllBytes(Path.Combine(_ws.Dir, "logo.png"), TestImages.Png(40, 30));
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "image", props: TestEnv.Props(("src", "logo.png"))));
+        var picPath = added["results"]![0]!["target"]!.GetValue<string>();
+
+        Edit(TestEnv.Op("set", picPath, props: TestEnv.Props(("softEdge", "5pt"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", picPath))));
+        Assert.Equal("5pt", detail["effects"]!["softEdge"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void ShapeWithoutSoftEdge_ProjectsNoSoftEdgeKey_ByteStable()
+    {
+        // A 1.22 shape with only a shadow gains no softEdge key (the null key drops).
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("shadow", "404040"))));
+
+        var effects = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["effects"]!;
+        Assert.Equal("404040", effects["shadow"]!.GetValue<string>());
+        Assert.Null(effects["softEdge"]); // absent, not present-and-null
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.SoftEdge>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SoftEdge_OnGroup_IsUnsupportedFeature()
+    {
+        Create();
+        var a = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create(2)), ("y", JsonValue.Create(2)))));
+        var aId = a["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var b = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create(10)), ("y", JsonValue.Create(2)))));
+        var bId = b["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group", props: TestEnv.Props(
+            ("shapes", new JsonArray("@" + aId, "@" + bId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", groupPath, props: TestEnv.Props(("softEdge", true)))]);
+
+        TestEnv.AssertFail(result, ErrorCodes.UnsupportedFeature);
+    }
+
+    [Fact]
+    public void SoftEdge_NonSizeNonBoolValue_IsInvalidArgs()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: TestEnv.Props(("softEdge", "banana")))]);
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
 }

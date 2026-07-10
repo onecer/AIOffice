@@ -23,6 +23,8 @@ internal static class PptxEffects
     private const long ShadowDistance = 38_100L;
     private const int ShadowDirection = 2_700_000; // 45 degrees down-right (60000ths)
     private const long GlowRadius = 63_500L;
+    private const long SoftEdgeRadius = 31_750L; // PowerPoint's 2.5pt default (1pt = 12700 EMU)
+    private const double EmuPerPoint = 12_700.0;
 
     // ---- shadow -------------------------------------------------------------
 
@@ -94,6 +96,51 @@ internal static class PptxEffects
 
         // reflection is last among the effects aioffice writes.
         InsertEffect(view, reflection, after: ["glow", "innerShdw", "outerShdw"], before: ["softEdge"]);
+    }
+
+    // ---- soft edge ----------------------------------------------------------
+
+    /// <summary>
+    /// Sets (or clears, on false/"") a soft edge (a:softEdge). <c>true</c> uses PowerPoint's
+    /// 2.5pt default radius; a size string like "5pt" tunes it. Soft edge carries no color.
+    /// </summary>
+    public static void SetSoftEdge(ShapeView view, JsonNode? value)
+    {
+        if (IsFalse(value) || IsEmptyString(value))
+        {
+            RemoveEffect<A.SoftEdge>(view);
+            return;
+        }
+
+        var softEdge = new A.SoftEdge { Radius = SoftEdgeRadiusOf(value) };
+
+        // softEdge is the trailing effect in a:effectLst (after reflection).
+        InsertEffect(view, softEdge, after: ["glow", "innerShdw", "outerShdw", "reflection"], before: []);
+    }
+
+    /// <summary>The soft-edge radius in EMU: the 2.5pt default for true/null, else the parsed size.</summary>
+    private static long SoftEdgeRadiusOf(JsonNode? value)
+    {
+        if (value is null)
+        {
+            return SoftEdgeRadius; // "on, default radius"
+        }
+
+        if (value is JsonValue jv)
+        {
+            if (jv.TryGetValue<bool>(out _))
+            {
+                return SoftEdgeRadius; // true (false handled by the caller)
+            }
+
+            if (jv.TryGetValue<string>(out var text) &&
+                string.Equals(text.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                return SoftEdgeRadius;
+            }
+        }
+
+        return Units.ParseLengthEmu("softEdge", value);
     }
 
     // ---- outline ------------------------------------------------------------
@@ -245,8 +292,11 @@ internal static class PptxEffects
         var glow = EffectColor(effectList?.GetFirstChild<A.Glow>());
         var hasReflection = effectList?.GetFirstChild<A.Reflection>() is not null;
         var outline = ReadOutline(properties.GetFirstChild<A.Outline>());
+        var softEdge = effectList?.GetFirstChild<A.SoftEdge>()?.Radius?.Value is { } rad
+            ? Units.Inv($"{rad / EmuPerPoint}pt")
+            : null;
 
-        if (shadow is null && glow is null && !hasReflection && outline is null)
+        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null)
         {
             return null;
         }
@@ -257,6 +307,7 @@ internal static class PptxEffects
             Glow = glow,
             Reflection = hasReflection ? true : (bool?)null,
             Outline = outline,
+            SoftEdge = softEdge,
         };
     }
 
@@ -405,7 +456,7 @@ internal static class PptxEffects
             _ => throw new AiofficeException(
                 ErrorCodes.UnsupportedFeature,
                 $"Effects are not supported on a '{view.Kind}'.",
-                "Shadow, glow, reflection and outline apply to shapes, pictures and lines; " +
+                "Shadow, glow, reflection, outline and soft edge apply to shapes, pictures and lines; " +
                 "ungroup grouped content in PowerPoint first."),
         };
 
@@ -458,6 +509,10 @@ internal static class PptxEffects
 
         return Units.ParseColorHex("color", value);
     }
+
+    /// <summary>True when the value is the empty string (the "" clear form for soft edge).</summary>
+    private static bool IsEmptyString(JsonNode? value) =>
+        value is JsonValue jv && jv.TryGetValue<string>(out var text) && text.Trim().Length == 0;
 
     private static bool IsFalse(JsonNode? value)
     {
