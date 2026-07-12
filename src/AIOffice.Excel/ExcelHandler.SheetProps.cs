@@ -24,6 +24,9 @@ public sealed partial class ExcelHandler
 
     private static readonly IReadOnlyList<string> Orientations = ["portrait", "landscape"];
 
+    /// <summary>The page-margin edges (inches). Also the candidate keys for bad margin input.</summary>
+    private static readonly IReadOnlyList<string> MarginKeys = ["top", "bottom", "left", "right", "header", "footer"];
+
     /// <summary>Wire name → ClosedXML paper size. Reflection back uses the same table.</summary>
     private static readonly IReadOnlyDictionary<string, XLPaperSize> PaperSizes =
         new Dictionary<string, XLPaperSize>(StringComparer.OrdinalIgnoreCase)
@@ -585,6 +588,74 @@ public sealed partial class ExcelHandler
     }
 
     /// <summary>
+    /// <c>{margins:{top:1.0,bottom:1.0,left:0.75,right:0.75,header:0.5,footer:0.5}}</c>
+    /// sets the sheet's print margins in inches (<c>pageMargins</c>). Every edge is
+    /// optional and a partial object leaves the omitted edges untouched; each supplied
+    /// edge must be a non-negative number. Sheet-level only.
+    /// </summary>
+    private static void ApplyMargins(ExcelTarget target, EditOp op, JsonNode node, int index, List<string> applied)
+    {
+        RequireSheetTarget(target, op, "margins", index);
+        if (node is not JsonObject spec)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"ops[{index}]: margins takes an object with any of top/bottom/left/right/header/footer (inches).",
+                "Use {margins:{top:1.0,bottom:1.0,left:0.75,right:0.75,header:0.5,footer:0.5}}; pass any subset.",
+                candidates: MarginKeys);
+        }
+
+        foreach (var (key, _) in spec)
+        {
+            if (!MarginKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"ops[{index}]: margins edge '{key}' is not top, bottom, left, right, header or footer.",
+                    "Margin edges are top, bottom, left, right, header and footer (inches); pass any subset.",
+                    candidates: MarginKeys);
+            }
+        }
+
+        var margins = target.Sheet.PageSetup.Margins;
+
+        void SetEdge(string name, Action<double> apply)
+        {
+            if (!spec.TryGetPropertyValue(name, out var edgeNode) || edgeNode is null)
+            {
+                return; // omitted → leave that edge untouched
+            }
+
+            apply(MarginEdge(edgeNode, name, index));
+            applied.Add("margins." + name);
+        }
+
+        SetEdge("top", v => margins.Top = v);
+        SetEdge("bottom", v => margins.Bottom = v);
+        SetEdge("left", v => margins.Left = v);
+        SetEdge("right", v => margins.Right = v);
+        SetEdge("header", v => margins.Header = v);
+        SetEdge("footer", v => margins.Footer = v);
+    }
+
+    /// <summary>Parses one margin edge — a non-negative, finite number of inches.</summary>
+    private static double MarginEdge(JsonNode node, string edge, int index)
+    {
+        if (node is JsonValue value && value.GetValueKind() == JsonValueKind.Number &&
+            value.TryGetValue<double>(out var inches) &&
+            !double.IsNaN(inches) && !double.IsInfinity(inches) && inches >= 0)
+        {
+            return inches;
+        }
+
+        throw new AiofficeException(
+            ErrorCodes.InvalidArgs,
+            $"ops[{index}]: margins.{edge} must be a number of inches >= 0.",
+            "Each margin edge is a non-negative number of inches, e.g. {margins:{top:1.0}}.",
+            candidates: MarginKeys);
+    }
+
+    /// <summary>
     /// <c>{printHeader:{left:"&F",center:"&A",right:"&D"}}</c> (or printFooter) sets
     /// the odd-page header/footer field-code strings. Excel field codes pass through
     /// verbatim: &amp;P page, &amp;N pages, &amp;D date, &amp;T time, &amp;F file,
@@ -666,6 +737,16 @@ public sealed partial class ExcelHandler
         // Header/footer text lives in raw bytes (ClosedXML 0.105 cannot read it back).
         var (printHeader, printFooter) = ExcelPrintHeaderFooter.Read(file, sheet.Name);
 
+        // Print margins (inches). Surface them only when they deviate from the
+        // ClosedXML defaults — legacy default-margin sheets gain NO 'margins' key,
+        // exactly like the scale!=100 gate above.
+        var m = setup.Margins;
+        object? margins =
+            m.Top != 0.75 || m.Bottom != 0.5 || m.Left != 0.75 || m.Right != 0.75 ||
+            m.Header != 0.5 || m.Footer != 0.75
+                ? new { top = m.Top, bottom = m.Bottom, left = m.Left, right = m.Right, header = m.Header, footer = m.Footer }
+                : null;
+
         return new
         {
             orientation = setup.PageOrientation.ToString().ToLowerInvariant(),
@@ -679,6 +760,7 @@ public sealed partial class ExcelHandler
             printTitleRows = titleRows,
             printTitleCols = titleCols,
             pageBreaks,
+            margins,
             centerHorizontally = setup.CenterHorizontally ? true : (bool?)null,
             centerVertically = setup.CenterVertically ? true : (bool?)null,
             printGridlines = setup.ShowGridlines ? true : (bool?)null,

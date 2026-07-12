@@ -33,6 +33,9 @@ public sealed partial class ExcelHandler
         "totals",
         // v1.24 (additive): sheet tab color (sheetPr/tabColor); "" clears it.
         "tabColor",
+        // v1.25 (additive): sheet page margins (pageMargins, inches); partial object,
+        // sheet-level only. Completes the read-only print-margins surface.
+        "margins",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -1125,6 +1128,12 @@ public sealed partial class ExcelHandler
         if (props.TryGetPropertyValue("printFooter", out var footerNode) && footerNode is not null)
         {
             ApplyPrintHeaderFooter(target, op, footerNode, isHeader: false, index, applied, post);
+        }
+
+        // v1.25 sheet page margins (pageMargins, inches); partial object, sheet-level.
+        if (props.TryGetPropertyValue("margins", out var marginsNode) && marginsNode is not null)
+        {
+            ApplyMargins(target, op, marginsNode, index, applied);
         }
 
         if (props.TryGetPropertyValue("height", out var heightNode) && heightNode is not null)

@@ -411,4 +411,151 @@ public sealed class PrintCompletenessTests : ExcelTestBase
         Assert.False(envelope.IsOk);
         Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
     }
+
+    // ----- page margins (1.25) ------------------------------------------------
+
+    [Fact]
+    public void Margins_write_page_margins_in_inches_and_get_reflects()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1", ("margins", new JsonObject
+        {
+            ["top"] = 1.0,
+            ["bottom"] = 1.0,
+            ["left"] = 0.75,
+            ["right"] = 0.75,
+            ["header"] = 0.5,
+            ["footer"] = 0.5,
+        })));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        // <pageMargins> stores the values verbatim in inches.
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var pm = RawSheet(document).GetFirstChild<S.PageMargins>()!;
+            Assert.Equal(1.0, pm.Top!.Value);
+            Assert.Equal(1.0, pm.Bottom!.Value);
+            Assert.Equal(0.75, pm.Left!.Value);
+            Assert.Equal(0.75, pm.Right!.Value);
+            Assert.Equal(0.5, pm.Header!.Value);
+            Assert.Equal(0.5, pm.Footer!.Value);
+        }
+
+        // save+reopen: get echoes the margins object.
+        var m = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!["margins"]!;
+        Assert.Equal(1.0, m["top"]!.GetValue<double>());
+        Assert.Equal(1.0, m["bottom"]!.GetValue<double>());
+        Assert.Equal(0.75, m["left"]!.GetValue<double>());
+        Assert.Equal(0.75, m["right"]!.GetValue<double>());
+        Assert.Equal(0.5, m["header"]!.GetValue<double>());
+        Assert.Equal(0.5, m["footer"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void Partial_margins_leave_the_other_edges_untouched()
+    {
+        var file = CreateDataWorkbook();
+
+        // ClosedXML defaults: top 0.75, bottom 0.5, left 0.75, right 0.75,
+        // header 0.5, footer 0.75. A partial object touches only top+bottom.
+        Assert.True(EditOps(file, SetOp("/Sheet1", ("margins", new JsonObject
+        {
+            ["top"] = 1.25,
+            ["bottom"] = 1.5,
+        }))).IsOk);
+        AssertValidatorClean(file);
+
+        var m = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!["margins"]!;
+        Assert.Equal(1.25, m["top"]!.GetValue<double>());
+        Assert.Equal(1.5, m["bottom"]!.GetValue<double>());
+        Assert.Equal(0.75, m["left"]!.GetValue<double>());
+        Assert.Equal(0.75, m["right"]!.GetValue<double>());
+        Assert.Equal(0.5, m["header"]!.GetValue<double>());
+        Assert.Equal(0.75, m["footer"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void Default_margins_emit_no_margins_key()
+    {
+        var file = CreateDataWorkbook();
+        var ps = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!;
+        Assert.Null(ps["margins"]); // deviation-gated: default sheets gain no key.
+    }
+
+    [Fact]
+    public void Unrelated_edit_leaves_default_page_margins_byte_stable()
+    {
+        var file = CreateDataWorkbook();
+
+        string RawMargins()
+        {
+            using var document = SpreadsheetDocument.Open(file, isEditable: false);
+            return RawSheet(document).GetFirstChild<S.PageMargins>()!.OuterXml;
+        }
+
+        var golden = RawMargins();
+
+        // An edit that never touches margins must not perturb <pageMargins>.
+        Assert.True(EditOps(file, SetOp("/Sheet1/F9", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        Assert.Equal(golden, RawMargins());
+        var ps = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!;
+        Assert.Null(ps["margins"]);
+    }
+
+    [Fact]
+    public void Non_object_margins_is_invalid_args_with_the_six_edge_candidates()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1", ("margins", 1.0)));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Equal(6, envelope.Error.Candidates!.Count);
+        Assert.Contains("top", envelope.Error.Candidates!);
+        Assert.Contains("footer", envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void Negative_margin_edge_is_invalid_args_with_candidates()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1", ("margins", new JsonObject { ["top"] = -0.5 })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Equal(6, envelope.Error.Candidates!.Count);
+        Assert.Contains("top", envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void NaN_margin_edge_is_invalid_args_with_candidates()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1", ("margins", new JsonObject { ["left"] = double.NaN })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("left", envelope.Error.Candidates!);
+    }
+
+    [Fact]
+    public void Unknown_margin_edge_is_invalid_args_with_candidates()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1", ("margins", new JsonObject { ["gutter"] = 0.5 })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Equal(6, envelope.Error.Candidates!.Count);
+    }
+
+    [Fact]
+    public void Margins_on_a_range_path_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B2", ("margins", new JsonObject { ["top"] = 1.0 })));
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+    }
 }
