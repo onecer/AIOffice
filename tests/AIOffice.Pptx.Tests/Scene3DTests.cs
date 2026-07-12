@@ -312,6 +312,64 @@ public sealed class Scene3DTests : IDisposable
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 
+    [Fact]
+    public void SetScene3DThenOutline_KeepsLnBeforeScene3D_ValidatorClean()
+    {
+        // The SetOutline anchor fix: with an a:scene3d (or a:sp3d) already present and NO effectLst,
+        // a later outline must anchor BEFORE the 3-D element (a:ln precedes scene3d/sp3d in spPr),
+        // not append after it. Setting scene3d/bevel FIRST is the order that exposed the defect.
+        Create();
+        var scenePath = AddShape();
+        Edit(TestEnv.Op("set", scenePath, props: TestEnv.Props(("scene3d", "perspectiveFront"))));
+        Edit(TestEnv.Op("set", scenePath, props: TestEnv.Props(("outline", "0000FF"))));
+
+        var sceneOrder = SingleShape().ShapeProperties!.ChildElements.Select(c => c.LocalName).ToList();
+        Assert.True(sceneOrder.IndexOf("ln") < sceneOrder.IndexOf("scene3d"));
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void ForeignLegacyCamera_ReadsGracefully_DoesNotThrow()
+    {
+        // Read tolerance: a foreign a:scene3d with a LEGACY camera preset (outside our 44 accepted)
+        // must NOT crash the get. CameraPresetToken parses only the KNOWN tokens and compares them to
+        // the foreign value — it never feeds the foreign value to the throwing parser — so an unknown
+        // camera yields no token match and the read returns without exception.
+        Create();
+        var path = AddShape();
+        using (var doc = PresentationDocument.Open(_ws.PathOf("deck.pptx"), true))
+        {
+            var sp = doc.PresentationPart!.SlideParts.Single().Slide!.Descendants<P.Shape>()
+                .First(s => s.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value?.StartsWith("TextBox", StringComparison.Ordinal) == true)
+                .ShapeProperties!;
+            sp.Append(new A.Scene3DType(
+                new A.Camera { Preset = A.PresetCameraValues.LegacyObliqueTopLeft },
+                new A.LightRig { Rig = A.LightRigValues.ThreePoints, Direction = A.LightRigDirectionValues.Top }));
+            doc.PresentationPart!.SlideParts.Single().Slide!.Save();
+        }
+
+        // The get must succeed (reaching this line at all proves no unhandled exception was thrown —
+        // AssertOk would otherwise never return). The unknown camera simply degrades gracefully: it
+        // yields no token, so scene3d does not round-trip and the shape reports no readable effect.
+        var data = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Null(data["effects"]?["scene3d"]);
+    }
+
+    [Fact]
+    public void SetBevelThenOutline_KeepsLnBeforeSp3d_ValidatorClean()
+    {
+        // Same SetOutline fix, via a:sp3d — this combination was already schema-INVALID in v1.25
+        // (bevel then outline), so the fix repairs a latent pre-existing defect as well.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("bevel", "circle"))));
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("outline", "FF0000"))));
+
+        var order = SingleShape().ShapeProperties!.ChildElements.Select(c => c.LocalName).ToList();
+        Assert.True(order.IndexOf("ln") < order.IndexOf("sp3d"));
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
     // ---- idempotent + clear ----
 
     [Fact]

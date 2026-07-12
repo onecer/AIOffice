@@ -28,7 +28,7 @@ const REPO_RELEASES = 'https://github.com/onecer/AIOffice/releases';
 
 const BIN_DIR = path.join(__dirname, 'bin');
 
-// Resolve the release tag. A bare package version "1.25.0" becomes "v1.25.0";
+// Resolve the release tag. A bare package version "1.26.0" becomes "v1.26.0";
 // an explicit override is used verbatim (it may or may not carry a leading v).
 function resolveVersion() {
   const override = process.env.AIOFFICE_DOWNLOAD_VERSION;

@@ -70,6 +70,29 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.26.0 — complete the pptx 3-D family: bevel completions + scene3d (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — a single deep pptx milestone finishing the 3-D
+family v1.25's `bevel` opened. Every v1.25 `bevel` input is byte-identical. Agents that target 1.25.0 are
+byte-for-byte compatible with 1.26.0.
+
+### Added — pptx
+
+- **Bevel completions**: the `bevel` object gains `bevelBottom` (`a:bevelB`), `contour`
+  (`{color, width?}` → `a:contourClr`/`@contourW`), `material` (11 `@prstMaterial` presets), and `z`
+  (`@z`). The v1.25 keys are byte-frozen.
+- **Shape scene / 3-D camera + light**: a new `scene3d` prop → `a:scene3d` (before `a:sp3d`) — a camera
+  preset string, or `{camera:{preset, rotation?}, lightRig?:{rig, dir?, rotation?}}` (44 cameras / 15 rigs
+  / 8 dirs; legacy members rejected). Read back on `get`, discriminated. With this the pptx 3-D family
+  (`a:sp3d` bevel/extrusion/contour/material + `a:scene3d` camera/lightRig) is complete.
+
+### Fixed
+
+- **pptx outline child order**: setting an outline on a shape that already carried a 3-D element
+  (`a:sp3d`/`a:scene3d`) with no effect list could emit schema-invalid child order (`a:ln` after the 3-D
+  element) — a latent defect that also affected v1.25 `bevel`+`outline`. The outline now anchors correctly
+  before the effect/3-D elements.
+
 ## 1.25.0 — reach past effectLst: pptx shape bevel/3-D · xlsx page margins · docx emphasis marks (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each pick opens a fresh surface, byte-stable on

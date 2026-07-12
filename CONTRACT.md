@@ -1249,6 +1249,33 @@ last clean character-typography prop); legacy branches stay first-in-code and by
 
 Agents that target the 1.24.0 surface are byte-for-byte compatible with 1.25.0.
 
+## 7z. 1.26.0 — complete the pptx 3-D family: bevel completions + scene3d (additive, surface 1.0)
+
+Package **1.26.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only. A single
+deep pptx milestone that finishes the 3-D family v1.25's `bevel` opened; legacy branches (including every
+v1.25 `bevel` input) stay byte-identical.
+
+### pptx — bevel completions (a:sp3d)
+
+- **The `bevel` object widens** (§6, additive) with four keys (v1.25's `preset/width/height/depth/depthColor`
+  are byte-frozen): `bevelBottom` (same preset|`{preset,width,height}` shape → `a:bevelB`), `contour`
+  (`{color, width?}` → `a:contourClr` + `@contourW`, default 1pt so it never renders invisibly),
+  `material` (`@prstMaterial`: `matte, warmMatte, metal, plastic, powder, translucentPowder, clear, flat,
+  dkEdge, softEdge, softmetal`), and `z` (`@z`, ≥ 0). Legacy materials → `invalid_args`.
+
+### pptx — shape scene / 3-D camera + light (a:scene3d)
+
+- **A new `scene3d` prop** (§6, additive) → `a:spPr/a:scene3d` (before `a:sp3d`): a bare camera-preset
+  string, or `{camera:{preset, rotation?:{lat,lon,rev}}, lightRig?:{rig, dir?, rotation?}}`. 44 camera
+  presets (`orthographicFront`, `isometric…`, `isometricOffAxis…`, `oblique…`, `perspective…`), 15 light
+  rigs, 8 directions — legacy members → `invalid_args`. `camera` is required when `scene3d` is set;
+  `lightRig` is optional (a camera-only scene emits PowerPoint's default rig, which reads back as the bare
+  camera form). `false`/`''` clears. `get` projects `bevel`/`scene3d` discriminated (string vs object),
+  null when absent. `bevel`/`scene3d` on a group → `unsupported_feature`. Fixes a latent pre-1.26 defect
+  where a `bevel`+`outline` combination could emit schema-invalid child order.
+
+Agents that target the 1.25.0 surface are byte-for-byte compatible with 1.26.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

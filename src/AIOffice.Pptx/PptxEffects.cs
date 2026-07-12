@@ -1034,8 +1034,15 @@ internal static class PptxEffects
                 Width = 12_700, // 1pt
             };
 
-        // a:ln follows the fill / geometry but precedes a:effectLst in spPr.
-        var anchor = (OpenXmlElement?)properties.GetFirstChild<A.EffectList>();
+        // a:ln follows the fill/geometry but precedes a:effectLst / a:scene3d / a:sp3d / a:extLst
+        // in CT_ShapeProperties. Anchor before the FIRST of them that is present — otherwise a
+        // shape carrying a 3-D element (bevel/scene3d) but no effectLst would get the outline
+        // appended AFTER it, producing schema-invalid XML. (Legacy: with only an effectLst or
+        // nothing present, this resolves exactly as before, so no valid v1.25 output changes.)
+        var anchor = (OpenXmlElement?)properties.GetFirstChild<A.EffectList>()
+            ?? (OpenXmlElement?)properties.GetFirstChild<A.Scene3DType>()
+            ?? (OpenXmlElement?)properties.GetFirstChild<A.Shape3DType>()
+            ?? properties.GetFirstChild<A.ExtensionList>();
         if (anchor is not null)
         {
             properties.InsertBefore(outline, anchor);

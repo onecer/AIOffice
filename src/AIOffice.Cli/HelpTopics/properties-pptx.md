@@ -193,7 +193,13 @@ a hex (default black), or `{color?, blur?, dist?, dir?}`; `false` clears it.
 `bevel` (**1.25**, a 3-D `a:sp3d`, not an effectLst child) rounds the shape edges:
 a preset name (`circle` `relaxedInset` `slope` `cross` `angle` `softRound` `convex`
 `coolSlant` `divot` `riblet` `hardEdge` `artDeco`), or `{preset?, width?, height?,
-depth?, depthColor?}`; `false` clears it.
+depth?, depthColor?`, and (**1.26**) `bevelBottom?` (same preset shape), `contour?:{color,width?}`,
+`material?` (`matte` `warmMatte` `metal` `plastic` `powder` `translucentPowder` `clear` `flat`
+`dkEdge` `softEdge` `softmetal`), `z?}`; `false` clears it.
+`scene3d` (**1.26**, `a:scene3d`, before `a:sp3d`) sets the 3-D camera + light: a camera preset
+name (`orthographicFront`, `isometric…`, `oblique…`, `perspective…` — 44 total), or
+`{camera:{preset, rotation?:{lat,lon,rev}}, lightRig?:{rig, dir?, rotation?}}` (15 rigs / 8 dirs);
+`false` clears it. (A bevel/scene3d on a group → unsupported.)
 
 ## transition (M3, 1.1 expanded, slide-level set)
 
