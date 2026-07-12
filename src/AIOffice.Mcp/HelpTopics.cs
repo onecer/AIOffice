@@ -39,7 +39,7 @@ public static class HelpTopics
                 - docx/image      inline pictures: add type "image"
                 - docx/caption    Figure/Table/Equation captions + cross-references (M8)
                 - docx/citation   sources + CITATION fields + bibliography (1.1)
-                - docx/effect     run text effects: shadow/glow/reflection/outline (1.1)
+                - docx/effect     run text effects: shadow/glow/reflection/outline (1.1); full run vocab: properties-docx
                 - docx/list       numbered/bulleted/nested list items (M3)
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins + columns (M3/M6)

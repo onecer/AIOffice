@@ -70,6 +70,24 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.27.0 — prop discoverability: office_help serves the authoritative property references (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool/schema — this enriches the existing `office_help`
+tool's topic coverage (help responses are not tool schemas, so the token budget is unaffected).
+
+### Improved
+
+- **`office_help` now serves the complete, current settable-property reference for each format**:
+  `office_help {topic:"properties-docx"|"properties-xlsx"|"properties-pptx"}` returns the same
+  authoritative reference the CLI `help` verb serves — previously the MCP surface had its own
+  hand-curated topics that had drifted (e.g. `pptx/effect` still listed only the 1.1 effect set, missing
+  soft-edge, inner-shadow, bevel and the whole 3-D family). The property `.md` files are now the single
+  source of truth for both the CLI and MCP surfaces, so an MCP agent can discover the full prop
+  vocabulary (bevel, scene3d, tabColor, margins, emphasisMark, underline styles, …). The stale
+  `pptx/effect` / `docx/effect` / `pptx/shape` topics were refreshed to point at the property references.
+- A **drift-guard test** asserts the MCP-served property references carry the current vocabulary, so a
+  future capability can't ship without its props being discoverable over MCP.
+
 ## 1.26.1 — patch: robust preview live-reload (polling backstop)
 
 `surfaceVersion` stays **1.0**; byte-for-byte compatible with 1.26.0.

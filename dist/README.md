@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.s
 Pin a version or install dir:
 
 ```sh
-VERSION=v1.26.1 AIOFFICE_BIN=/usr/local/bin \
+VERSION=v1.27.0 AIOFFICE_BIN=/usr/local/bin \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/onecer/AIOffice/main/dist/install.sh)"
 ```
 
