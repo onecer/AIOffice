@@ -20,17 +20,26 @@ internal static class WordFormatting
          // 1.10 typography: paragraph-level toggles + line spacing, outline level, tab stops.
          "lineSpacing", "keepNext", "keepLines", "pageBreakBefore", "widowControl", "outlineLevel", "tabStops",
          // 1.10 run props that fan out to every run when set on a paragraph (like bold/font).
-         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing"];
+         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing",
+         // 1.25 CJK/academic emphasis mark (w:em).
+         "emphasisMark"];
 
     public static readonly IReadOnlyList<string> RunProps =
         ["text", "style", "bold", "italic", "underline", "color", "font", "fontSize", "rtl",
          // 1.10 character typography primitives.
-         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing"];
+         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing",
+         // 1.25 CJK/academic emphasis mark (w:em).
+         "emphasisMark"];
 
     /// <summary>1.10 run props that fan out to every run when set on a paragraph (alongside the v1.8 set).</summary>
     public static readonly string[] RunFanoutProps =
         ["bold", "italic", "underline", "color", "fontSize", "font",
-         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing"];
+         "highlight", "strike", "doubleStrike", "smallCaps", "allCaps", "superscript", "subscript", "characterSpacing",
+         "emphasisMark"];
+
+    /// <summary>The emphasis-mark styles the 'emphasisMark' prop accepts (= ECMA ST_Em / w:em @val).</summary>
+    public static readonly IReadOnlyList<string> EmphasisMarks =
+        ["none", "dot", "comma", "circle", "underDot"];
 
     /// <summary>The fixed set of named highlight colors Word's w:highlight @val accepts (no hex form).</summary>
     public static readonly IReadOnlyList<string> HighlightColors =
@@ -83,6 +92,7 @@ internal static class WordFormatting
             ["superscript"] = firstRun is null ? null : VertAlignName(firstRunPr) == "superscript",
             ["subscript"] = firstRun is null ? null : VertAlignName(firstRunPr) == "subscript",
             ["characterSpacing"] = firstRun is null ? null : CharacterSpacingPoints(firstRunPr),
+            ["emphasisMark"] = firstRun is null ? null : EmphasisMarkName(firstRunPr),
             // 1.10 paragraph typography: line spacing (multiple or {atLeast|exactly}),
             // keep/break toggles, outline level, tab stops.
             ["lineSpacing"] = LineSpacingValue(spacing),
@@ -224,8 +234,13 @@ internal static class WordFormatting
             ["superscript"] = VertAlignName(rPr) == "superscript",
             ["subscript"] = VertAlignName(rPr) == "subscript",
             ["characterSpacing"] = CharacterSpacingPoints(rPr),
+            ["emphasisMark"] = EmphasisMarkName(rPr),
         };
     }
+
+    /// <summary>w:em @val (an emphasis-mark style string), or null when absent.</summary>
+    public static string? EmphasisMarkName(RunProperties? rPr) =>
+        rPr?.Emphasis?.Val is { } v ? v.ToString() : null;
 
     /// <summary>w:highlight @val (a named color string), or null when absent.</summary>
     public static string? HighlightName(RunProperties? rPr) =>
@@ -687,6 +702,11 @@ internal static class WordFormatting
                 EnsureRPr(run).Spacing = new DocumentFormat.OpenXml.Wordprocessing.Spacing { Val = ParseCharacterSpacingTwentieths(value) };
                 break;
 
+            // 1.25 CJK/academic emphasis mark.
+            case "emphasisMark":
+                EnsureRPr(run).Emphasis = new Emphasis { Val = ParseEmphasisMark(value) };
+                break;
+
             default:
                 throw UnsupportedProp(name, "run", RunProps);
         }
@@ -747,6 +767,22 @@ internal static class WordFormatting
         }
 
         return new HighlightColorValues(match);
+    }
+
+    /// <summary>A named emphasis mark (case-insensitive), or invalid_args with the fixed candidate list.</summary>
+    public static EmphasisMarkValues ParseEmphasisMark(string value)
+    {
+        var match = EmphasisMarks.FirstOrDefault(m => string.Equals(m, value, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{value}' is not a Word emphasis mark.",
+                $"Use one of: {string.Join(", ", EmphasisMarks)}.",
+                candidates: EmphasisMarks);
+        }
+
+        return new EmphasisMarkValues(match);
     }
 
     /// <summary>Character spacing in points -> w:spacing @val in twentieths of a point (may be negative to condense).</summary>

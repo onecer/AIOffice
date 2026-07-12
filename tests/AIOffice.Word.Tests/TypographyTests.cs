@@ -184,6 +184,78 @@ public sealed class TypographyTests : WordTestBase
         AssertValidatesClean(file);
     }
 
+    // ----------------------------------------------------------- emphasis mark (w:em)
+
+    [Theory]
+    [InlineData("dot")]
+    [InlineData("comma")]
+    [InlineData("circle")]
+    [InlineData("underDot")]
+    [InlineData("none")]
+    public void EmphasisMark_round_trips_and_writes_the_val(string mark)
+    {
+        var file = CreateDoc(title: "Emphasized");
+
+        Edit(file, "[{\"op\":\"set\",\"path\":\"/body/p[1]/run[1]\",\"props\":{\"text\":\"重点\",\"emphasisMark\":\"" + mark + "\"}}]");
+
+        Assert.Equal(mark, Get(file, "/body/p[1]/run[1]")["emphasisMark"]!.GetValue<string>());
+        Assert.Equal(mark, FirstRunPr(file).Emphasis!.Val!.ToString());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void EmphasisMark_is_case_insensitive_and_normalizes_to_the_canonical_token()
+    {
+        var file = CreateDoc(title: "Emphasized ci");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]/run[1]","props":{"text":"x","emphasisMark":"UNDERDOT"}}]""");
+
+        Assert.Equal("underDot", Get(file, "/body/p[1]/run[1]")["emphasisMark"]!.GetValue<string>());
+        Assert.Equal("underDot", FirstRunPr(file).Emphasis!.Val!.ToString());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void EmphasisMark_fans_out_when_set_on_a_paragraph()
+    {
+        var file = CreateDoc(title: "Emphasized para");
+
+        // Set on the paragraph: fans out to every (direct) run's w:em, like characterSpacing.
+        Edit(file, """[{"op":"set","path":"/body/p[1]","props":{"text":"重点","emphasisMark":"circle"}}]""");
+
+        // get on the paragraph echoes the first run; the run itself carries it.
+        Assert.Equal("circle", Get(file, "/body/p[1]")["emphasisMark"]!.GetValue<string>());
+        Assert.Equal("circle", Get(file, "/body/p[1]/run[1]")["emphasisMark"]!.GetValue<string>());
+        Assert.Equal("circle", FirstRunPr(file).Emphasis!.Val!.ToString());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void EmphasisMark_absent_reads_back_null()
+    {
+        var file = CreateDoc(title: "Plain");
+
+        Edit(file, """[{"op":"set","path":"/body/p[1]/run[1]","props":{"text":"plain"}}]""");
+
+        Assert.Null(Get(file, "/body/p[1]/run[1]")["emphasisMark"]?.GetValue<string?>());
+        using var doc = WordprocessingDocument.Open(file, isEditable: false);
+        Assert.Empty(doc.MainDocumentPart!.Document!.Body!.Descendants<Emphasis>());
+        AssertValidatesClean(file);
+    }
+
+    [Fact]
+    public void EmphasisMark_unknown_token_is_invalid_args_with_the_candidate_list()
+    {
+        var file = CreateDoc(title: "Bad emphasis");
+
+        var ex = Assert.Throws<AiofficeException>(() =>
+            Edit(file, """[{"op":"set","path":"/body/p[1]/run[1]","props":{"emphasisMark":"star"}}]"""));
+
+        Assert.Equal(ErrorCodes.InvalidArgs, ex.Code);
+        Assert.NotNull(ex.Candidates);
+        Assert.Equal(new[] { "none", "dot", "comma", "circle", "underDot" }, ex.Candidates!);
+    }
+
     // ----------------------------------------------------------- paragraph line spacing
 
     [Fact]

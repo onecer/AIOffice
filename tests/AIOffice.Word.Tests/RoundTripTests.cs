@@ -413,6 +413,38 @@ public sealed class RoundTripTests : WordTestBase
         AssertZipPartsIdentical(before, after);
     }
 
+    /// <summary>
+    /// The round-trip law over the v1.25 surface: a run carrying a CJK/academic
+    /// emphasis mark (w:em) — plus one fanned out across a whole paragraph — must
+    /// survive a no-edit open+save byte-identically.
+    /// </summary>
+    [Fact]
+    public void Open_then_save_with_v125_features_keeps_every_part_byte_identical()
+    {
+        var file = CreateDoc(title: "v1.25 round trip");
+        Edit(file, """
+            [
+              {"op":"set","path":"/body/p[1]/run[1]","props":{"text":"重点","emphasisMark":"dot"}},
+              {"op":"add","path":"/body","type":"p","props":{"text":"strong emphasis","emphasisMark":"underDot"}}
+            ]
+            """);
+
+        var before = File.ReadAllBytes(file);
+
+        var ms = new MemoryStream();
+        ms.Write(before);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            _ = doc.MainDocumentPart!.Document!.Body; // loads the w:em rPr DOM
+            _ = doc.MainDocumentPart.StyleDefinitionsPart?.Styles;
+        }
+
+        var after = ms.ToArray();
+
+        AssertZipPartsIdentical(before, after);
+    }
+
     private static void AssertZipPartsIdentical(byte[] before, byte[] after)
     {
         using var zipBefore = new ZipArchive(new MemoryStream(before), ZipArchiveMode.Read);
