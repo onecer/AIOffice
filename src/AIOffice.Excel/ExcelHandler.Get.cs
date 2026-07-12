@@ -415,6 +415,9 @@ public sealed partial class ExcelHandler
             mergedRanges = sheet.MergedRanges.Select(r => r.RangeAddress.ToString()).ToList(),
             freezeRows = sheet.SheetView.SplitRow > 0 ? sheet.SheetView.SplitRow : (int?)null,
             freezeCols = sheet.SheetView.SplitColumn > 0 ? sheet.SheetView.SplitColumn : (int?)null,
+            // v1.24 (additive): worksheet tab color (sheetPr/tabColor), emitted as
+            // RRGGBB hex ONLY when set; the key is omitted when the tab has no color.
+            tabColor = TabColorHex(sheet.TabColor),
             autoFilter = sheet.AutoFilter.IsEnabled ? sheet.AutoFilter.Range?.RangeAddress.ToString() : null,
             // (1.12, additive) the active per-column filter criteria (values/custom),
             // read raw from the worksheet's <autoFilter> element; null when the filter

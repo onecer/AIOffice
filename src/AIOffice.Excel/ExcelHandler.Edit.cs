@@ -31,6 +31,8 @@ public sealed partial class ExcelHandler
         // v1.17 (additive): edit a table column's totals-row function/label after
         // creation (table path only; relaxes the blanket set-on-table guard).
         "totals",
+        // v1.24 (additive): sheet tab color (sheetPr/tabColor); "" clears it.
+        "tabColor",
     ];
 
     private static readonly IReadOnlyList<string> AddTypes =
@@ -1036,6 +1038,12 @@ public sealed partial class ExcelHandler
         if (props.TryGetPropertyValue("freezeCols", out var freezeColsNode) && freezeColsNode is not null)
         {
             ApplyFreeze(target, op, freezeColsNode, "freezeCols", index, applied);
+        }
+
+        // v1.24 sheet tab color (sheetPr/tabColor), sheet-level only.
+        if (props.TryGetPropertyValue("tabColor", out var tabColorNode) && tabColorNode is not null)
+        {
+            ApplyTabColor(target, op, tabColorNode, index, applied);
         }
 
         if (props.TryGetPropertyValue("autoFilter", out var autoFilterNode) && autoFilterNode is not null)

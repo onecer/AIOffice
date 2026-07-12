@@ -74,6 +74,53 @@ public sealed partial class ExcelHandler
         applied.Add(prop);
     }
 
+    // ----- tab color (v1.24, additive) ------------------------------------------
+
+    /// <summary>
+    /// <c>{tabColor:"4472C4"}</c> paints the worksheet tab (<c>sheetPr/tabColor</c>);
+    /// <c>""</c> clears it (<see cref="XLColor.NoColor"/>). Sheet-level only — a
+    /// cell/range path is invalid_args. The hex is validated through the same guard
+    /// fill/color set ops use, so a bad hex fails atomically with an example.
+    /// </summary>
+    private static void ApplyTabColor(ExcelTarget target, EditOp op, JsonNode node, int index, List<string> applied)
+    {
+        RequireSheetTarget(target, op, "tabColor", index);
+        var text = StringPropValue(node, "tabColor", index).Trim();
+        if (text.Length == 0)
+        {
+            target.Sheet.TabColor = XLColor.NoColor;
+            applied.Add("tabColorCleared");
+            return;
+        }
+
+        var hex = text.StartsWith('#') ? text[1..] : text;
+        target.Sheet.TabColor = ParseColor("#" + hex);
+        applied.Add("tabColor");
+    }
+
+    /// <summary>
+    /// The sheet tab color as an <c>RRGGBB</c> hex for get, or <c>null</c> when the
+    /// tab has no color OR carries a theme/indexed color ClosedXML cannot expand to
+    /// RGB (unresolvable → omitted rather than mis-reported).
+    /// </summary>
+    private static string? TabColorHex(XLColor? color)
+    {
+        if (color is null || !color.HasValue)
+        {
+            return null;
+        }
+
+        try
+        {
+            var c = color.Color; // resolves RGB + indexed; theme colors throw → null
+            return $"{c.R:X2}{c.G:X2}{c.B:X2}";
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     // ----- autofilter ----------------------------------------------------------
 
     private static void ApplyAutoFilter(ExcelTarget target, EditOp op, JsonNode node, int index, List<string> applied)

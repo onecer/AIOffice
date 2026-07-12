@@ -13,9 +13,9 @@ namespace AIOffice.Excel.Tests;
 /// </summary>
 public sealed class SheetPropsTests : ExcelTestBase
 {
-    private string CreateDataWorkbook()
+    private string CreateDataWorkbook(string name = "book.xlsx")
     {
-        var file = CreateWorkbook();
+        var file = CreateWorkbook(name);
         Assert.True(EditOps(
             file,
             SetOp("/Sheet1/A1:D3", ("values", new JsonArray(
@@ -509,5 +509,126 @@ public sealed class SheetPropsTests : ExcelTestBase
         Assert.Equal("A1:D3", data["autoFilter"]!.GetValue<string>());
         Assert.Equal("landscape", data["pageSetup"]!["orientation"]!.GetValue<string>());
         Assert.Equal("Letter", data["pageSetup"]!["paperSize"]!.GetValue<string>());
+    }
+
+    // ----- tab color (v1.24, additive) ------------------------------------------
+
+    [Fact]
+    public void TabColor_writes_sheetPr_tabColor_and_get_echoes_the_hex()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1", ("tabColor", "4472C4")));
+
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        AssertValidatorClean(file);
+
+        using (var document = SpreadsheetDocument.Open(file, isEditable: false))
+        {
+            var tab = RawSheet(document).Elements<S.SheetProperties>().Single().TabColor!;
+            Assert.Equal("FF4472C4", tab.Rgb!.Value);
+        }
+
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))));
+        Assert.Equal("4472C4", data["tabColor"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TabColor_empty_string_clears_it_and_get_omits_the_key()
+    {
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, SetOp("/Sheet1", ("tabColor", "4472C4"))).IsOk);
+
+        Assert.True(EditOps(file, SetOp("/Sheet1", ("tabColor", ""))).IsOk);
+
+        AssertValidatorClean(file);
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))));
+        Assert.Null(data["tabColor"]);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var props = RawSheet(document).Elements<S.SheetProperties>().SingleOrDefault();
+        Assert.True(props?.TabColor is null); // no residual tabColor element
+    }
+
+    [Fact]
+    public void LegacySheetWithoutTabColor_OmitsKey()
+    {
+        // BYTE-STABLE READ: a sheet that never carried a tab color must produce a
+        // SheetInfo with NO 'tabColor' key at all (null-omit, like the freeze read).
+        var file = CreateDataWorkbook();
+
+        var envelope = Handler.Get(Ctx(file, ("path", "/Sheet1")));
+        Assert.True(envelope.IsOk, envelope.ToJson());
+        var data = Json(envelope)["data"]!.AsObject();
+        Assert.False(data.ContainsKey("tabColor"));
+    }
+
+    [Fact]
+    public void Unrelated_edit_without_tabColor_stays_byte_stable()
+    {
+        // BYTE-STABLE WRITE: with no tabColor prop the dispatch branch is skipped
+        // entirely, so an unrelated edit writes no sheetPr tabColor element (shape
+        // proof — a true byte diff is impossible; ClosedXML stamps each save's
+        // timestamps, and there is no pre-v1.24 binary here to compare against).
+        var file = CreateDataWorkbook();
+
+        Assert.True(EditOps(file, SetOp("/Sheet1/F9", ("value", "touched"))).IsOk);
+
+        AssertValidatorClean(file);
+        using var document = SpreadsheetDocument.Open(file, isEditable: false);
+        var props = RawSheet(document).Elements<S.SheetProperties>().SingleOrDefault();
+        Assert.True(props?.TabColor is null);
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1")))).AsObject();
+        Assert.False(data.ContainsKey("tabColor"));
+    }
+
+    [Fact]
+    public void TabColor_invalid_hex_is_invalid_args_with_an_example()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1", ("tabColor", "nope")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+        Assert.Contains("#FFEE00", envelope.Error.Suggestion, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TabColor_on_a_range_path_is_invalid_args()
+    {
+        var file = CreateDataWorkbook();
+
+        var envelope = EditOps(file, SetOp("/Sheet1/A1:B2", ("tabColor", "4472C4")));
+
+        Assert.False(envelope.IsOk);
+        Assert.Equal(ErrorCodes.InvalidArgs, envelope.Error!.Code);
+    }
+
+    [Fact]
+    public void ForeignThemeTabColor_resolves_to_rgb_or_null_and_stays_valid()
+    {
+        // A tab color authored elsewhere as a theme/indexed color: get must resolve
+        // it to an RRGGBB hex, or omit the key when ClosedXML cannot expand it, and
+        // never corrupt the file.
+        // Let a valid sheetPr/tabColor be authored by the handler, then rewrite its
+        // color raw to a theme reference (as a foreign producer might) — this keeps
+        // the element correctly placed and schema-valid.
+        var file = CreateDataWorkbook();
+        Assert.True(EditOps(file, SetOp("/Sheet1", ("tabColor", "4472C4"))).IsOk);
+        using (var document = SpreadsheetDocument.Open(file, isEditable: true))
+        {
+            var rawTab = RawSheet(document).Elements<S.SheetProperties>().Single().TabColor!;
+            rawTab.Rgb = null;
+            rawTab.Theme = 4U;
+            RawSheet(document).Save();
+        }
+
+        AssertValidatorClean(file);
+        var data = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1")))).AsObject();
+        if (data.TryGetPropertyValue("tabColor", out var tab) && tab is not null)
+        {
+            var hex = tab.GetValue<string>();
+            Assert.Matches("^[0-9A-F]{6}$", hex);
+        }
     }
 }
