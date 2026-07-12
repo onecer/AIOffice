@@ -236,6 +236,9 @@ internal static class PptxEffects
     /// <summary>Default bevel width/height when only a preset is given (PowerPoint's 6pt).</summary>
     private const long DefaultBevelSize = 76_200L; // 6pt
 
+    /// <summary>Default contour width when a color-only contour is given (PowerPoint's 1pt) — so it never renders invisibly.</summary>
+    private const long DefaultContourWidth = 12_700L; // 1pt
+
     /// <summary>
     /// Sets (or clears, on false/"") a shape bevel — the first 3-D property, a:sp3d/a:bevelT, which
     /// lives OUTSIDE a:effectLst. A bare preset string (e.g. "circle") writes the preset at the 6pt
@@ -258,12 +261,20 @@ internal static class PptxEffects
         InsertShape3D(view, sp3d);
     }
 
-    /// <summary>The keys the bevel object form accepts.</summary>
-    private static readonly IReadOnlyList<string> BevelKeys = ["preset", "width", "height", "depth", "depthColor"];
+    /// <summary>
+    /// The keys the bevel object form accepts. The five v1.25 keys come FIRST (stable error-candidate order);
+    /// the four v1.26 keys — bevelBottom (a:bevelB), contour (a:contourClr + @contourW), material (@prstMaterial)
+    /// and z (@z) — extend the SAME single a:sp3d the bevel has always owned.
+    /// </summary>
+    private static readonly IReadOnlyList<string> BevelKeys =
+        ["preset", "width", "height", "depth", "depthColor", "bevelBottom", "contour", "material", "z"];
 
     /// <summary>
-    /// Builds an a:sp3d from the {preset?, width?, height?, depth?, depthColor?} object form. Child
-    /// order honors the schema: a:bevelT precedes a:extrusionClr; @extrusionH is an attribute of a:sp3d.
+    /// Builds an a:sp3d from the {preset?, width?, height?, depth?, depthColor?, bevelBottom?, contour?,
+    /// material?, z?} object form. Child APPEND order honors the schema: a:bevelT (ctor), then a:bevelB,
+    /// then a:extrusionClr, then a:contourClr; @z/@extrusionH/@contourW/@prstMaterial are attributes of a:sp3d
+    /// (the SDK serializes them in schema order regardless of assignment order). For any v1.25 input this
+    /// reduces to [a:bevelT, (a:extrusionClr)] with only @extrusionH — bit-identical to what v1.25 wrote.
     /// </summary>
     private static A.Shape3DType BuildBevel(JsonObject obj)
     {
@@ -274,7 +285,7 @@ internal static class PptxEffects
                 throw new AiofficeException(
                     ErrorCodes.InvalidArgs,
                     $"Unknown bevel prop '{key}'.",
-                    "bevel object props: preset, width, height, depth, depthColor.",
+                    "bevel object props: preset, width, height, depth, depthColor, bevelBottom, contour, material, z.",
                     candidates: BevelKeys);
             }
         }
@@ -293,18 +304,202 @@ internal static class PptxEffects
         };
 
         var sp3d = new A.Shape3DType(bevelTop);
+
+        // @z — a length; ST_Coordinate is signed but a bevel depth-below-surface is nonsensical, so reject negatives.
+        if (obj.TryGetPropertyValue("z", out var zNode))
+        {
+            var z = Units.ParseLengthEmu("z", zNode);
+            if (z < 0)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"The bevel 'z' must be non-negative: {zNode?.ToJsonString() ?? "null"}.",
+                    "Pass z as a non-negative length, e.g. 0, \"6pt\", \"2mm\".");
+            }
+
+            sp3d.Z = z;
+        }
+
         if (obj.TryGetPropertyValue("depth", out var depthNode))
         {
             sp3d.ExtrusionHeight = Units.ParseLengthEmu("depth", depthNode);
         }
 
-        // a:extrusionClr follows a:bevelT in the a:sp3d child order.
+        if (obj.TryGetPropertyValue("material", out var materialNode))
+        {
+            sp3d.PresetMaterial = ParseMaterial(materialNode);
+        }
+
+        // contour contributes both @contourW (attr) and a:contourClr (child, appended below in schema order).
+        A.ContourColor? contourColor = null;
+        if (obj.TryGetPropertyValue("contour", out var contourNode))
+        {
+            var (contourHex, contourWidth) = ParseContour(contourNode);
+            sp3d.ContourWidth = contourWidth;
+            contourColor = new A.ContourColor(new A.RgbColorModelHex { Val = contourHex });
+        }
+
+        // Child order: a:bevelT (ctor) -> a:bevelB -> a:extrusionClr -> a:contourClr.
+        if (obj.TryGetPropertyValue("bevelBottom", out var bevelBottomNode))
+        {
+            sp3d.Append(BuildBevelBottom(bevelBottomNode));
+        }
+
         if (obj.TryGetPropertyValue("depthColor", out var depthColorNode))
         {
             sp3d.Append(new A.ExtrusionColor(new A.RgbColorModelHex { Val = Units.ParseColorHex("depthColor", depthColorNode) }));
         }
 
+        if (contourColor is not null)
+        {
+            sp3d.Append(contourColor);
+        }
+
         return sp3d;
+    }
+
+    /// <summary>The keys the bevelBottom object form accepts (mirrors the bevelT preset/size shape).</summary>
+    private static readonly IReadOnlyList<string> BevelBottomKeys = ["preset", "width", "height"];
+
+    /// <summary>
+    /// Builds an a:bevelB from a bare preset string (preset at the 6pt default) or a {preset?, width?, height?}
+    /// object. The 12 presets are the same set as bevelT.
+    /// </summary>
+    private static A.BevelBottom BuildBevelBottom(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var (key, _) in obj)
+            {
+                if (!BevelBottomKeys.Contains(key, StringComparer.Ordinal))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown bevelBottom prop '{key}'.",
+                        "bevelBottom object props: preset, width, height.",
+                        candidates: BevelBottomKeys);
+                }
+            }
+
+            return new A.BevelBottom
+            {
+                Preset = obj.TryGetPropertyValue("preset", out var presetNode)
+                    ? ParseBevelPreset(presetNode)
+                    : A.BevelPresetValues.Circle,
+                Width = obj.TryGetPropertyValue("width", out var widthNode)
+                    ? Units.ParseLengthEmu("width", widthNode)
+                    : DefaultBevelSize,
+                Height = obj.TryGetPropertyValue("height", out var heightNode)
+                    ? Units.ParseLengthEmu("height", heightNode)
+                    : DefaultBevelSize,
+            };
+        }
+
+        return new A.BevelBottom { Preset = ParseBevelPreset(node), Width = DefaultBevelSize, Height = DefaultBevelSize };
+    }
+
+    /// <summary>The keys the contour object form accepts.</summary>
+    private static readonly IReadOnlyList<string> ContourKeys = ["color", "width"];
+
+    /// <summary>
+    /// Parses the contour {color, width?} object into (hex, widthEmu). color is REQUIRED; width defaults to
+    /// 1pt so a color-only contour never renders invisibly (the @contourW=0 trap). srgbClr only (no theme).
+    /// </summary>
+    private static (string Hex, long Width) ParseContour(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"The bevel 'contour' must be an object with a color: {node?.ToJsonString() ?? "null"}.",
+                "Pass contour as {\"color\":\"C00000\"} or {\"color\":\"C00000\",\"width\":\"2pt\"}.",
+                candidates: ContourKeys);
+        }
+
+        foreach (var (key, _) in obj)
+        {
+            if (!ContourKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown contour prop '{key}'.",
+                    "contour object props: color, width.",
+                    candidates: ContourKeys);
+            }
+        }
+
+        if (!obj.TryGetPropertyValue("color", out var colorNode) || colorNode is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                "The bevel 'contour' requires a color.",
+                "Pass contour as {\"color\":\"C00000\"} (width defaults to 1pt).",
+                candidates: ContourKeys);
+        }
+
+        var hex = Units.ParseColorHex("color", colorNode);
+        var width = obj.TryGetPropertyValue("width", out var widthNode)
+            ? Units.ParseLengthEmu("width", widthNode)
+            : DefaultContourWidth;
+        return (hex, width);
+    }
+
+    /// <summary>The 11 preset-material tokens the bevel 'material' accepts (a:sp3d @prstMaterial), in candidate order.</summary>
+    private static readonly IReadOnlyList<string> MaterialTokens =
+        ["matte", "warmMatte", "metal", "plastic", "powder", "translucentPowder",
+         "clear", "flat", "dkEdge", "softEdge", "softmetal"];
+
+    /// <summary>
+    /// Maps a material token to a:sp3d @prstMaterial. Accepts the 11 modern materials; rejects the 4 legacy
+    /// ones (legacyMatte/legacyPlastic/legacyMetal/legacyWireframe) with invalid_args + the 11 candidates.
+    /// </summary>
+    private static A.PresetMaterialTypeValues ParseMaterial(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "matte" => A.PresetMaterialTypeValues.Matte,
+            "warmMatte" => A.PresetMaterialTypeValues.WarmMatte,
+            "metal" => A.PresetMaterialTypeValues.Metal,
+            "plastic" => A.PresetMaterialTypeValues.Plastic,
+            "powder" => A.PresetMaterialTypeValues.Powder,
+            "translucentPowder" => A.PresetMaterialTypeValues.TranslucentPowder,
+            "clear" => A.PresetMaterialTypeValues.Clear,
+            "flat" => A.PresetMaterialTypeValues.Flat,
+            "dkEdge" => A.PresetMaterialTypeValues.DarkEdge,
+            "softEdge" => A.PresetMaterialTypeValues.SoftEdge,
+            "softmetal" => A.PresetMaterialTypeValues.SoftMetal,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid bevel material: {node?.ToJsonString() ?? "null"}",
+                "bevel materials: matte, warmMatte, metal, plastic, powder, translucentPowder, clear, flat, dkEdge, softEdge, softmetal.",
+                candidates: MaterialTokens),
+        };
+    }
+
+    /// <summary>Maps an a:sp3d @prstMaterial back to its material token; null when absent or a legacy material.</summary>
+    private static string? MaterialToken(A.PresetMaterialTypeValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.PresetMaterialTypeValues.Matte => "matte",
+            _ when val.Value == A.PresetMaterialTypeValues.WarmMatte => "warmMatte",
+            _ when val.Value == A.PresetMaterialTypeValues.Metal => "metal",
+            _ when val.Value == A.PresetMaterialTypeValues.Plastic => "plastic",
+            _ when val.Value == A.PresetMaterialTypeValues.Powder => "powder",
+            _ when val.Value == A.PresetMaterialTypeValues.TranslucentPowder => "translucentPowder",
+            _ when val.Value == A.PresetMaterialTypeValues.Clear => "clear",
+            _ when val.Value == A.PresetMaterialTypeValues.Flat => "flat",
+            _ when val.Value == A.PresetMaterialTypeValues.DarkEdge => "dkEdge",
+            _ when val.Value == A.PresetMaterialTypeValues.SoftEdge => "softEdge",
+            _ when val.Value == A.PresetMaterialTypeValues.SoftMetal => "softmetal",
+            _ => null,
+        };
     }
 
     /// <summary>Inserts (replacing any existing) a:sp3d into spPr: after a:ln/a:effectLst/a:scene3d, before a:extLst.</summary>
@@ -352,6 +547,463 @@ internal static class PptxEffects
                 $"Not a valid bevel preset: {node?.ToJsonString() ?? "null"}",
                 "bevel presets: relaxedInset, circle, slope, cross, angle, softRound, convex, coolSlant, divot, riblet, hardEdge, artDeco.",
                 candidates: BevelPresets),
+        };
+    }
+
+    // ---- scene3d ------------------------------------------------------------
+
+    /// <summary>
+    /// Sets (or clears, on false/"") a shape scene (a:scene3d) — the camera + optional light rig that frame the
+    /// 3-D shape, living OUTSIDE a:effectLst and BEFORE a:sp3d in spPr. A bare camera preset string
+    /// (e.g. "perspectiveFront") writes a camera-only scene; a {camera, lightRig?} object adds a light rig and/or
+    /// rotations. scene3d and bevel are orthogonal — setting one never synthesizes the other.
+    /// </summary>
+    public static void SetScene3D(ShapeView view, JsonNode? value)
+    {
+        if (IsFalse(value) || IsEmptyString(value))
+        {
+            RequireShapeProperties(view).GetFirstChild<A.Scene3DType>()?.Remove();
+            return;
+        }
+
+        InsertScene3D(view, BuildScene3D(value));
+    }
+
+    /// <summary>The keys the scene3d object form accepts.</summary>
+    private static readonly IReadOnlyList<string> Scene3DKeys = ["camera", "lightRig"];
+
+    /// <summary>
+    /// Builds an a:scene3d from a bare camera preset string or a {camera, lightRig?} object. a:scene3d REQUIRES
+    /// a camera; the light rig is optional in the input but REQUIRED by the schema, so when the caller omits it
+    /// we synthesize the default rig (three-point, lit from the top) — which the read side collapses back so a
+    /// camera-only input round-trips to the bare camera string. Child order: a:camera then a:lightRig.
+    /// </summary>
+    private static A.Scene3DType BuildScene3D(JsonNode? value)
+    {
+        A.Camera camera;
+        A.LightRig? lightRig = null;
+
+        if (value is JsonObject obj)
+        {
+            foreach (var (key, _) in obj)
+            {
+                if (!Scene3DKeys.Contains(key, StringComparer.Ordinal))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown scene3d prop '{key}'.",
+                        "scene3d object props: camera, lightRig.",
+                        candidates: Scene3DKeys);
+                }
+            }
+
+            if (!obj.TryGetPropertyValue("camera", out var cameraNode) || cameraNode is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "A scene3d requires a camera.",
+                    "Pass scene3d as a camera preset string, or {\"camera\":\"perspectiveFront\", \"lightRig\":\"threePt\"}.",
+                    candidates: Scene3DKeys);
+            }
+
+            camera = BuildCamera(cameraNode);
+            if (obj.TryGetPropertyValue("lightRig", out var lightRigNode))
+            {
+                lightRig = BuildLightRig(lightRigNode);
+            }
+        }
+        else
+        {
+            camera = BuildCamera(value);
+        }
+
+        return new A.Scene3DType(camera, lightRig ?? DefaultLightRig());
+    }
+
+    /// <summary>
+    /// The schema-required default light rig for a camera-only scene: three-point lighting from the top. The
+    /// read side treats this exact rig (three-point, Top, no rotation) as "no explicit light rig".
+    /// </summary>
+    private static A.LightRig DefaultLightRig() =>
+        new() { Rig = A.LightRigValues.ThreePoints, Direction = A.LightRigDirectionValues.Top };
+
+    /// <summary>True when a rig is the synthesized default (three-point, Top, no rotation) — read collapses it.</summary>
+    private static bool IsDefaultLightRig(A.LightRig rig) =>
+        rig.Rig?.Value == A.LightRigValues.ThreePoints &&
+        rig.Direction?.Value == A.LightRigDirectionValues.Top &&
+        rig.GetFirstChild<A.Rotation>() is null;
+
+    /// <summary>The keys the camera object form accepts.</summary>
+    private static readonly IReadOnlyList<string> CameraKeys = ["preset", "rotation"];
+
+    /// <summary>Builds an a:camera from a bare preset string or a {preset, rotation?} object.</summary>
+    private static A.Camera BuildCamera(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var (key, _) in obj)
+            {
+                if (!CameraKeys.Contains(key, StringComparer.Ordinal))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown camera prop '{key}'.",
+                        "camera object props: preset, rotation.",
+                        candidates: CameraKeys);
+                }
+            }
+
+            if (!obj.TryGetPropertyValue("preset", out var presetNode) || presetNode is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "A scene3d camera requires a preset.",
+                    "Pass camera as a preset string, or {\"preset\":\"perspectiveFront\", \"rotation\":{\"lat\":20,\"lon\":30}}.",
+                    candidates: CameraKeys);
+            }
+
+            var camera = new A.Camera { Preset = ParseCameraPreset(presetNode) };
+            if (obj.TryGetPropertyValue("rotation", out var rotationNode))
+            {
+                camera.Append(BuildRotation(rotationNode));
+            }
+
+            return camera;
+        }
+
+        return new A.Camera { Preset = ParseCameraPreset(node) };
+    }
+
+    /// <summary>The keys the lightRig object form accepts.</summary>
+    private static readonly IReadOnlyList<string> LightRigKeys = ["rig", "dir", "rotation"];
+
+    /// <summary>
+    /// Builds an a:lightRig from a bare rig string (dir synthesized as 't'=Top) or a {rig, dir?, rotation?}
+    /// object. a:lightRig requires both @rig and @dir.
+    /// </summary>
+    private static A.LightRig BuildLightRig(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var (key, _) in obj)
+            {
+                if (!LightRigKeys.Contains(key, StringComparer.Ordinal))
+                {
+                    throw new AiofficeException(
+                        ErrorCodes.InvalidArgs,
+                        $"Unknown lightRig prop '{key}'.",
+                        "lightRig object props: rig, dir, rotation.",
+                        candidates: LightRigKeys);
+                }
+            }
+
+            if (!obj.TryGetPropertyValue("rig", out var rigNode) || rigNode is null)
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    "A scene3d lightRig requires a rig.",
+                    "Pass lightRig as a rig string, or {\"rig\":\"threePt\", \"dir\":\"tl\"}.",
+                    candidates: LightRigKeys);
+            }
+
+            var lightRig = new A.LightRig
+            {
+                Rig = ParseLightRig(rigNode),
+                Direction = obj.TryGetPropertyValue("dir", out var dirNode)
+                    ? ParseLightDirection(dirNode)
+                    : A.LightRigDirectionValues.Top,
+            };
+            if (obj.TryGetPropertyValue("rotation", out var rotationNode))
+            {
+                lightRig.Append(BuildRotation(rotationNode));
+            }
+
+            return lightRig;
+        }
+
+        return new A.LightRig { Rig = ParseLightRig(node), Direction = A.LightRigDirectionValues.Top };
+    }
+
+    /// <summary>The keys the rotation object form accepts.</summary>
+    private static readonly IReadOnlyList<string> RotationKeys = ["lat", "lon", "rev"];
+
+    /// <summary>
+    /// Builds an a:rot from {lat?, lon?, rev?} degrees. All three attributes are required by the schema; an
+    /// omitted axis is 0. Angles are normalized into [0,360) and written as 60000ths of a degree (like PptxFill).
+    /// </summary>
+    private static A.Rotation BuildRotation(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"A scene3d 'rotation' must be an object: {node?.ToJsonString() ?? "null"}.",
+                "Pass rotation as {\"lat\":20, \"lon\":30, \"rev\":0} (degrees; any axis may be omitted).",
+                candidates: RotationKeys);
+        }
+
+        foreach (var (key, _) in obj)
+        {
+            if (!RotationKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown rotation prop '{key}'.",
+                    "rotation object props: lat, lon, rev.",
+                    candidates: RotationKeys);
+            }
+        }
+
+        return new A.Rotation
+        {
+            Latitude = RotationAxis(obj, "lat"),
+            Longitude = RotationAxis(obj, "lon"),
+            Revolution = RotationAxis(obj, "rev"),
+        };
+    }
+
+    /// <summary>Reads one rotation axis (degrees) as 60000ths, normalized into [0,360); an absent axis is 0.</summary>
+    private static int RotationAxis(JsonObject obj, string key)
+    {
+        if (!obj.TryGetPropertyValue(key, out var node) || node is null)
+        {
+            return 0;
+        }
+
+        if (node is not JsonValue value || !Units.TryNumber(value, out var degrees))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"The rotation '{key}' is not a number: {node.ToJsonString()}.",
+                "Pass the axis in degrees, e.g. 20, 45, 315.");
+        }
+
+        var normalized = ((degrees % 360) + 360) % 360;
+        return (int)Math.Round(normalized * DirUnitsPerDegree);
+    }
+
+    /// <summary>Inserts (replacing any existing) a:scene3d into spPr: after a:ln/a:effectLst, before a:sp3d/a:extLst.</summary>
+    private static void InsertScene3D(ShapeView view, A.Scene3DType scene)
+    {
+        var properties = RequireShapeProperties(view);
+        properties.GetFirstChild<A.Scene3DType>()?.Remove(); // idempotent replace
+
+        var anchor = (OpenXmlElement?)properties.GetFirstChild<A.Shape3DType>()
+            ?? properties.GetFirstChild<A.ExtensionList>();
+        if (anchor is not null)
+        {
+            properties.InsertBefore(scene, anchor);
+        }
+        else
+        {
+            properties.Append(scene);
+        }
+    }
+
+    /// <summary>The 44 camera presets accepted (a:camera @prst), in error-candidate order.</summary>
+    private static readonly IReadOnlyList<string> CameraPresets =
+        ["orthographicFront",
+         "isometricTopUp", "isometricTopDown", "isometricBottomUp", "isometricBottomDown",
+         "isometricLeftUp", "isometricLeftDown", "isometricRightUp", "isometricRightDown",
+         "isometricOffAxis1Left", "isometricOffAxis1Right", "isometricOffAxis1Top",
+         "isometricOffAxis2Left", "isometricOffAxis2Right", "isometricOffAxis2Top",
+         "isometricOffAxis3Left", "isometricOffAxis3Right", "isometricOffAxis3Bottom",
+         "isometricOffAxis4Left", "isometricOffAxis4Right", "isometricOffAxis4Bottom",
+         "obliqueTopLeft", "obliqueTop", "obliqueTopRight", "obliqueLeft", "obliqueRight",
+         "obliqueBottomLeft", "obliqueBottom", "obliqueBottomRight",
+         "perspectiveFront", "perspectiveLeft", "perspectiveRight", "perspectiveAbove", "perspectiveBelow",
+         "perspectiveAboveLeftFacing", "perspectiveAboveRightFacing",
+         "perspectiveContrastingLeftFacing", "perspectiveContrastingRightFacing",
+         "perspectiveHeroicLeftFacing", "perspectiveHeroicRightFacing",
+         "perspectiveHeroicExtremeLeftFacing", "perspectiveHeroicExtremeRightFacing",
+         "perspectiveRelaxed", "perspectiveRelaxedModerately"];
+
+    /// <summary>Maps a camera-preset token to a:camera @prst; rejects the 18 legacy presets with candidates.</summary>
+    private static A.PresetCameraValues ParseCameraPreset(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "orthographicFront" => A.PresetCameraValues.OrthographicFront,
+            "isometricTopUp" => A.PresetCameraValues.IsometricTopUp,
+            "isometricTopDown" => A.PresetCameraValues.IsometricTopDown,
+            "isometricBottomUp" => A.PresetCameraValues.IsometricBottomUp,
+            "isometricBottomDown" => A.PresetCameraValues.IsometricBottomDown,
+            "isometricLeftUp" => A.PresetCameraValues.IsometricLeftUp,
+            "isometricLeftDown" => A.PresetCameraValues.IsometricLeftDown,
+            "isometricRightUp" => A.PresetCameraValues.IsometricRightUp,
+            "isometricRightDown" => A.PresetCameraValues.IsometricRightDown,
+            "isometricOffAxis1Left" => A.PresetCameraValues.IsometricOffAxis1Left,
+            "isometricOffAxis1Right" => A.PresetCameraValues.IsometricOffAxis1Right,
+            "isometricOffAxis1Top" => A.PresetCameraValues.IsometricOffAxis1Top,
+            "isometricOffAxis2Left" => A.PresetCameraValues.IsometricOffAxis2Left,
+            "isometricOffAxis2Right" => A.PresetCameraValues.IsometricOffAxis2Right,
+            "isometricOffAxis2Top" => A.PresetCameraValues.IsometricOffAxis2Top,
+            "isometricOffAxis3Left" => A.PresetCameraValues.IsometricOffAxis3Left,
+            "isometricOffAxis3Right" => A.PresetCameraValues.IsometricOffAxis3Right,
+            "isometricOffAxis3Bottom" => A.PresetCameraValues.IsometricOffAxis3Bottom,
+            "isometricOffAxis4Left" => A.PresetCameraValues.IsometricOffAxis4Left,
+            "isometricOffAxis4Right" => A.PresetCameraValues.IsometricOffAxis4Right,
+            "isometricOffAxis4Bottom" => A.PresetCameraValues.IsometricOffAxis4Bottom,
+            "obliqueTopLeft" => A.PresetCameraValues.ObliqueTopLeft,
+            "obliqueTop" => A.PresetCameraValues.ObliqueTop,
+            "obliqueTopRight" => A.PresetCameraValues.ObliqueTopRight,
+            "obliqueLeft" => A.PresetCameraValues.ObliqueLeft,
+            "obliqueRight" => A.PresetCameraValues.ObliqueRight,
+            "obliqueBottomLeft" => A.PresetCameraValues.ObliqueBottomLeft,
+            "obliqueBottom" => A.PresetCameraValues.ObliqueBottom,
+            "obliqueBottomRight" => A.PresetCameraValues.ObliqueBottomRight,
+            "perspectiveFront" => A.PresetCameraValues.PerspectiveFront,
+            "perspectiveLeft" => A.PresetCameraValues.PerspectiveLeft,
+            "perspectiveRight" => A.PresetCameraValues.PerspectiveRight,
+            "perspectiveAbove" => A.PresetCameraValues.PerspectiveAbove,
+            "perspectiveBelow" => A.PresetCameraValues.PerspectiveBelow,
+            "perspectiveAboveLeftFacing" => A.PresetCameraValues.PerspectiveAboveLeftFacing,
+            "perspectiveAboveRightFacing" => A.PresetCameraValues.PerspectiveAboveRightFacing,
+            "perspectiveContrastingLeftFacing" => A.PresetCameraValues.PerspectiveContrastingLeftFacing,
+            "perspectiveContrastingRightFacing" => A.PresetCameraValues.PerspectiveContrastingRightFacing,
+            "perspectiveHeroicLeftFacing" => A.PresetCameraValues.PerspectiveHeroicLeftFacing,
+            "perspectiveHeroicRightFacing" => A.PresetCameraValues.PerspectiveHeroicRightFacing,
+            "perspectiveHeroicExtremeLeftFacing" => A.PresetCameraValues.PerspectiveHeroicExtremeLeftFacing,
+            "perspectiveHeroicExtremeRightFacing" => A.PresetCameraValues.PerspectiveHeroicExtremeRightFacing,
+            "perspectiveRelaxed" => A.PresetCameraValues.PerspectiveRelaxed,
+            "perspectiveRelaxedModerately" => A.PresetCameraValues.PerspectiveRelaxedModerately,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid scene3d camera preset: {node?.ToJsonString() ?? "null"}",
+                "camera presets include orthographicFront, isometric*, isometricOffAxis*, oblique*, perspective* (44 total); legacy presets are not accepted.",
+                candidates: CameraPresets),
+        };
+    }
+
+    /// <summary>Maps an a:camera @prst back to its token; null when absent or a legacy preset.</summary>
+    private static string? CameraPresetToken(A.PresetCameraValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        // Reuse the forward map (the *Values structs have no member-name ToString) to stay single-sourced.
+        foreach (var token in CameraPresets)
+        {
+            if (ParseCameraPreset(JsonValue.Create(token)) == val.Value)
+            {
+                return token;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The 15 light-rig tokens accepted (a:lightRig @rig), in error-candidate order.</summary>
+    private static readonly IReadOnlyList<string> LightRigTokens =
+        ["threePt", "twoPt", "balanced", "soft", "harsh", "flood", "contrasting", "morning",
+         "sunrise", "sunset", "chilly", "freezing", "flat", "glow", "brightRoom"];
+
+    /// <summary>Maps a light-rig token to a:lightRig @rig; rejects the 12 legacy rigs with candidates.</summary>
+    private static A.LightRigValues ParseLightRig(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "threePt" => A.LightRigValues.ThreePoints,
+            "twoPt" => A.LightRigValues.TwoPoints,
+            "balanced" => A.LightRigValues.Balanced,
+            "soft" => A.LightRigValues.Soft,
+            "harsh" => A.LightRigValues.Harsh,
+            "flood" => A.LightRigValues.Flood,
+            "contrasting" => A.LightRigValues.Contrasting,
+            "morning" => A.LightRigValues.Morning,
+            "sunrise" => A.LightRigValues.Sunrise,
+            "sunset" => A.LightRigValues.Sunset,
+            "chilly" => A.LightRigValues.Chilly,
+            "freezing" => A.LightRigValues.Freezing,
+            "flat" => A.LightRigValues.Flat,
+            "glow" => A.LightRigValues.Glow,
+            "brightRoom" => A.LightRigValues.BrightRoom,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid scene3d light rig: {node?.ToJsonString() ?? "null"}",
+                "light rigs: threePt, twoPt, balanced, soft, harsh, flood, contrasting, morning, sunrise, sunset, chilly, freezing, flat, glow, brightRoom.",
+                candidates: LightRigTokens),
+        };
+    }
+
+    /// <summary>Maps an a:lightRig @rig back to its token; null when absent or a legacy rig.</summary>
+    private static string? LightRigToken(A.LightRigValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.LightRigValues.ThreePoints => "threePt",
+            _ when val.Value == A.LightRigValues.TwoPoints => "twoPt",
+            _ when val.Value == A.LightRigValues.Balanced => "balanced",
+            _ when val.Value == A.LightRigValues.Soft => "soft",
+            _ when val.Value == A.LightRigValues.Harsh => "harsh",
+            _ when val.Value == A.LightRigValues.Flood => "flood",
+            _ when val.Value == A.LightRigValues.Contrasting => "contrasting",
+            _ when val.Value == A.LightRigValues.Morning => "morning",
+            _ when val.Value == A.LightRigValues.Sunrise => "sunrise",
+            _ when val.Value == A.LightRigValues.Sunset => "sunset",
+            _ when val.Value == A.LightRigValues.Chilly => "chilly",
+            _ when val.Value == A.LightRigValues.Freezing => "freezing",
+            _ when val.Value == A.LightRigValues.Flat => "flat",
+            _ when val.Value == A.LightRigValues.Glow => "glow",
+            _ when val.Value == A.LightRigValues.BrightRoom => "brightRoom",
+            _ => null,
+        };
+    }
+
+    /// <summary>The 8 light-direction tokens accepted (a:lightRig @dir), in error-candidate order.</summary>
+    private static readonly IReadOnlyList<string> LightDirectionTokens =
+        ["tl", "t", "tr", "l", "r", "bl", "b", "br"];
+
+    /// <summary>Maps a light-direction token to a:lightRig @dir; throws invalid_args with candidates otherwise.</summary>
+    private static A.LightRigDirectionValues ParseLightDirection(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "tl" => A.LightRigDirectionValues.TopLeft,
+            "t" => A.LightRigDirectionValues.Top,
+            "tr" => A.LightRigDirectionValues.TopRight,
+            "l" => A.LightRigDirectionValues.Left,
+            "r" => A.LightRigDirectionValues.Right,
+            "bl" => A.LightRigDirectionValues.BottomLeft,
+            "b" => A.LightRigDirectionValues.Bottom,
+            "br" => A.LightRigDirectionValues.BottomRight,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid light direction: {node?.ToJsonString() ?? "null"}",
+                "light directions: tl, t, tr, l, r, bl, b, br.",
+                candidates: LightDirectionTokens),
+        };
+    }
+
+    /// <summary>Maps an a:lightRig @dir back to its token; null when absent or unrecognized.</summary>
+    private static string? LightDirectionToken(A.LightRigDirectionValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.LightRigDirectionValues.TopLeft => "tl",
+            _ when val.Value == A.LightRigDirectionValues.Top => "t",
+            _ when val.Value == A.LightRigDirectionValues.TopRight => "tr",
+            _ when val.Value == A.LightRigDirectionValues.Left => "l",
+            _ when val.Value == A.LightRigDirectionValues.Right => "r",
+            _ when val.Value == A.LightRigDirectionValues.BottomLeft => "bl",
+            _ when val.Value == A.LightRigDirectionValues.Bottom => "b",
+            _ when val.Value == A.LightRigDirectionValues.BottomRight => "br",
+            _ => null,
         };
     }
 
@@ -512,8 +1164,10 @@ internal static class PptxEffects
             : null;
         var innerShadow = ReadInnerShadow(effectList?.GetFirstChild<A.InnerShadow>());
         var bevel = ReadBevel(properties.GetFirstChild<A.Shape3DType>());
+        var scene3d = ReadScene3D(properties.GetFirstChild<A.Scene3DType>());
 
-        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null && innerShadow is null && bevel is null)
+        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null
+            && innerShadow is null && bevel is null && scene3d is null)
         {
             return null;
         }
@@ -527,6 +1181,7 @@ internal static class PptxEffects
             SoftEdge = softEdge,
             InnerShadow = innerShadow,
             Bevel = bevel,
+            Scene3d = scene3d,
         };
     }
 
@@ -584,11 +1239,17 @@ internal static class PptxEffects
         var height = bevelTop.Height?.Value;
         var depth = sp3d!.ExtrusionHeight?.Value;
         var depthColor = sp3d.GetFirstChild<A.ExtrusionColor>()?.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant();
+        var bevelBottom = ReadBevelSide(sp3d.GetFirstChild<A.BevelBottom>());
+        var contour = ReadContour(sp3d);
+        var material = MaterialToken(sp3d.PresetMaterial?.Value);
+        var z = sp3d.Z?.Value;
 
-        // A plain preset at the 6pt default (no depth, no color) projects as the bare preset string.
+        // A plain preset at the 6pt default (no depth/color and none of the v1.26 fields) projects as the
+        // bare preset string — so a v1.25 bevel reads back byte-identically and gains no new keys.
         if ((width is null || width == DefaultBevelSize) &&
             (height is null || height == DefaultBevelSize) &&
-            depth is null && depthColor is null)
+            depth is null && depthColor is null &&
+            bevelBottom is null && contour is null && material is null && z is null)
         {
             return preset;
         }
@@ -600,6 +1261,59 @@ internal static class PptxEffects
             Height = height is null ? null : Units.Inv($"{height.Value / EmuPerPoint:0.###}pt"),
             Depth = depth is null ? null : Units.Inv($"{depth.Value / EmuPerPoint:0.###}pt"),
             DepthColor = depthColor,
+            BevelBottom = bevelBottom,
+            Contour = contour,
+            Material = material,
+            Z = z is null ? null : Units.Inv($"{z.Value / EmuPerPoint:0.###}pt"),
+        };
+    }
+
+    /// <summary>
+    /// Projects an a:bevelB as a bare preset STRING when it is a plain preset at the 6pt default, or as
+    /// {preset, width?, height?} when a non-default width/height is present; null when there is no a:bevelB.
+    /// </summary>
+    private static object? ReadBevelSide(A.BevelBottom? bevel)
+    {
+        if (bevel is null)
+        {
+            return null;
+        }
+
+        var preset = BevelPresetToken(bevel.Preset?.Value) ?? "circle";
+        var width = bevel.Width?.Value;
+        var height = bevel.Height?.Value;
+
+        if ((width is null || width == DefaultBevelSize) && (height is null || height == DefaultBevelSize))
+        {
+            return preset;
+        }
+
+        return new
+        {
+            Preset = preset,
+            Width = width is null ? null : Units.Inv($"{width.Value / EmuPerPoint:0.###}pt"),
+            Height = height is null ? null : Units.Inv($"{height.Value / EmuPerPoint:0.###}pt"),
+        };
+    }
+
+    /// <summary>
+    /// Projects the contour as {color, width?} when a:contourClr is present; width is omitted when it is the
+    /// 1pt default (so a color-only contour round-trips to {color}). Null when there is no a:contourClr.
+    /// </summary>
+    private static object? ReadContour(A.Shape3DType sp3d)
+    {
+        var contourColor = sp3d.GetFirstChild<A.ContourColor>();
+        if (contourColor is null)
+        {
+            return null;
+        }
+
+        var color = contourColor.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant();
+        var width = sp3d.ContourWidth?.Value;
+        return new
+        {
+            Color = color,
+            Width = (width is null || width == DefaultContourWidth) ? null : Units.Inv($"{width.Value / EmuPerPoint:0.###}pt"),
         };
     }
 
@@ -628,6 +1342,84 @@ internal static class PptxEffects
             _ => null,
         };
     }
+
+    /// <summary>
+    /// Projects an a:scene3d as a bare camera preset STRING when there is no light rig and no camera rotation,
+    /// or as {camera, lightRig?} otherwise; null when there is no a:scene3d (or it has no a:camera).
+    /// </summary>
+    private static object? ReadScene3D(A.Scene3DType? scene)
+    {
+        var camera = scene?.GetFirstChild<A.Camera>();
+        if (camera is null)
+        {
+            return null;
+        }
+
+        var cameraPreset = CameraPresetToken(camera.Preset?.Value);
+        var cameraRotation = ReadRotation(camera.GetFirstChild<A.Rotation>());
+        var lightRigElement = scene!.GetFirstChild<A.LightRig>();
+        var lightRig = lightRigElement is null || IsDefaultLightRig(lightRigElement)
+            ? null
+            : ReadLightRig(lightRigElement);
+
+        // Bare camera string when there is no light rig and no camera rotation.
+        if (lightRig is null && cameraRotation is null)
+        {
+            return cameraPreset;
+        }
+
+        return new
+        {
+            Camera = cameraRotation is null
+                ? (object?)cameraPreset
+                : new { Preset = cameraPreset, Rotation = cameraRotation },
+            LightRig = lightRig,
+        };
+    }
+
+    /// <summary>
+    /// Projects an a:lightRig as a bare rig STRING when its direction is 't' (Top) and it has no rotation, or
+    /// as {rig, dir, rotation?} otherwise; null when there is no a:lightRig.
+    /// </summary>
+    private static object? ReadLightRig(A.LightRig? rig)
+    {
+        if (rig is null)
+        {
+            return null;
+        }
+
+        var rigToken = LightRigToken(rig.Rig?.Value);
+        var dir = LightDirectionToken(rig.Direction?.Value);
+        var rotation = ReadRotation(rig.GetFirstChild<A.Rotation>());
+
+        // Bare rig string when the direction is the synthesized default 't' (Top) and there is no rotation.
+        if (dir == "t" && rotation is null)
+        {
+            return rigToken;
+        }
+
+        return new { Rig = rigToken, Dir = dir, Rotation = rotation };
+    }
+
+    /// <summary>Projects an a:rot as {lat, lon, rev} in whole degrees; null when there is no a:rot.</summary>
+    private static object? ReadRotation(A.Rotation? rotation)
+    {
+        if (rotation is null)
+        {
+            return null;
+        }
+
+        return new
+        {
+            Lat = DegreesFrom(rotation.Latitude?.Value),
+            Lon = DegreesFrom(rotation.Longitude?.Value),
+            Rev = DegreesFrom(rotation.Revolution?.Value),
+        };
+    }
+
+    /// <summary>Converts a 60000ths-of-a-degree angle back to whole degrees; null when absent.</summary>
+    private static int? DegreesFrom(int? units) =>
+        units is null ? null : (int)Math.Round(units.Value / DirUnitsPerDegree);
 
     private static string? EffectColor(OpenXmlElement? effect) =>
         effect is null ? null : effect.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant() ?? DefaultEffectColor;
@@ -716,9 +1508,10 @@ internal static class PptxEffects
         if (effectList is null)
         {
             effectList = new A.EffectList();
-            // a:effectLst precedes a:sp3d (the 3-D family) in spPr; when a bevel has already put an
-            // a:sp3d there, insert before it, else append (a:effectLst is otherwise the last child).
-            var anchor = properties.GetFirstChild<A.Shape3DType>();
+            // a:effectLst precedes the 3-D family (a:scene3d then a:sp3d) in spPr; when either is already
+            // present, insert before the FIRST of them, else append (a:effectLst is otherwise the last child).
+            var anchor = (OpenXmlElement?)properties.GetFirstChild<A.Scene3DType>()
+                ?? properties.GetFirstChild<A.Shape3DType>();
             if (anchor is not null)
             {
                 properties.InsertBefore(effectList, anchor);

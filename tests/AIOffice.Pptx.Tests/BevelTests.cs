@@ -226,7 +226,10 @@ public sealed class BevelTests : IDisposable
 
         var error = TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
         Assert.NotNull(error.Candidates);
-        Assert.Equal(new[] { "preset", "width", "height", "depth", "depthColor" }, error.Candidates!);
+        // The 5 v1.25 keys come first (stable order) followed by the 4 v1.26 keys.
+        Assert.Equal(
+            new[] { "preset", "width", "height", "depth", "depthColor", "bevelBottom", "contour", "material", "z" },
+            error.Candidates!);
     }
 
     [Fact]
@@ -298,6 +301,373 @@ public sealed class BevelTests : IDisposable
 
         var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", picPath))));
         Assert.Equal("convex", detail["effects"]!["bevel"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    // ======================= v1.26 =======================
+
+    private string Sp3dXml() => SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!.OuterXml;
+
+    private JsonNode BevelOf(string path) =>
+        TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["effects"]!["bevel"]!.DeepClone()!;
+
+    /// <summary>Every bevel preset token paired with its a:bevelT @prst enum value.</summary>
+    public static IEnumerable<object[]> AllBevelPresets() => new[]
+    {
+        new object[] { "relaxedInset", A.BevelPresetValues.RelaxedInset },
+        new object[] { "circle", A.BevelPresetValues.Circle },
+        new object[] { "slope", A.BevelPresetValues.Slope },
+        new object[] { "cross", A.BevelPresetValues.Cross },
+        new object[] { "angle", A.BevelPresetValues.Angle },
+        new object[] { "softRound", A.BevelPresetValues.SoftRound },
+        new object[] { "convex", A.BevelPresetValues.Convex },
+        new object[] { "coolSlant", A.BevelPresetValues.CoolSlant },
+        new object[] { "divot", A.BevelPresetValues.Divot },
+        new object[] { "riblet", A.BevelPresetValues.Riblet },
+        new object[] { "hardEdge", A.BevelPresetValues.HardEdge },
+        new object[] { "artDeco", A.BevelPresetValues.ArtDeco },
+    };
+
+    // ---- (ACCEPT 1) v1.25 byte-identical ----
+
+    [Theory]
+    [MemberData(nameof(AllBevelPresets))]
+    public void BarePreset_IsByteIdenticalToV125(string token, A.BevelPresetValues preset)
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("bevel", token))));
+
+        // v1.25 wrote exactly: <a:sp3d><a:bevelT prst=... w="76200" h="76200"/></a:sp3d>.
+        var expected = new A.Shape3DType(new A.BevelTop { Preset = preset, Width = 76_200L, Height = 76_200L }).OuterXml;
+        Assert.Equal(expected, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void ObjectSizeDepthColor_IsByteIdenticalToV125()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject
+            {
+                ["preset"] = "circle",
+                ["width"] = "8pt",
+                ["height"] = "8pt",
+                ["depth"] = "4pt",
+                ["depthColor"] = "C00000",
+            },
+        }));
+
+        // Reconstruct exactly what v1.25 BuildBevel produced for this input.
+        var expected = new A.Shape3DType(new A.BevelTop
+        {
+            Preset = A.BevelPresetValues.Circle,
+            Width = 101_600L,
+            Height = 101_600L,
+        })
+        { ExtrusionHeight = 50_800L };
+        expected.Append(new A.ExtrusionColor(new A.RgbColorModelHex { Val = "C00000" }));
+
+        Assert.Equal(expected.OuterXml, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void DepthOnly_IsByteIdenticalToV125()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "slope", ["depth"] = "3pt" },
+        }));
+
+        var expected = new A.Shape3DType(new A.BevelTop
+        {
+            Preset = A.BevelPresetValues.Slope,
+            Width = 76_200L,
+            Height = 76_200L,
+        })
+        { ExtrusionHeight = 38_100L };
+
+        Assert.Equal(expected.OuterXml, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData("")]
+    public void ClearForms_RemoveShape3D(object clearValue)
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("bevel", "circle"))));
+        Assert.NotNull(SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>());
+
+        var value = clearValue is bool b ? JsonValue.Create(b) : JsonValue.Create((string)clearValue);
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("bevel", value))));
+
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    // ---- (ACCEPT 2) round-trip each new bevel field ----
+
+    [Fact]
+    public void BevelBottom_BareAndObject_RoundTripIdempotent()
+    {
+        Create();
+        var path = AddShape();
+
+        // Bare preset => a:bevelB at the 6pt default; reads back as the bare token.
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "circle", ["bevelBottom"] = "slope" },
+        }));
+        var sp3d = SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!;
+        var bevelB = sp3d.GetFirstChild<A.BevelBottom>()!;
+        Assert.Equal(A.BevelPresetValues.Slope, bevelB.Preset!.Value);
+        Assert.Equal(76_200L, bevelB.Width!.Value);
+        Assert.Equal(76_200L, bevelB.Height!.Value);
+        Assert.Equal("slope", BevelOf(path)["bevelBottom"]!.GetValue<string>());
+
+        var xml1 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml1, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+
+        // Object form with a non-default width => reads back as {preset, width, height}.
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject
+            {
+                ["preset"] = "circle",
+                ["bevelBottom"] = new JsonObject { ["preset"] = "angle", ["width"] = "9pt" },
+            },
+        }));
+        var bb = Assert.IsType<JsonObject>(BevelOf(path)["bevelBottom"]);
+        Assert.Equal("angle", bb["preset"]!.GetValue<string>());
+        Assert.Equal("9pt", bb["width"]!.GetValue<string>());
+
+        var xml2 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml2, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Contour_ColorOnlyAndWithWidth_RoundTripIdempotent()
+    {
+        Create();
+        var path = AddShape();
+
+        // Color-only contour defaults to 1pt (no @contourW=0 trap); width omitted on read.
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "circle", ["contour"] = new JsonObject { ["color"] = "00B050" } },
+        }));
+        var sp3d = SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!;
+        Assert.Equal(12_700L, sp3d.ContourWidth!.Value);
+        Assert.Equal("00B050", sp3d.GetFirstChild<A.ContourColor>()!.GetFirstChild<A.RgbColorModelHex>()!.Val!.Value);
+
+        var contour = Assert.IsType<JsonObject>(BevelOf(path)["contour"]);
+        Assert.Equal("00B050", contour["color"]!.GetValue<string>());
+        Assert.False(contour.ContainsKey("width"));
+
+        var xml1 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml1, Sp3dXml());
+
+        // Explicit width round-trips.
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject
+            {
+                ["preset"] = "circle",
+                ["contour"] = new JsonObject { ["color"] = "0000FF", ["width"] = "2.5pt" },
+            },
+        }));
+        var contour2 = Assert.IsType<JsonObject>(BevelOf(path)["contour"]);
+        Assert.Equal("0000FF", contour2["color"]!.GetValue<string>());
+        Assert.Equal("2.5pt", contour2["width"]!.GetValue<string>());
+
+        var xml2 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml2, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    public static IEnumerable<object[]> AllMaterials() => new[]
+    {
+        new object[] { "matte", A.PresetMaterialTypeValues.Matte },
+        new object[] { "warmMatte", A.PresetMaterialTypeValues.WarmMatte },
+        new object[] { "metal", A.PresetMaterialTypeValues.Metal },
+        new object[] { "plastic", A.PresetMaterialTypeValues.Plastic },
+        new object[] { "powder", A.PresetMaterialTypeValues.Powder },
+        new object[] { "translucentPowder", A.PresetMaterialTypeValues.TranslucentPowder },
+        new object[] { "clear", A.PresetMaterialTypeValues.Clear },
+        new object[] { "flat", A.PresetMaterialTypeValues.Flat },
+        new object[] { "dkEdge", A.PresetMaterialTypeValues.DarkEdge },
+        new object[] { "softEdge", A.PresetMaterialTypeValues.SoftEdge },
+        new object[] { "softmetal", A.PresetMaterialTypeValues.SoftMetal },
+    };
+
+    [Theory]
+    [MemberData(nameof(AllMaterials))]
+    public void Material_EachOfEleven_RoundTripIdempotent(string token, A.PresetMaterialTypeValues expected)
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "circle", ["material"] = token },
+        }));
+
+        var sp3d = SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!;
+        Assert.Equal(expected, sp3d.PresetMaterial!.Value);
+        Assert.Equal(token, BevelOf(path)["material"]!.GetValue<string>());
+
+        var xml1 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml1, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void Z_RoundTripIdempotent()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "circle", ["z"] = "6pt" },
+        }));
+
+        var sp3d = SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!;
+        Assert.Equal(76_200L, sp3d.Z!.Value);
+        Assert.Equal("6pt", BevelOf(path)["z"]!.GetValue<string>());
+
+        var xml1 = Sp3dXml();
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["bevel"] = BevelOf(path) }));
+        Assert.Equal(xml1, Sp3dXml());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    // ---- (ACCEPT 4) child order across all bevel children ----
+
+    [Fact]
+    public void AllBevelChildren_AreInSchemaOrder_ValidatorClean()
+    {
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject
+            {
+                ["preset"] = "circle",
+                ["bevelBottom"] = "angle",
+                ["depth"] = "4pt",
+                ["depthColor"] = "C00000",
+                ["contour"] = new JsonObject { ["color"] = "0000FF", ["width"] = "1.5pt" },
+                ["material"] = "metal",
+                ["z"] = "3pt",
+            },
+        }));
+
+        var sp3d = SingleShape().ShapeProperties!.GetFirstChild<A.Shape3DType>()!;
+        var order = sp3d.ChildElements.Select(c => c.LocalName).ToList();
+        Assert.Equal(new[] { "bevelT", "bevelB", "extrusionClr", "contourClr" }, order);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    // ---- (ACCEPT 5) negatives ----
+
+    [Fact]
+    public void Material_UnknownToken_IsInvalidArgsWithElevenCandidates()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["bevel"] = new JsonObject { ["preset"] = "circle", ["material"] = "chrome" },
+            })]);
+
+        var error = TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+        Assert.Equal(11, error.Candidates!.Count);
+        Assert.Contains("warmMatte", error.Candidates!);
+        Assert.Contains("softmetal", error.Candidates!);
+    }
+
+    [Theory]
+    [InlineData("legacyMatte")]
+    [InlineData("legacyPlastic")]
+    [InlineData("legacyMetal")]
+    [InlineData("legacyWireframe")]
+    public void Material_LegacyToken_IsRejected(string legacy)
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["bevel"] = new JsonObject { ["preset"] = "circle", ["material"] = legacy },
+            })]);
+
+        var error = TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+        Assert.Equal(11, error.Candidates!.Count);
+        Assert.DoesNotContain(legacy, error.Candidates!);
+    }
+
+    [Fact]
+    public void NegativeZ_IsInvalidArgs()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["bevel"] = new JsonObject { ["preset"] = "circle", ["z"] = "-3pt" },
+            })]);
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void ContourWithoutColor_IsInvalidArgs()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["bevel"] = new JsonObject { ["preset"] = "circle", ["contour"] = new JsonObject { ["width"] = "2pt" } },
+            })]);
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
+
+    // ---- (ACCEPT 6) byte-stable read: absent material reads null ----
+
+    [Fact]
+    public void BevelWithoutMaterial_ReadsNoMaterialKey()
+    {
+        Create();
+        var path = AddShape();
+        // A depth-only bevel projects an object, but with NO material key (absent @prstMaterial != warmMatte).
+        Edit(TestEnv.Op("set", path, props: new JsonObject
+        {
+            ["bevel"] = new JsonObject { ["preset"] = "circle", ["depth"] = "4pt" },
+        }));
+
+        var bevel = Assert.IsType<JsonObject>(BevelOf(path));
+        Assert.False(bevel.ContainsKey("material"));
+        Assert.False(bevel.ContainsKey("bevelBottom"));
+        Assert.False(bevel.ContainsKey("contour"));
+        Assert.False(bevel.ContainsKey("z"));
         TestEnv.AssertValid(_ws, "deck.pptx");
     }
 }

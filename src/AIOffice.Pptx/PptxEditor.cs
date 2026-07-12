@@ -32,7 +32,7 @@ internal static class PptxEditor
 
     private static readonly IReadOnlyList<string> ShapePropKeys =
         ["text", "x", "y", "w", "h", "fill", "gradient", "image", "fontSize", "bold", "color", "align", "name", "title", "altText", "altTitle",
-         "shadow", "glow", "reflection", "outline", "softEdge", "innerShadow", "bevel", "autofit",
+         "shadow", "glow", "reflection", "outline", "softEdge", "innerShadow", "bevel", "scene3d", "autofit",
          "vAlign", "textDirection", "marginLeft", "marginRight", "marginTop", "marginBottom", "adjust"];
 
     /// <summary>add shape additionally accepts a preset geometry and a flip.</summary>
@@ -2177,6 +2177,9 @@ internal static class PptxEditor
                 case "bevel":
                     PptxEffects.SetBevel(view, value);
                     break;
+                case "scene3d":
+                    PptxEffects.SetScene3D(view, value);
+                    break;
                 case "autofit" when view.Element is P.Shape autofitShape:
                     ApplyAutofit(autofitShape, value);
                     break;
@@ -2206,7 +2209,7 @@ internal static class PptxEditor
                         ErrorCodes.UnsupportedFeature,
                         $"Prop '{key}' does not apply to a '{view.Kind}'.",
                         "Pictures, charts, lines and groups take x, y, w, h, name, altText, altTitle, shadow, glow, " +
-                        "reflection, outline, softEdge, inner shadow and bevel (lines also fill for the stroke color); text and styling props " +
+                        "reflection, outline, softEdge, inner shadow, bevel and scene3d (lines also fill for the stroke color); text and styling props " +
                         "(including autofit, vAlign, textDirection and marginLeft/Right/Top/Bottom) target text shapes.");
             }
         }
