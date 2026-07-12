@@ -26,11 +26,19 @@ public sealed class PreviewServer : IDisposable
     public const int PortRangeEnd = 26600;
 
     private const int DebounceMs = 300;
+    private const int PollMs = 500;
     private const long MaxRequestBytes = 1024 * 1024;
 
     private readonly HttpListener _listener;
     private readonly FileSystemWatcher _watcher;
     private readonly Timer _debounce;
+    // A polling backstop: FileSystemWatcher is unreliable on macOS (FSEvents can lag or
+    // drop under load) and on network drives, so a light periodic stat catches a changed
+    // file even when no OS event fires — live reload works everywhere, not just where the
+    // watcher happens to be prompt. Only the poll thread touches these two fields.
+    private readonly Timer _poll;
+    private DateTime _lastWriteUtc;
+    private long _lastLength;
     private readonly SelectionStore _selection = new();
     private readonly MarkStore _marks = new();
     private readonly List<SseClient> _sseClients = [];
@@ -57,6 +65,9 @@ public sealed class PreviewServer : IDisposable
         _watcher.Created += (_, _) => OnFileEvent();
         _watcher.Renamed += (_, _) => OnFileEvent();
         _watcher.Deleted += (_, _) => OnFileEvent();
+
+        (_lastWriteUtc, _lastLength) = Stat(filePath);
+        _poll = new Timer(_ => PollForChange(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     /// <summary>Sandbox-resolved absolute path of the previewed file.</summary>
@@ -115,6 +126,7 @@ public sealed class PreviewServer : IDisposable
             boundPort, Environment.ProcessId, resolved, DateTimeOffset.UtcNow));
 
         server._watcher.EnableRaisingEvents = true;
+        server._poll.Change(PollMs, PollMs);
         _ = Task.Run(server.AcceptLoopAsync);
         return server;
     }
@@ -136,6 +148,7 @@ public sealed class PreviewServer : IDisposable
 
         _watcher.Dispose();
         _debounce.Dispose();
+        _poll.Dispose();
 
         lock (_sseGate)
         {
@@ -543,6 +556,41 @@ public sealed class PreviewServer : IDisposable
         if (Volatile.Read(ref _stopped) == 0)
         {
             _debounce.Change(DebounceMs, Timeout.Infinite); // restart the debounce window
+        }
+    }
+
+    /// <summary>
+    /// The polling backstop: if the file's write time or length changed since the last tick,
+    /// treat it exactly like a watcher event. Runs even when the OS watcher stays silent, so a
+    /// change is picked up within <see cref="PollMs"/> + <see cref="DebounceMs"/> everywhere.
+    /// </summary>
+    private void PollForChange()
+    {
+        if (Volatile.Read(ref _stopped) != 0)
+        {
+            return;
+        }
+
+        var (write, length) = Stat(FilePath);
+        if (write != _lastWriteUtc || length != _lastLength)
+        {
+            _lastWriteUtc = write;
+            _lastLength = length;
+            OnFileEvent();
+        }
+    }
+
+    /// <summary>The file's (LastWriteTimeUtc, Length), or (MinValue, -1) if it is gone/unreadable.</summary>
+    private static (DateTime Write, long Length) Stat(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (info.LastWriteTimeUtc, info.Length) : (DateTime.MinValue, -1);
+        }
+        catch (IOException)
+        {
+            return (DateTime.MinValue, -1); // transient; the next tick retries
         }
     }
 

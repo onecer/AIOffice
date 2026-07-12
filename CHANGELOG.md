@@ -70,6 +70,19 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.26.1 — patch: robust preview live-reload (polling backstop)
+
+`surfaceVersion` stays **1.0**; byte-for-byte compatible with 1.26.0.
+
+### Fixed
+
+- **`aioffice preview` live-reload now fires reliably**: the server relied solely on
+  `FileSystemWatcher`, which is unreliable on macOS (FSEvents can lag or drop change events under
+  load) and on network drives — so a live preview could miss an on-disk edit. Added a lightweight
+  polling backstop (a periodic stat of the file's write-time/length that triggers the same debounced
+  reload as a watcher event), so live-reload works everywhere, not just where the OS watcher happens
+  to be prompt. The debounce coalesces the two paths, so no double reload.
+
 ## 1.26.0 — complete the pptx 3-D family: bevel completions + scene3d (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — a single deep pptx milestone finishing the 3-D
