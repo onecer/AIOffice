@@ -488,4 +488,207 @@ public sealed class EffectTests : IDisposable
 
         TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
     }
+
+    // ---- inner shadow (v1.24): a:innerShdw, between glow and outerShdw in a:effectLst ----
+
+    [Fact]
+    public void SetInnerShadowColor_WritesSrgbClr_AndReadsBackAsString()
+    {
+        // bare color -> exactly one a:innerShdw with a:srgbClr @val=000000; get -> the bare string.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("innerShadow", "000000"))));
+
+        var effectList = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!;
+        var inner = Assert.Single(effectList.Elements<A.InnerShadow>());
+        Assert.Equal("000000", inner.GetFirstChild<A.RgbColorModelHex>()!.Val!.Value);
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Equal("000000", detail["effects"]!["innerShadow"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetInnerShadowObject_WritesGeometry_AndReadsBackAsObject_BareRoundTripsAsString()
+    {
+        // {color,blur,dist,dir} -> @blurRad/@dist/@dir; get -> the object (discriminated by non-default dir).
+        Create();
+        var pathA = AddShape();
+        Edit(TestEnv.Op("set", pathA, props: new JsonObject
+        {
+            ["innerShadow"] = new JsonObject { ["color"] = "112233", ["blur"] = "5pt", ["dist"] = "4pt", ["dir"] = 135 },
+        }));
+
+        var inner = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.InnerShadow>()!;
+        Assert.Equal(63_500L, inner.BlurRadius!.Value);   // 5pt
+        Assert.Equal(50_800L, inner.Distance!.Value);     // 4pt
+        Assert.Equal(8_100_000, inner.Direction!.Value);  // 135 * 60000
+        Assert.Equal("112233", inner.GetFirstChild<A.RgbColorModelHex>()!.Val!.Value);
+
+        var effectsA = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", pathA))))["effects"]!["innerShadow"]!;
+        var obj = Assert.IsType<JsonObject>(effectsA);
+        Assert.Equal("112233", obj["color"]!.GetValue<string>());
+        Assert.Equal("5pt", obj["blur"]!.GetValue<string>());
+        Assert.Equal("4pt", obj["dist"]!.GetValue<string>());
+        Assert.Equal(135, obj["dir"]!.GetValue<int>());
+
+        // Independent shape: bare color set -> get returns the bare string (discrimination).
+        var pathB = AddShape();
+        Edit(TestEnv.Op("set", pathB, props: TestEnv.Props(("innerShadow", "445566"))));
+        var effectsB = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", pathB))))["effects"]!["innerShadow"]!;
+        Assert.Equal("445566", effectsB.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetInnerShadow_SitsBetweenGlowAndOuterShadow_InSchemaChildOrder()
+    {
+        // innerShadow coexists with glow/shadow/reflection/softEdge in the schema child order.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(
+            ("glow", "00FF00"), ("innerShadow", "222222"), ("shadow", "303030"),
+            ("reflection", true), ("softEdge", true))));
+
+        var effectList = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!;
+        var order = effectList.ChildElements.Select(e => e.LocalName).ToList();
+        Assert.True(order.IndexOf("glow") < order.IndexOf("innerShdw"));
+        Assert.True(order.IndexOf("innerShdw") < order.IndexOf("outerShdw"));
+        Assert.True(order.IndexOf("outerShdw") < order.IndexOf("reflection"));
+        Assert.True(order.IndexOf("reflection") < order.IndexOf("softEdge"));
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void ShapeWithoutInnerShadow_ProjectsNoInnerShadowKey_ByteStable()
+    {
+        // A shadow-only shape gains no innerShadow key (the null key drops); shadow is untouched.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("shadow", "404040"))));
+
+        var effects = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))))["effects"]!;
+        Assert.Equal("404040", effects["shadow"]!.GetValue<string>());
+        Assert.False(effects.AsObject().ContainsKey("innerShadow"));
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!.GetFirstChild<A.InnerShadow>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData("")]
+    public void SetInnerShadowFalseOrEmpty_ClearsInnerShadow_AndDropsEmptyEffectList(object clearValue)
+    {
+        // false or '' removes a:innerShdw and drops the now-empty a:effectLst; get effects == null.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("innerShadow", "111111"))));
+        Assert.NotNull(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>());
+
+        var clear = clearValue is bool b ? JsonValue.Create(b) : JsonValue.Create((string)clearValue);
+        Edit(TestEnv.Op("set", path, props: new JsonObject { ["innerShadow"] = clear }));
+
+        Assert.Null(SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()); // empty list dropped
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", path))));
+        Assert.Null(detail["effects"]);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void SetInnerShadowTwice_ReplacesInPlace()
+    {
+        // A second set replaces the first: exactly one a:innerShdw remains.
+        Create();
+        var path = AddShape();
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("innerShadow", "111111"))));
+        Edit(TestEnv.Op("set", path, props: TestEnv.Props(("innerShadow", "222222"))));
+
+        var effectList = SingleShape().ShapeProperties!.GetFirstChild<A.EffectList>()!;
+        var inner = Assert.Single(effectList.Elements<A.InnerShadow>());
+        Assert.Equal("222222", inner.GetFirstChild<A.RgbColorModelHex>()!.Val!.Value);
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void InnerShadow_OnPicture_RoundTrips()
+    {
+        Create();
+        File.WriteAllBytes(Path.Combine(_ws.Dir, "logo.png"), TestImages.Png(40, 30));
+        var added = Edit(TestEnv.Op("add", "/slide[1]", type: "image", props: TestEnv.Props(("src", "logo.png"))));
+        var picPath = added["results"]![0]!["target"]!.GetValue<string>();
+
+        Edit(TestEnv.Op("set", picPath, props: TestEnv.Props(("innerShadow", "778899"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", picPath))));
+        Assert.Equal("778899", detail["effects"]!["innerShadow"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void InnerShadow_OnConnectionShape_RoundTrips()
+    {
+        Create();
+        var a = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create("2cm")), ("y", JsonValue.Create("2cm")),
+            ("w", JsonValue.Create("4cm")), ("h", JsonValue.Create("3cm")))));
+        var aId = a["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var b = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create("16cm")), ("y", JsonValue.Create("12cm")),
+            ("w", JsonValue.Create("4cm")), ("h", JsonValue.Create("3cm")))));
+        var bId = b["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var conn = Edit(TestEnv.Op("add", "/slide[1]", type: "connector", props: TestEnv.Props(
+            ("from", JsonValue.Create("@" + aId)), ("to", JsonValue.Create("@" + bId)))));
+        var connPath = conn["results"]![0]!["target"]!.GetValue<string>();
+
+        Edit(TestEnv.Op("set", connPath, props: TestEnv.Props(("innerShadow", "AABBCC"))));
+
+        var detail = TestEnv.AssertOk(_handler.Get(_ws.Ctx("deck.pptx", ("path", connPath))));
+        Assert.Equal("AABBCC", detail["effects"]!["innerShadow"]!.GetValue<string>());
+        TestEnv.AssertValid(_ws, "deck.pptx");
+    }
+
+    [Fact]
+    public void InnerShadow_OnGroup_IsUnsupportedFeature()
+    {
+        Create();
+        var a = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create(2)), ("y", JsonValue.Create(2)))));
+        var aId = a["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var b = Edit(TestEnv.Op("add", "/slide[1]", type: "shape", props: TestEnv.Props(
+            ("shape", "rect"), ("x", JsonValue.Create(10)), ("y", JsonValue.Create(2)))));
+        var bId = b["results"]![0]!["target"]!.GetValue<string>().Split("@id=")[1].TrimEnd(']');
+        var grouped = Edit(TestEnv.Op("add", "/slide[1]", type: "group", props: TestEnv.Props(
+            ("shapes", new JsonArray("@" + aId, "@" + bId)))));
+        var groupPath = grouped["results"]![0]!["target"]!.GetValue<string>();
+
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", groupPath, props: TestEnv.Props(("innerShadow", true)))]);
+
+        TestEnv.AssertFail(result, ErrorCodes.UnsupportedFeature);
+    }
+
+    [Fact]
+    public void InnerShadow_NonColorValue_IsInvalidArgs()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: TestEnv.Props(("innerShadow", "banana")))]);
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
+
+    [Fact]
+    public void InnerShadow_ObjectUnknownKey_IsInvalidArgsWithCandidates()
+    {
+        Create();
+        var path = AddShape();
+        var result = _handler.Edit(_ws.Ctx("deck.pptx"),
+            [TestEnv.Op("set", path, props: new JsonObject
+            {
+                ["innerShadow"] = new JsonObject { ["color"] = "112233", ["foo"] = "bar" },
+            })]);
+
+        TestEnv.AssertFail(result, ErrorCodes.InvalidArgs);
+    }
 }

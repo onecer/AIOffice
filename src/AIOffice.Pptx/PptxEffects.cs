@@ -26,6 +26,13 @@ internal static class PptxEffects
     private const long SoftEdgeRadius = 31_750L; // PowerPoint's 2.5pt default (1pt = 12700 EMU)
     private const double EmuPerPoint = 12_700.0;
 
+    // Inner-shadow geometry (PowerPoint's own defaults) and its color alpha.
+    private const long InnerShadowBlur = 63_500L;       // 5pt
+    private const long InnerShadowDistance = 50_800L;   // 4pt
+    private const int InnerShadowDirection = 2_700_000; // 45 degrees down-right (60000ths)
+    private const int InnerShadowAlpha = 50_000;        // 50% opacity (a:alpha)
+    private const double DirUnitsPerDegree = 60_000.0;  // OOXML angles are 60000ths of a degree
+
     // ---- shadow -------------------------------------------------------------
 
     /// <summary>Sets (or clears, on false) an outer shadow; a color value tints it.</summary>
@@ -141,6 +148,86 @@ internal static class PptxEffects
         }
 
         return Units.ParseLengthEmu("softEdge", value);
+    }
+
+    // ---- inner shadow -------------------------------------------------------
+
+    /// <summary>
+    /// Sets (or clears, on false/"") an inner shadow (a:innerShdw). A bare color hex/name tints it
+    /// (default black); <c>true</c> uses PowerPoint's default geometry; a {color?, blur?, dist?, dir?}
+    /// object tunes blur radius, distance and direction. Inner shadow has no rotate-with-shape.
+    /// </summary>
+    public static void SetInnerShadow(ShapeView view, JsonNode? value)
+    {
+        if (IsFalse(value) || IsEmptyString(value))
+        {
+            RemoveEffect<A.InnerShadow>(view);
+            return;
+        }
+
+        var inner = value is JsonObject obj
+            ? BuildInnerShadow(obj)
+            : new A.InnerShadow(
+                new A.RgbColorModelHex(new A.Alpha { Val = InnerShadowAlpha }) { Val = ColorOrDefault(value, "000000") })
+            {
+                BlurRadius = InnerShadowBlur,
+                Distance = InnerShadowDistance,
+                Direction = InnerShadowDirection,
+            };
+
+        // innerShdw follows glow but precedes outerShdw in a:effectLst.
+        InsertEffect(view, inner, after: ["glow"], before: ["outerShdw", "reflection", "softEdge"]);
+    }
+
+    /// <summary>The keys the inner-shadow object form accepts.</summary>
+    private static readonly IReadOnlyList<string> InnerShadowKeys = ["color", "blur", "dist", "dir"];
+
+    /// <summary>Builds an a:innerShdw from the {color?, blur?, dist?, dir?} object form.</summary>
+    private static A.InnerShadow BuildInnerShadow(JsonObject obj)
+    {
+        foreach (var (key, _) in obj)
+        {
+            if (!InnerShadowKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown inner shadow prop '{key}'.",
+                    "inner shadow object props: color, blur, dist, dir.",
+                    candidates: InnerShadowKeys);
+            }
+        }
+
+        var hex = obj.TryGetPropertyValue("color", out var colorNode)
+            ? Units.ParseColorHex("color", colorNode)
+            : "000000";
+        return new A.InnerShadow(
+            new A.RgbColorModelHex(new A.Alpha { Val = InnerShadowAlpha }) { Val = hex })
+        {
+            BlurRadius = obj.TryGetPropertyValue("blur", out var blurNode)
+                ? Units.ParseLengthEmu("blur", blurNode)
+                : InnerShadowBlur,
+            Distance = obj.TryGetPropertyValue("dist", out var distNode)
+                ? Units.ParseLengthEmu("dist", distNode)
+                : InnerShadowDistance,
+            Direction = obj.TryGetPropertyValue("dir", out var dirNode)
+                ? ParseDirection(dirNode)
+                : InnerShadowDirection,
+        };
+    }
+
+    /// <summary>Parses a direction in degrees to OOXML's 60000ths-of-a-degree, normalized into [0,360).</summary>
+    private static int ParseDirection(JsonNode? node)
+    {
+        if (node is not JsonValue value || !Units.TryNumber(value, out var degrees))
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"The inner shadow 'dir' is not a number: {node?.ToJsonString() ?? "null"}.",
+                "Pass dir in degrees, e.g. 45, 135, 315.");
+        }
+
+        var normalized = ((degrees % 360) + 360) % 360;
+        return (int)Math.Round(normalized * DirUnitsPerDegree);
     }
 
     // ---- outline ------------------------------------------------------------
@@ -298,8 +385,9 @@ internal static class PptxEffects
         var softEdge = effectList?.GetFirstChild<A.SoftEdge>()?.Radius?.Value is { } rad
             ? Units.Inv($"{rad / EmuPerPoint:0.###}pt")
             : null;
+        var innerShadow = ReadInnerShadow(effectList?.GetFirstChild<A.InnerShadow>());
 
-        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null)
+        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null && innerShadow is null)
         {
             return null;
         }
@@ -311,6 +399,42 @@ internal static class PptxEffects
             Reflection = hasReflection ? true : (bool?)null,
             Outline = outline,
             SoftEdge = softEdge,
+            InnerShadow = innerShadow,
+        };
+    }
+
+    /// <summary>
+    /// Projects an a:innerShdw as a bare hex color STRING when its geometry is the PowerPoint default,
+    /// or as {color, blur, dist, dir} when a non-default blur radius, distance or direction is present.
+    /// Discriminated by what is set (like ReadOutline), so a bare-color set round-trips to the string
+    /// and an object set round-trips to the object.
+    /// </summary>
+    private static object? ReadInnerShadow(A.InnerShadow? inner)
+    {
+        if (inner is null)
+        {
+            return null;
+        }
+
+        var color = inner.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant() ?? "000000";
+        var blur = inner.BlurRadius?.Value;
+        var dist = inner.Distance?.Value;
+        var dir = inner.Direction?.Value;
+
+        // Default geometry projects as the bare hex string; any non-default value yields the object.
+        if ((blur is null || blur == InnerShadowBlur) &&
+            (dist is null || dist == InnerShadowDistance) &&
+            (dir is null || dir == InnerShadowDirection))
+        {
+            return color;
+        }
+
+        return new
+        {
+            Color = color,
+            Blur = blur is null ? null : Units.Inv($"{blur.Value / EmuPerPoint:0.###}pt"),
+            Dist = dist is null ? null : Units.Inv($"{dist.Value / EmuPerPoint:0.###}pt"),
+            Dir = dir is null ? (int?)null : (int)Math.Round(dir.Value / DirUnitsPerDegree),
         };
     }
 
