@@ -37,6 +37,15 @@ internal static class WordFormatting
         ["yellow", "green", "cyan", "magenta", "blue", "red", "darkBlue", "darkCyan", "darkGreen",
          "darkMagenta", "darkRed", "darkYellow", "darkGray", "lightGray", "black", "white", "none"];
 
+    /// <summary>
+    /// The underline styles the 'underline' prop accepts as a string (alongside the bool form).
+    /// bool true maps to "single", bool false / "none" to "none"; every other entry is a named
+    /// w:u @val. Runtime-validated candidate list for the value-shape relaxation.
+    /// </summary>
+    public static readonly IReadOnlyList<string> UnderlineStyles =
+        ["double", "thick", "dotted", "dash", "dashLong", "dotDash", "dotDotDash",
+         "wave", "wavyHeavy", "wavyDouble", "words", "single", "none"];
+
     // ----------------------------------------------------------------- read
 
     public static Dictionary<string, object?> ReadParagraphProps(Paragraph p)
@@ -53,7 +62,7 @@ internal static class WordFormatting
             ["alignment"] = AlignmentName(pPr?.Justification),
             ["bold"] = firstRun is null ? null : IsOn(firstRunPr?.Bold),
             ["italic"] = firstRun is null ? null : IsOn(firstRunPr?.Italic),
-            ["underline"] = firstRun is null ? null : IsUnderlined(firstRunPr),
+            ["underline"] = firstRun is null ? null : UnderlineValue(firstRunPr),
             ["fontSize"] = firstRun is null ? null : FontSizePoints(firstRunPr),
             ["color"] = firstRunPr?.Color?.Val?.Value,
             ["font"] = firstRunPr?.RunFonts?.Ascii?.Value,
@@ -201,7 +210,7 @@ internal static class WordFormatting
             ["style"] = rPr?.RunStyle?.Val?.Value,
             ["bold"] = IsOn(rPr?.Bold),
             ["italic"] = IsOn(rPr?.Italic),
-            ["underline"] = IsUnderlined(rPr),
+            ["underline"] = UnderlineValue(rPr),
             ["fontSize"] = FontSizePoints(rPr),
             ["color"] = rPr?.Color?.Val?.Value,
             ["font"] = rPr?.RunFonts?.Ascii?.Value,
@@ -253,6 +262,33 @@ internal static class WordFormatting
 
     public static bool? IsUnderlined(RunProperties? rPr) =>
         rPr?.Underline is not { } u ? null : (u.Val?.Value ?? UnderlineValues.Single) != UnderlineValues.None;
+
+    /// <summary>
+    /// The discriminated read of w:u, following the shipped ReadOutline precedent (bare form -> a
+    /// primitive, enriched -> a richer shape): absent -> null, none -> bool false, single/default ->
+    /// bool true, any other style -> the style STRING. single/none/absent are byte-stable with the
+    /// legacy <see cref="IsUnderlined"/> bool; only non-single content the tool didn't author widens.
+    /// </summary>
+    public static object? UnderlineValue(RunProperties? rPr) => UnderlineValue(rPr?.Underline);
+
+    /// <summary>The discriminated read off a w:u element (shared by run and style-def rPr).</summary>
+    public static object? UnderlineValue(Underline? underline)
+    {
+        if (underline is null)
+        {
+            return null;
+        }
+
+        var valEnum = underline.Val;
+        var val = valEnum?.Value ?? UnderlineValues.Single;
+        if (val == UnderlineValues.None)
+        {
+            return false;
+        }
+
+        // single/default -> bool true (byte-stable); any other style -> its @val STRING (e.g. "double").
+        return val == UnderlineValues.Single ? true : valEnum!.ToString();
+    }
 
     public static double? FontSizePoints(RunProperties? rPr) =>
         rPr?.FontSize?.Val?.Value is { } halfPoints &&
@@ -593,10 +629,7 @@ internal static class WordFormatting
                 break;
 
             case "underline":
-                EnsureRPr(run).Underline = new Underline
-                {
-                    Val = ParseBool(name, value) ? UnderlineValues.Single : UnderlineValues.None,
-                };
+                EnsureRPr(run).Underline = new Underline { Val = ParseUnderline(name, value) };
                 break;
 
             case "color":
@@ -670,6 +703,34 @@ internal static class WordFormatting
         {
             rPr.VerticalTextAlignment = null;
         }
+    }
+
+    /// <summary>
+    /// The 'underline' value-shape: the BOOL form (true -> single, false -> none) is tried FIRST and
+    /// stays byte-stable; otherwise a named underline style (case-insensitive) off <see cref="UnderlineStyles"/>.
+    /// An unrecognized string is invalid_args with the candidate list.
+    /// </summary>
+    public static UnderlineValues ParseUnderline(string name, string value)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "true" or "1" or "on" or "yes":
+                return UnderlineValues.Single;
+            case "false" or "0" or "off" or "no":
+                return UnderlineValues.None;
+        }
+
+        var match = UnderlineStyles.FirstOrDefault(s => string.Equals(s, value, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"'{name}' expects true/false or an underline style, got '{value}'.",
+                $"Pass {name}=true/false, or a style: {string.Join(", ", UnderlineStyles)}.",
+                candidates: UnderlineStyles);
+        }
+
+        return new UnderlineValues(match);
     }
 
     /// <summary>A named highlight color (case-insensitive), or invalid_args with the fixed candidate list.</summary>

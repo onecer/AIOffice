@@ -367,7 +367,7 @@ public sealed partial class WordHandler
             },
             "bold" => BoolString(WordFormatting.IsOn(run?.RunProperties?.Bold)),
             "italic" => BoolString(WordFormatting.IsOn(run?.RunProperties?.Italic)),
-            "underline" => BoolString(WordFormatting.IsUnderlined(run?.RunProperties)),
+            "underline" => UnderlineString(WordFormatting.UnderlineValue(run?.RunProperties)),
             "fontSize" => WordFormatting.FontSizePoints(run?.RunProperties)?.ToString(CultureInfo.InvariantCulture),
             "color" => run?.RunProperties?.Color?.Val?.Value,
             "alignment" => WordFormatting.AlignmentName((element as Paragraph)?.ParagraphProperties?.Justification),
@@ -384,6 +384,16 @@ public sealed partial class WordHandler
             true => "true",
             false => "false",
             null => null,
+        };
+
+        // underline is discriminated (bool for single/none, style STRING otherwise):
+        // single -> "true" and none -> "false" stay byte-stable; a named style surfaces verbatim.
+        static string? UnderlineString(object? value) => value switch
+        {
+            true => "true",
+            false => "false",
+            string s => s,
+            _ => null,
         };
     }
 

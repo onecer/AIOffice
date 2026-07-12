@@ -106,7 +106,7 @@ public sealed partial class WordHandler
             ["inUse"] = inUse.Contains(style.StyleId?.Value ?? string.Empty),
             ["bold"] = WordFormatting.IsOn(rPr?.Bold),
             ["italic"] = WordFormatting.IsOn(rPr?.Italic),
-            ["underline"] = rPr?.Underline is { } u ? (u.Val?.Value ?? UnderlineValues.Single) != UnderlineValues.None : null,
+            ["underline"] = WordFormatting.UnderlineValue(rPr?.Underline),
             ["color"] = rPr?.Color?.Val?.Value,
             ["font"] = rPr?.RunFonts?.Ascii?.Value,
             ["fontSize"] = rPr?.FontSize?.Val?.Value is { } hp &&
@@ -290,7 +290,7 @@ public sealed partial class WordHandler
                 case "underline":
                     EnsureStyleRunProperties(style).Underline = new Underline
                     {
-                        Val = WordFormatting.ParseBool(key, value) ? UnderlineValues.Single : UnderlineValues.None,
+                        Val = WordFormatting.ParseUnderline(key, value),
                     };
                     break;
 
