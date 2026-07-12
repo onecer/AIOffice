@@ -8,8 +8,9 @@ namespace AIOffice.Pptx;
 
 /// <summary>
 /// Shape text/visual effects: shadow (a:outerShdw), glow (a:glow), reflection
-/// (a:reflection) — all children of the shape's a:effectLst — and outline
-/// (a:ln) on the shape's spPr. Each setter accepts a color hex (the effect's
+/// (a:reflection) — all children of the shape's a:effectLst — outline (a:ln)
+/// and the first 3-D property, bevel (a:sp3d/a:bevelT), both on the shape's spPr
+/// but outside a:effectLst. Each setter accepts a color hex (the effect's
 /// color, where it has one) or the boolean true/false (a sensible default, or
 /// clearing the effect); get reflects what is set.
 /// </summary>
@@ -230,6 +231,130 @@ internal static class PptxEffects
         return (int)Math.Round(normalized * DirUnitsPerDegree);
     }
 
+    // ---- bevel / 3-D --------------------------------------------------------
+
+    /// <summary>Default bevel width/height when only a preset is given (PowerPoint's 6pt).</summary>
+    private const long DefaultBevelSize = 76_200L; // 6pt
+
+    /// <summary>
+    /// Sets (or clears, on false/"") a shape bevel — the first 3-D property, a:sp3d/a:bevelT, which
+    /// lives OUTSIDE a:effectLst. A bare preset string (e.g. "circle") writes the preset at the 6pt
+    /// default; a {preset?, width?, height?, depth?, depthColor?} object tunes the bevel size, the
+    /// extrusion depth (a:sp3d/@extrusionH) and its color (a:extrusionClr). bevelB/contour/material/
+    /// scene3d are out of scope for this slot.
+    /// </summary>
+    public static void SetBevel(ShapeView view, JsonNode? value)
+    {
+        if (IsFalse(value) || IsEmptyString(value))
+        {
+            RequireShapeProperties(view).GetFirstChild<A.Shape3DType>()?.Remove();
+            return;
+        }
+
+        var sp3d = value is JsonObject obj
+            ? BuildBevel(obj)
+            : new A.Shape3DType(new A.BevelTop { Preset = ParseBevelPreset(value), Width = DefaultBevelSize, Height = DefaultBevelSize });
+
+        InsertShape3D(view, sp3d);
+    }
+
+    /// <summary>The keys the bevel object form accepts.</summary>
+    private static readonly IReadOnlyList<string> BevelKeys = ["preset", "width", "height", "depth", "depthColor"];
+
+    /// <summary>
+    /// Builds an a:sp3d from the {preset?, width?, height?, depth?, depthColor?} object form. Child
+    /// order honors the schema: a:bevelT precedes a:extrusionClr; @extrusionH is an attribute of a:sp3d.
+    /// </summary>
+    private static A.Shape3DType BuildBevel(JsonObject obj)
+    {
+        foreach (var (key, _) in obj)
+        {
+            if (!BevelKeys.Contains(key, StringComparer.Ordinal))
+            {
+                throw new AiofficeException(
+                    ErrorCodes.InvalidArgs,
+                    $"Unknown bevel prop '{key}'.",
+                    "bevel object props: preset, width, height, depth, depthColor.",
+                    candidates: BevelKeys);
+            }
+        }
+
+        var bevelTop = new A.BevelTop
+        {
+            Preset = obj.TryGetPropertyValue("preset", out var presetNode)
+                ? ParseBevelPreset(presetNode)
+                : A.BevelPresetValues.Circle,
+            Width = obj.TryGetPropertyValue("width", out var widthNode)
+                ? Units.ParseLengthEmu("width", widthNode)
+                : DefaultBevelSize,
+            Height = obj.TryGetPropertyValue("height", out var heightNode)
+                ? Units.ParseLengthEmu("height", heightNode)
+                : DefaultBevelSize,
+        };
+
+        var sp3d = new A.Shape3DType(bevelTop);
+        if (obj.TryGetPropertyValue("depth", out var depthNode))
+        {
+            sp3d.ExtrusionHeight = Units.ParseLengthEmu("depth", depthNode);
+        }
+
+        // a:extrusionClr follows a:bevelT in the a:sp3d child order.
+        if (obj.TryGetPropertyValue("depthColor", out var depthColorNode))
+        {
+            sp3d.Append(new A.ExtrusionColor(new A.RgbColorModelHex { Val = Units.ParseColorHex("depthColor", depthColorNode) }));
+        }
+
+        return sp3d;
+    }
+
+    /// <summary>Inserts (replacing any existing) a:sp3d into spPr: after a:ln/a:effectLst/a:scene3d, before a:extLst.</summary>
+    private static void InsertShape3D(ShapeView view, A.Shape3DType sp3d)
+    {
+        var properties = RequireShapeProperties(view);
+        properties.GetFirstChild<A.Shape3DType>()?.Remove(); // idempotent replace
+
+        var extLst = (OpenXmlElement?)properties.GetFirstChild<A.ExtensionList>();
+        if (extLst is not null)
+        {
+            properties.InsertBefore(sp3d, extLst);
+        }
+        else
+        {
+            properties.Append(sp3d);
+        }
+    }
+
+    /// <summary>The bevel presets accepted (a:bevelT @prst), in error-candidate order.</summary>
+    private static readonly IReadOnlyList<string> BevelPresets =
+        ["relaxedInset", "circle", "slope", "cross", "angle", "softRound",
+         "convex", "coolSlant", "divot", "riblet", "hardEdge", "artDeco"];
+
+    /// <summary>Maps a bevel preset token to its a:bevelT @prst value; throws invalid_args with candidates otherwise.</summary>
+    private static A.BevelPresetValues ParseBevelPreset(JsonNode? node)
+    {
+        var raw = node is null ? string.Empty : J.ScalarText(node).Trim();
+        return raw switch
+        {
+            "relaxedInset" => A.BevelPresetValues.RelaxedInset,
+            "circle" => A.BevelPresetValues.Circle,
+            "slope" => A.BevelPresetValues.Slope,
+            "cross" => A.BevelPresetValues.Cross,
+            "angle" => A.BevelPresetValues.Angle,
+            "softRound" => A.BevelPresetValues.SoftRound,
+            "convex" => A.BevelPresetValues.Convex,
+            "coolSlant" => A.BevelPresetValues.CoolSlant,
+            "divot" => A.BevelPresetValues.Divot,
+            "riblet" => A.BevelPresetValues.Riblet,
+            "hardEdge" => A.BevelPresetValues.HardEdge,
+            "artDeco" => A.BevelPresetValues.ArtDeco,
+            _ => throw new AiofficeException(
+                ErrorCodes.InvalidArgs,
+                $"Not a valid bevel preset: {node?.ToJsonString() ?? "null"}",
+                "bevel presets: relaxedInset, circle, slope, cross, angle, softRound, convex, coolSlant, divot, riblet, hardEdge, artDeco.",
+                candidates: BevelPresets),
+        };
+    }
+
     // ---- outline ------------------------------------------------------------
 
     /// <summary>
@@ -386,8 +511,9 @@ internal static class PptxEffects
             ? Units.Inv($"{rad / EmuPerPoint:0.###}pt")
             : null;
         var innerShadow = ReadInnerShadow(effectList?.GetFirstChild<A.InnerShadow>());
+        var bevel = ReadBevel(properties.GetFirstChild<A.Shape3DType>());
 
-        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null && innerShadow is null)
+        if (shadow is null && glow is null && !hasReflection && outline is null && softEdge is null && innerShadow is null && bevel is null)
         {
             return null;
         }
@@ -400,6 +526,7 @@ internal static class PptxEffects
             Outline = outline,
             SoftEdge = softEdge,
             InnerShadow = innerShadow,
+            Bevel = bevel,
         };
     }
 
@@ -435,6 +562,70 @@ internal static class PptxEffects
             Blur = blur is null ? null : Units.Inv($"{blur.Value / EmuPerPoint:0.###}pt"),
             Dist = dist is null ? null : Units.Inv($"{dist.Value / EmuPerPoint:0.###}pt"),
             Dir = dir is null ? (int?)null : (int)Math.Round(dir.Value / DirUnitsPerDegree),
+        };
+    }
+
+    /// <summary>
+    /// Projects an a:sp3d/a:bevelT as a bare preset STRING when the bevel is a plain preset at the
+    /// 6pt default (no extrusion depth or color), or as {preset, width?, height?, depth?, depthColor?}
+    /// when a non-default width/height, an extrusion depth or an extrusion color is present.
+    /// Discriminated by what is set (like ReadOutline / ReadInnerShadow); null when there is no a:sp3d.
+    /// </summary>
+    private static object? ReadBevel(A.Shape3DType? sp3d)
+    {
+        var bevelTop = sp3d?.GetFirstChild<A.BevelTop>();
+        if (bevelTop is null)
+        {
+            return null;
+        }
+
+        var preset = BevelPresetToken(bevelTop.Preset?.Value) ?? "circle";
+        var width = bevelTop.Width?.Value;
+        var height = bevelTop.Height?.Value;
+        var depth = sp3d!.ExtrusionHeight?.Value;
+        var depthColor = sp3d.GetFirstChild<A.ExtrusionColor>()?.GetFirstChild<A.RgbColorModelHex>()?.Val?.Value?.ToUpperInvariant();
+
+        // A plain preset at the 6pt default (no depth, no color) projects as the bare preset string.
+        if ((width is null || width == DefaultBevelSize) &&
+            (height is null || height == DefaultBevelSize) &&
+            depth is null && depthColor is null)
+        {
+            return preset;
+        }
+
+        return new
+        {
+            Preset = preset,
+            Width = width is null ? null : Units.Inv($"{width.Value / EmuPerPoint:0.###}pt"),
+            Height = height is null ? null : Units.Inv($"{height.Value / EmuPerPoint:0.###}pt"),
+            Depth = depth is null ? null : Units.Inv($"{depth.Value / EmuPerPoint:0.###}pt"),
+            DepthColor = depthColor,
+        };
+    }
+
+    /// <summary>Maps an a:bevelT @prst back to its bevel preset token; null when absent or unrecognized.</summary>
+    private static string? BevelPresetToken(A.BevelPresetValues? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+
+        return val.Value switch
+        {
+            _ when val.Value == A.BevelPresetValues.RelaxedInset => "relaxedInset",
+            _ when val.Value == A.BevelPresetValues.Circle => "circle",
+            _ when val.Value == A.BevelPresetValues.Slope => "slope",
+            _ when val.Value == A.BevelPresetValues.Cross => "cross",
+            _ when val.Value == A.BevelPresetValues.Angle => "angle",
+            _ when val.Value == A.BevelPresetValues.SoftRound => "softRound",
+            _ when val.Value == A.BevelPresetValues.Convex => "convex",
+            _ when val.Value == A.BevelPresetValues.CoolSlant => "coolSlant",
+            _ when val.Value == A.BevelPresetValues.Divot => "divot",
+            _ when val.Value == A.BevelPresetValues.Riblet => "riblet",
+            _ when val.Value == A.BevelPresetValues.HardEdge => "hardEdge",
+            _ when val.Value == A.BevelPresetValues.ArtDeco => "artDeco",
+            _ => null,
         };
     }
 
@@ -525,8 +716,17 @@ internal static class PptxEffects
         if (effectList is null)
         {
             effectList = new A.EffectList();
-            // a:effectLst is the last child of spPr (after fill, ln, …).
-            properties.Append(effectList);
+            // a:effectLst precedes a:sp3d (the 3-D family) in spPr; when a bevel has already put an
+            // a:sp3d there, insert before it, else append (a:effectLst is otherwise the last child).
+            var anchor = properties.GetFirstChild<A.Shape3DType>();
+            if (anchor is not null)
+            {
+                properties.InsertBefore(effectList, anchor);
+            }
+            else
+            {
+                properties.Append(effectList);
+            }
         }
 
         // Replace any existing effect of the same element type (idempotent set).
