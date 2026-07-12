@@ -44,6 +44,7 @@ public static class HelpTopics
                 - docx/link       hyperlinks, bookmarks, footnotes (M3)
                 - docx/section    page size/orientation/margins + columns (M3/M6)
                 - docx/equation   inline/display LaTeX equations (M6)
+                - properties-docx the COMPLETE settable-prop reference for docx (every run/paragraph/table prop incl. emphasisMark + underline styles)
                 - pptx/equation   LaTeX equations in a slide text box (M10)
                 - xlsx/cell       cell element: settable props incl. hyperlink (M5)
                 - xlsx/table      Excel Tables (ListObjects) + totals + structured refs (M6)
@@ -56,6 +57,7 @@ public static class HelpTopics
                 - xlsx/slicer     table-column / pivot-field slicers (M8)
                 - xlsx/image      anchored pictures: add type "image"
                 - xlsx/sheet      freeze/autoFilter/print setup, names, streaming read+write (M3/M6)
+                - properties-xlsx the COMPLETE settable-prop reference for xlsx (every cell/sheet prop incl. tabColor + margins)
                 - pptx/shape      shape element: settable props incl. preset geometry/z-order, hyperlink/action (M8)
                 - pptx/table      native tables: merges, looks, columnWidths (M5)
                 - pptx/animation  entrance/emphasis/exit effects + timeline reorder (M4/M5/M6)
@@ -68,7 +70,8 @@ public static class HelpTopics
                 - pptx/image      pictures: add type "image"
                 - pptx/chart      native charts + cross-doc dataFrom (M3, kinds expanded 1.1)
                 - pptx/media      embedded audio/video: add type "media" (1.1)
-                - pptx/effect     shape effects: shadow/glow/reflection/outline (1.1)
+                - pptx/effect     shape effects: shadow/glow/reflection/outline (1.1) + softEdge/innerShadow/bevel/scene3d (1.23–1.26)
+                - properties-pptx the COMPLETE settable-prop reference for pptx (every shape/text prop incl. bevel, scene3d, innerShadow, softEdge)
                 - smartart        create + read a SmartArt diagram on a slide (1.2)
                 - connectors      connectors + group/ungroup shapes on a slide (1.2)
                 - number-formats  named numberFormat presets for xlsx cells (1.2)
@@ -584,8 +587,10 @@ public static class HelpTopics
                 linkText (M8) wraps the shape's runs in a text hyperlink (same target grammar as hyperlink).
                 z-order (M3): {"op":"move","path":"/slide[1]/shape[@id=5]","position":"front|back|forward|backward"} (front = painted last/topmost)
                 add slides with type "slide" on path "/"; render→look→fix: office_render {to:"svg", scope:"/slide[N]"} after each visual change.
+                This lists the COMMON props only — the COMPLETE settable-shape vocabulary (all fills incl. gradient/picture/pattern,
+                adjust handles, softEdge/innerShadow/bevel/scene3d, text-body insets, …) lives in office_help {topic:"properties-pptx"}.
                 """,
-                ["edit-ops", "addressing"]),
+                ["edit-ops", "properties-pptx", "addressing"]),
 
             ["docx/list"] = (
                 """
@@ -782,12 +787,16 @@ public static class HelpTopics
 
             ["pptx/effect"] = (
                 """
-                ## pptx text & shape effects (1.1) — shape-level set
-                {"op":"set","path":"/slide[1]/shape[@id=5]","props":{"shadow"?,"glow"?,"reflection"?,"outline"?}}
-                Each effect takes true (default accent) or a hex/named color (shadow/glow/outline tint; reflection is colorless);
-                false clears it. Effects write into the shape's a:effectLst; outline adds a line border.
+                ## pptx shape effects — shape-level set (full current list: office_help {topic:"properties-pptx"})
+                {"op":"set","path":"/slide[1]/shape[@id=5]","props":{"shadow"?,"glow"?,"reflection"?,"outline"?,
+                 "softEdge"?,"innerShadow"?,"bevel"?,"scene3d"?}}
+                1.1 core: shadow/glow/reflection/outline — each true (default accent) or a hex/named color (shadow/glow/outline
+                  tint; reflection is colorless); false clears it. These write into the shape's a:effectLst; outline adds a line border.
+                Since 1.1: softEdge (1.23, blur radius), innerShadow (1.24), bevel (1.25 — bevelTop/bevelBottom/contour/material/z),
+                  scene3d (1.26 — camera/lightRig) landed too; the 3-D pair emits a:sp3d + a:scene3d.
+                This topic is a summary — the COMPLETE, always-current effect+3-D vocabulary lives in office_help {topic:"properties-pptx"}.
                 """,
-                ["pptx/shape", "edit-ops"]),
+                ["pptx/shape", "properties-pptx", "edit-ops"]),
 
             ["docx/citation"] = (
                 """
@@ -802,12 +811,14 @@ public static class HelpTopics
 
             ["docx/effect"] = (
                 """
-                ## docx text effects (1.1) — run-level set
+                ## docx run text effects — run-level set (full run vocabulary: office_help {topic:"properties-docx"})
                 {"op":"set","path":"/body/p[1]/run[1]","props":{"shadow"?,"glow"?,"reflection"?,"outline"?}}
-                Emits the Word 2010 text effects (w14:shadow/glow/reflection/textOutline; outline aliases textOutline).
+                1.1 Word 2010 text effects (w14:shadow/glow/reflection/textOutline; outline aliases textOutline).
                 Each takes true (default) or an object: shadow {color}, glow {color,radius-pt}, reflection {transparency,size 0-100}, outline {color,width-pt}. false clears.
+                This topic covers only the run EFFECTS — the COMPLETE, always-current run/paragraph vocabulary (emphasisMark,
+                the underline styles, char spacing, highlight, …) lives in office_help {topic:"properties-docx"}.
                 """,
-                ["docx/paragraph", "edit-ops"]),
+                ["docx/paragraph", "properties-docx", "edit-ops"]),
 
             ["smartart"] = (
                 """
@@ -1104,9 +1115,28 @@ public static class HelpTopics
                 ["pptx/master", "pptx/slide"]),
         };
 
-    /// <summary>All topic names (index first, then alphabetical).</summary>
+    /// <summary>
+    /// The authoritative settable-property references. Their bodies are NOT inlined
+    /// here: they are the .md files OWNED on-disk by AIOffice.Cli, LINKED into this
+    /// assembly as embedded resources (see AIOffice.Mcp.csproj) and served verbatim.
+    /// This is the single source of truth shared by the CLI `help` verb and MCP
+    /// office_help — a new prop added to the .md reaches both surfaces at once and
+    /// the two cannot drift. Each entry maps a topic to its related topics.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string[]> EmbeddedTopics =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["properties-docx"] = ["docx/paragraph", "docx/effect", "edit-ops"],
+            ["properties-xlsx"] = ["xlsx/cell", "xlsx/sheet", "edit-ops"],
+            ["properties-pptx"] = ["pptx/shape", "pptx/effect", "edit-ops"],
+        };
+
+    /// <summary>All topic names (index first, then alphabetical) — inline + embedded.</summary>
     public static IReadOnlyList<string> Names { get; } =
-        [IndexTopic, .. Topics.Keys.Where(k => k != IndexTopic).Order(StringComparer.Ordinal)];
+        [IndexTopic,
+         .. Topics.Keys.Concat(EmbeddedTopics.Keys)
+                .Where(k => k != IndexTopic)
+                .Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// Resolves a topic (null/empty → index) to the <c>office_help</c> data payload,
@@ -1120,11 +1150,42 @@ public static class HelpTopics
             return new { topic = key.ToLowerInvariant(), doc = entry.Doc, related = entry.Related };
         }
 
+        // The property references are served from the linked CLI .md files, so the
+        // full current vocabulary is always in sync with the CLI's `help` verb.
+        if (EmbeddedTopics.TryGetValue(key, out var related))
+        {
+            return new { topic = key.ToLowerInvariant(), doc = LoadEmbedded(key), related };
+        }
+
         throw new AiofficeException(
             ErrorCodes.InvalidArgs,
             $"Unknown help topic: '{topic}'.",
             "Call office_help with no topic to list all topics.",
             candidates: Nearest(key));
+    }
+
+    /// <summary>
+    /// Loads a linked property .md by manifest-name suffix (matching the CLI's own
+    /// LoadTopic approach), decoupled from the RootNamespace/Link manifest prefix.
+    /// </summary>
+    private static string LoadEmbedded(string topic)
+    {
+        var assembly = typeof(HelpTopics).Assembly;
+        var suffix = $".{topic}.md";
+        var resourceName = assembly
+            .GetManifestResourceNames()
+            .FirstOrDefault(n => n.EndsWith(suffix, StringComparison.Ordinal));
+        if (resourceName is null)
+        {
+            throw new AiofficeException(
+                ErrorCodes.InternalError,
+                $"Embedded help topic missing: {topic}.",
+                "This is a packaging bug in aioffice; call office_help with no topic for the inline topics meanwhile.");
+        }
+
+        using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static IReadOnlyList<string> Nearest(string requested)

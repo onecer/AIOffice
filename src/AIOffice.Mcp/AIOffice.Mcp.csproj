@@ -19,4 +19,18 @@
     -->
     <PackageReference Include="ModelContextProtocol.Core" Version="1.4.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!--
+      Single source of truth for the settable-property reference.  The .md docs
+      are OWNED on-disk by AIOffice.Cli (its `help` verb embeds & serves them);
+      AIOffice.Mcp cannot ProjectReference AIOffice.Cli (that is a dependency
+      CYCLE — the CLI references us), so we LINK the same files in as embedded
+      resources without moving them.  office_help serves them by suffix match
+      (name.EndsWith(".properties-<fmt>.md")), so both surfaces read the exact
+      same bytes and cannot drift.
+    -->
+    <EmbeddedResource Include="..\AIOffice.Cli\HelpTopics\properties-docx.md" Link="HelpTopics\properties-docx.md" />
+    <EmbeddedResource Include="..\AIOffice.Cli\HelpTopics\properties-xlsx.md" Link="HelpTopics\properties-xlsx.md" />
+    <EmbeddedResource Include="..\AIOffice.Cli\HelpTopics\properties-pptx.md" Link="HelpTopics\properties-pptx.md" />
+  </ItemGroup>
 </Project>
