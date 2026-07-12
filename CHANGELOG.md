@@ -70,6 +70,29 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.25.0 — reach past effectLst: pptx shape bevel/3-D · xlsx page margins · docx emphasis marks (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each pick opens a fresh surface, byte-stable on
+legacy paths. Agents that target 1.24.0 are byte-for-byte compatible with 1.25.0. (pptx's `bevel` is the
+first entry into the 3-D family, `a:sp3d`, which lives outside the now-complete `a:effectLst`.)
+
+### Added — pptx
+
+- **Shape bevel / 3-D**: `bevel` on a shape `set`/`add` writes `a:sp3d/a:bevelT` — a preset name (12
+  presets) or `{preset?, width?, height?, depth?, depthColor?}`; `false` clears. Read back on `get`,
+  discriminated (string vs object) like `outline`.
+
+### Added — xlsx
+
+- **Sheet page margins (write)**: a `margins` object (`{top?,bottom?,left?,right?,header?,footer?}` in
+  inches) on the sheet-level `set` writes `<pageMargins>`, completing the read-only print-margins surface.
+  Reported on `get` only when non-default.
+
+### Added — docx
+
+- **Emphasis marks**: `emphasisMark` (`none|dot|comma|circle|underDot`) on a run or run-bearing paragraph
+  writes `w:em` (CJK/academic emphasis dots), fanning out on a paragraph like `characterSpacing`.
+
 ## 1.24.0 — complete the families: pptx inner-shadow · xlsx tab color · docx underline styles (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool — each pick fills a family/vocabulary gap, byte-stable

@@ -69,6 +69,7 @@ listing the supported set; capabilities not built yet answer
 | superscript      | bool   | raise to superscript (`w:vertAlign@val="superscript"`); setting it clears subscript (one shared element); `false` returns to baseline |
 | subscript        | bool   | lower to subscript (`w:vertAlign@val="subscript"`); mutually exclusive with superscript |
 | characterSpacing | number | expand/condense letter spacing in **points** (`w:spacing@val`, in twentieths — `points*20`); may be **negative** to condense. `get` reports points |
+| emphasisMark     | string | emphasis mark (**1.25**, `w:em`): `none` `dot` `comma` `circle` `underDot` — CJK/academic emphasis dots; set on a paragraph fans out to its runs |
 
 ## table / tr / tc
 

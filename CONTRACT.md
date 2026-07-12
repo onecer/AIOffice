@@ -1215,6 +1215,40 @@ Each pick fills a family/vocabulary gap; legacy branches stay first-in-code and 
 
 Agents that target the 1.23.0 surface are byte-for-byte compatible with 1.24.0.
 
+## 7y. 1.25.0 — reach past effectLst: pptx shape bevel/3-D, xlsx page margins, docx emphasis marks (additive, surface 1.0)
+
+Package **1.25.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each pick opens a fresh surface (pptx enters the 3-D family, xlsx completes print margins, docx adds the
+last clean character-typography prop); legacy branches stay first-in-code and byte-stable.
+
+### pptx — shape bevel / 3-D
+
+- **A shape `set`/`add` accepts an optional `bevel`** (§6, additive) → `a:spPr/a:sp3d/a:bevelT` — the FIRST
+  entry into the 3-D family, which lives OUTSIDE the (now-complete) `a:effectLst`. A bare preset string
+  (`circle`, `relaxedInset`, `slope`, `cross`, `angle`, `softRound`, `convex`, `coolSlant`, `divot`,
+  `riblet`, `hardEdge`, `artDeco`) uses a default 6pt bevel; `{preset?, width?, height?, depth?,
+  depthColor?}` tunes the bevel size + extrusion depth/color; `false`/`''` clears (removes `a:sp3d`). `get`
+  projects `bevel` discriminated like `outline`/`innerShadow` (preset string vs object; null when absent).
+  Works on shapes/pictures/connectors; a group → `unsupported_feature`. An unknown preset → `invalid_args`
+  with the 12-preset candidate list. (bevelB / contour / material / scene3d are out of scope for this slot.)
+
+### xlsx — sheet page margins (write)
+
+- **The sheet-level `set` accepts an optional `margins`** (§5, additive): `{top?, bottom?, left?, right?,
+  header?, footer?}` in **inches** → `worksheet` `<pageMargins>`, completing the previously read-only print
+  margins. A partial object leaves the other edges untouched. `get` on the sheet reports `margins` only
+  when they deviate from the default (a default-margin sheet omits the key — byte-identical to 1.24). A
+  non-object / negative / NaN edge, or `margins` on a cell/range, → `invalid_args`.
+
+### docx — emphasis marks
+
+- **The `emphasisMark` prop** (§4, additive) accepts `none | dot | comma | circle | underDot` on a run and
+  on a run-bearing paragraph (fanning out to its runs, like `characterSpacing`) → `w:em` on the run's
+  `rPr`. `get` reports the token when set (it joins the fixed run/paragraph-props projection, `null` when
+  unset, exactly like `characterSpacing`). An unknown token → `invalid_args` with candidates.
+
+Agents that target the 1.24.0 surface are byte-for-byte compatible with 1.25.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

@@ -190,6 +190,10 @@ tint; `reflection` is colorless); `false` clears it. `outline` adds a line
 border. `softEdge` (**1.23**) blurs the shape edge: `true` = 2.5pt, or a size
 like `"5pt"`; `false` clears it. `innerShadow` (**1.24**) casts a recessed shadow:
 a hex (default black), or `{color?, blur?, dist?, dir?}`; `false` clears it.
+`bevel` (**1.25**, a 3-D `a:sp3d`, not an effectLst child) rounds the shape edges:
+a preset name (`circle` `relaxedInset` `slope` `cross` `angle` `softRound` `convex`
+`coolSlant` `divot` `riblet` `hardEdge` `artDeco`), or `{preset?, width?, height?,
+depth?, depthColor?}`; `false` clears it.
 
 ## transition (M3, 1.1 expanded, slide-level set)
 

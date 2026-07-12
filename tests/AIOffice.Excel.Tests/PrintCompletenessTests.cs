@@ -482,7 +482,10 @@ public sealed class PrintCompletenessTests : ExcelTestBase
     {
         var file = CreateDataWorkbook();
         var ps = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!;
-        Assert.Null(ps["margins"]); // deviation-gated: default sheets gain no key.
+        // Deviation-gated: the key is genuinely ABSENT (WhenWritingNull drops the null in the
+        // anon PageSetupInfo) — assert on the key set so a future refactor to a null-serializing
+        // Dictionary can't silently add a 'margins':null field to every legacy sheet.
+        Assert.False(ps.AsObject().ContainsKey("margins"));
     }
 
     [Fact]
@@ -504,7 +507,7 @@ public sealed class PrintCompletenessTests : ExcelTestBase
         AssertValidatorClean(file);
         Assert.Equal(golden, RawMargins());
         var ps = OkData(Handler.Get(Ctx(file, ("path", "/Sheet1"))))["pageSetup"]!;
-        Assert.Null(ps["margins"]);
+        Assert.False(ps.AsObject().ContainsKey("margins"));
     }
 
     [Fact]
