@@ -92,6 +92,7 @@ props:{value:"=SUM(SalesData)"}}` evaluates and caches a real value.
 | prop                    | target      | notes                              |
 |-------------------------|-------------|------------------------------------|
 | freezeRows, freezeCols  | sheet       | 0 clears that axis                 |
+| tabColor                | sheet       | hex tab color (**1.24**); `''` clears |
 | autoFilter              | range       | bool toggles the dropdowns; an object/array applies real criteria (**1.12**, see **autofilter criteria**) |
 | orientation, paperSize  | sheet       | landscape/portrait; A4/Letter/…    |
 | fitToWidth, fitToHeight | sheet       | print scaling, pages               |

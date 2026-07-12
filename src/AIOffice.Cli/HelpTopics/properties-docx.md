@@ -51,7 +51,7 @@ listing the supported set; capabilities not built yet answer
 | text      | string | the run text                |
 | bold      | bool   |                             |
 | italic    | bool   |                             |
-| underline | bool   |                             |
+| underline | bool \| string | `true`/`false`, or a style name (**1.24**): `double` `thick` `dotted` `dash` `dashLong` `dotDash` `dotDotDash` `wave` `wavyHeavy` `wavyDouble` `words` `single` `none` |
 | size      | number | points                      |
 | color     | string | hex RGB, e.g. FF0000        |
 | font      | string | font family name            |

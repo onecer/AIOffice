@@ -70,6 +70,30 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.24.0 — complete the families: pptx inner-shadow · xlsx tab color · docx underline styles (additive)
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool — each pick fills a family/vocabulary gap, byte-stable
+on legacy paths. Agents that target 1.23.0 are byte-for-byte compatible with 1.24.0. (With pptx
+inner-shadow the shape `a:effectLst` effect family — shadow/glow/reflection/outline/softEdge/innerShadow —
+is now complete.)
+
+### Added — pptx
+
+- **Shape inner-shadow effect**: `innerShadow` on a shape `set`/`add` writes `a:innerShdw` (a hex/`true`,
+  or `{color?, blur?, dist?, dir?}`; `false` clears) — the last slot in the effect family. Read back on
+  `get`, discriminated (string vs object) like `outline`.
+
+### Added — xlsx
+
+- **Worksheet tab color**: `tabColor` on the sheet-level `set` writes `sheetPr/tabColor` (a hex; `''`
+  clears), reported on `get` when set.
+
+### Added — docx
+
+- **Underline styles**: the `underline` prop widens from `bool` to also accept a style name
+  (`double`/`thick`/`dotted`/`dash`/`wave`/…) on run and style-definition set. The bool form stays
+  byte-identical; `get` reads a bool for single/none and the style string otherwise.
+
 ## 1.23.1 — patch: wire the CSV export delimiter through the CLI
 
 `surfaceVersion` stays **1.0**; byte-for-byte compatible with 1.23.0.

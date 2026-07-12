@@ -184,11 +184,12 @@ path; `read {view:"embeds"}` lists the media part.
 ## text & shape effects (1.1, shape-level set)
 
 `{op:"set", path:"/slide[1]/shape[@id=5]", props:{shadow?, glow?,
-reflection?, outline?, softEdge?}}` writes into the shape's `a:effectLst`. Each effect
+reflection?, outline?, softEdge?, innerShadow?}}` writes into the shape's `a:effectLst`. Each effect
 takes `true` (default accent) or a hex/named color (`shadow`/`glow`/`outline`
 tint; `reflection` is colorless); `false` clears it. `outline` adds a line
 border. `softEdge` (**1.23**) blurs the shape edge: `true` = 2.5pt, or a size
-like `"5pt"`; `false` clears it.
+like `"5pt"`; `false` clears it. `innerShadow` (**1.24**) casts a recessed shadow:
+a hex (default black), or `{color?, blur?, dist?, dir?}`; `false` clears it.
 
 ## transition (M3, 1.1 expanded, slide-level set)
 

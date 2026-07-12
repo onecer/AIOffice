@@ -1181,6 +1181,40 @@ branches stay first-in-code and byte-stable.
 
 Agents that target the 1.22.0 surface are byte-for-byte compatible with 1.23.0.
 
+## 7x. 1.24.0 — complete the families: pptx inner-shadow, xlsx tab color, docx underline styles (additive, surface 1.0)
+
+Package **1.24.0** keeps **`surfaceVersion 1.0`** and the entire §§1–7 surface — additive only.
+Each pick fills a family/vocabulary gap; legacy branches stay first-in-code and byte-stable.
+
+### pptx — shape inner-shadow effect
+
+- **A shape `set`/`add` accepts an optional `innerShadow`** (§6, additive) → `a:innerShdw` — the last
+  unfilled slot in the shadow/glow/reflection/outline/softEdge effect family, which is now complete. A
+  bare hex tints it (default black); `true` uses PowerPoint's default geometry; `false`/`''` clears it and
+  drops an empty `a:effectLst`; a `{color?, blur?, dist?, dir?}` object tunes blur/distance/direction.
+  `get` projects `innerShadow` discriminated like the shipped `outline`: the bare hex string for default
+  geometry, the object when blur/dist/dir differ (null when absent → key drops). Works on shapes,
+  pictures, connectors; a group → `unsupported_feature`.
+
+### xlsx — worksheet tab color
+
+- **The sheet-level `set` accepts an optional `tabColor`** (§5, additive) → `sheetPr/tabColor` (a hex,
+  with or without a leading `#`); `''` clears it. `get` on the sheet reports `tabColor` (resolved rgb hex)
+  only when set — a sheet with no tab color omits the key (byte-identical to 1.23). A bad hex, or
+  `tabColor` on a cell/range, → `invalid_args`.
+
+### docx — underline styles
+
+- **The `underline` prop widens from `bool` to also accept a style name** (§4, additive) on run set/add
+  and on style-definition set: `double | thick | dotted | dash | dashLong | dotDash | dotDotDash | wave |
+  wavyHeavy | wavyDouble | words | single | none`. The bool form is byte-identical to 1.23
+  (`true`→`single`, `false`→`none`). `get` is discriminated: a single/absent underline still reads the
+  bool (`true`/`null`); a non-single style reads its style **string** — so only non-single content (which
+  the tool did not author before 1.24) changes value-shape, following the shipped `outline` precedent. An
+  unknown style → `invalid_args` with candidates.
+
+Agents that target the 1.23.0 surface are byte-for-byte compatible with 1.24.0.
+
 ## 8. What is experimental (NOT frozen)
 
 These are explicitly outside the frozen contract and may change within the 1.0 line:

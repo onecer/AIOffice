@@ -191,6 +191,24 @@ public sealed class UnderlineStyleTests : WordTestBase
         Assert.NotEmpty(matches);
     }
 
+    [Fact]
+    public void Query_underline_true_matches_single_but_not_a_non_single_style()
+    {
+        // The selector is discriminated with the read: run[underline=true] still matches a
+        // (tool-authored or foreign) SINGLE underline — byte-stable — but a foreign DOUBLE
+        // underline now surfaces as underline='double', so run[underline=true] does NOT match it
+        // (query run[underline=double] to find those). Locks the value-shape change to non-single.
+        var single = CreateDoc("single.docx", title: "Single");
+        Edit(single, """[{"op":"set","path":"/body/p[1]/run[1]","props":{"text":"a","underline":true}}]""");
+        Assert.NotEmpty(Data(Handler.Query(Ctx(single, new JsonObject { ["selector"] = "run[underline=true]" })))["matches"]!.AsArray());
+
+        var dbl = CreateDoc("double.docx", title: "Double");
+        Edit(dbl, """[{"op":"set","path":"/body/p[1]/run[1]","props":{"text":"b"}}]""");
+        InjectFirstRunUnderline(dbl, UnderlineValues.Double);
+        Assert.Empty(Data(Handler.Query(Ctx(dbl, new JsonObject { ["selector"] = "run[underline=true]" })))["matches"]!.AsArray());
+        Assert.NotEmpty(Data(Handler.Query(Ctx(dbl, new JsonObject { ["selector"] = "run[underline=double]" })))["matches"]!.AsArray());
+    }
+
     /// <summary>Writes a raw w:u @val into the first run, simulating foreign/non-tool content.</summary>
     private static void InjectFirstRunUnderline(string file, UnderlineValues val)
     {
