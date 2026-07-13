@@ -32,6 +32,12 @@ public sealed class FileVerbs
         {
             ["kind"] = handler.Kind.ToString().ToLowerInvariant(),
             ["title"] = args.GetOption("title"),
+            // --from csv/tsv/txt import: forward the delimiter override so
+            // `create x.xlsx --from data.txt --delimiter semicolon` splits on ';'
+            // instead of silently falling back to ExcelCsv.Sniff (mirrors the
+            // v1.23 read/--delimiter forward). MCP office_create.from already
+            // forwards it; this closes the CLI parity gap.
+            ["delimiter"] = args.GetOption("delimiter"),
         });
 
         // M5 markdown/csv bridge (same routing as MCP office_create.from):
@@ -52,6 +58,12 @@ public sealed class FileVerbs
             ["sheet"] = args.GetOption("sheet"),
             ["delimiter"] = args.GetOption("delimiter"),
             ["maxBytes"] = ParseOptionalInt(args, "max-bytes"),
+            // structure view (docx): bound the emitted tree depth (default 3);
+            // handler reads ctx["depth"]. MCP office_read can already pass it.
+            ["depth"] = ParseOptionalInt(args, "depth"),
+            // stats/text (xlsx): force the SAX/streaming path even on a small
+            // workbook; otherwise only ExcelStreaming.IsLarge auto-triggers.
+            ["stream"] = args.HasFlag("stream"),
         });
         var handler = ResolveHandler(file, kindOverride: null);
 
@@ -88,7 +100,16 @@ public sealed class FileVerbs
             _ = DocPath.Parse(pathText); // fail fast with the grammar hint
         }
 
-        var ctx = Context(file, new JsonObject { ["path"] = pathText });
+        var ctx = Context(file, new JsonObject
+        {
+            ["path"] = pathText,
+            // xlsx range gets cap at DefaultMaxRangeCells and warn "raise
+            // maxCells"; forward the knob so the CLI can actually raise it
+            // (ARG-NAME max-cells -> maxCells). MCP office_get already can.
+            ["maxCells"] = ParseOptionalInt(args, "max-cells"),
+            // force the streaming cell/range path (else IsLarge auto-triggers).
+            ["stream"] = args.HasFlag("stream"),
+        });
         return ResolveHandler(file, kindOverride: null).Get(ctx);
     }
 

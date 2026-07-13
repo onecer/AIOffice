@@ -23,7 +23,7 @@
 class Aioffice < Formula
   desc "AI-native CLI and MCP for .docx/.xlsx/.pptx, no Office install needed"
   homepage "https://github.com/onecer/AIOffice"
-  version "1.27.0"
+  version "1.27.1"
   license "Apache-2.0"
 
   # Each platform downloads the matching prebuilt single-file binary from the
@@ -31,12 +31,12 @@ class Aioffice < Formula
   on_macos do
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-arm64"
-      # asset: aioffice-mac-arm64 (v1.27.0 SHA256SUMS)
+      # asset: aioffice-mac-arm64 (v1.27.1 SHA256SUMS)
       sha256 "b2a1238d32aa220fe25990e60773ced034caaa3dde25f0052c250fb03f77c10c"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-mac-x64"
-      # asset: aioffice-mac-x64 (v1.27.0 SHA256SUMS)
+      # asset: aioffice-mac-x64 (v1.27.1 SHA256SUMS)
       sha256 "26bc5eb063c1cebcab25494ab463087c5b8c0ce24113934210afc69c8c1818cc"
     end
   end
@@ -44,12 +44,12 @@ class Aioffice < Formula
   on_linux do
     on_arm do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-arm64"
-      # asset: aioffice-linux-arm64 (v1.27.0 SHA256SUMS)
+      # asset: aioffice-linux-arm64 (v1.27.1 SHA256SUMS)
       sha256 "84fd0e871a2187cbefbf5f126987bc86705805d5416b313bcb93e84e7335aeaa"
     end
     on_intel do
       url "https://github.com/onecer/AIOffice/releases/download/v#{version}/aioffice-linux-x64"
-      # asset: aioffice-linux-x64 (v1.27.0 SHA256SUMS)
+      # asset: aioffice-linux-x64 (v1.27.1 SHA256SUMS)
       sha256 "d684f2b9bc55a1d5fcc86d3aa9333e7f940155d9aa1bbc278fc403a257def861"
     end
   end

@@ -7,17 +7,17 @@
 # verifies its SHA256 against the release SHA256SUMS, and installs it.
 #
 # Environment variables (all optional):
-#   VERSION       Release tag to install (e.g. v1.27.0). Default: latest release.
+#   VERSION       Release tag to install (e.g. v1.27.1). Default: latest release.
 #   AIOFFICE_BIN  Install directory.                    Default: $HOME/.local/bin
 #
 # Examples:
-#   VERSION=v1.27.0 sh install.sh
+#   VERSION=v1.27.1 sh install.sh
 #   AIOFFICE_BIN=/usr/local/bin sh install.sh
 set -eu
 
 REPO="onecer/AIOffice"
 # Fallback tag used only when the GitHub "latest" lookup fails and VERSION is unset.
-FALLBACK_VERSION="v1.27.0"
+FALLBACK_VERSION="v1.27.1"
 
 # ---------------------------------------------------------------------------
 # helpers

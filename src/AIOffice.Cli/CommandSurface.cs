@@ -44,18 +44,19 @@ public static class CommandSurface
     [
         new("create",
             "Create a new empty document (kind inferred from the file extension), or import one with --from (markdown→docx, csv→xlsx).",
-            "aioffice create <file> [--from notes.md|data.csv] [--kind docx|xlsx|pptx] [--title T]",
+            "aioffice create <file> [--from notes.md|data.csv] [--kind docx|xlsx|pptx] [--title T] [--delimiter comma|semicolon|tab]",
             [new("file", true, "Path of the document to create, inside the workspace.")],
             [
                 new("from", "<source>", "Import source: .md/.markdown → .docx (headings, lists, tables, links, code), .csv/.tsv → .xlsx (typed cells). Mismatched pairs fail with the valid matrix."),
                 new("kind", "docx|xlsx|pptx", "Override the document kind when the extension is ambiguous."),
                 new("title", "<text>", "Document title (core properties / first slide title / first sheet name)."),
+                new("delimiter", "comma|semicolon|tab", "csv/tsv --from import: field delimiter to split on (default: sniffed from the source)."),
             ],
             "office_create"),
 
         new("read",
             "Read a document as outline, plain text, stats, structure, properties or embeds (docx adds revisions/comments/styles/markdown/fields; xlsx adds csv/styles).",
-            "aioffice read <file> [--view outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--delimiter comma|semicolon|tab] [--max-bytes N]",
+            "aioffice read <file> [--view outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv] [--range a..b] [--sheet NAME] [--delimiter comma|semicolon|tab] [--max-bytes N] [--depth N] [--stream]",
             [new("file", true, "Document to read.")],
             [
                 new("view", "outline|text|stats|structure|properties|embeds|revisions|comments|styles|fields|markdown|csv",
@@ -64,6 +65,8 @@ public static class CommandSurface
                 new("sheet", "<name>", "csv view: which sheet to emit (default: the first sheet)."),
                 new("delimiter", "comma|semicolon|tab", "csv view: field delimiter to emit (default: comma; 1.23)."),
                 new("max-bytes", "N", "Truncate the response payload to at most N bytes."),
+                new("depth", "N", "structure view (docx): bound the emitted tree depth (default: 3)."),
+                new("stream", null, "stats/text view (xlsx): force the low-memory streaming path even on a small workbook (auto-enabled on large files)."),
             ],
             "office_read"),
 
@@ -79,12 +82,15 @@ public static class CommandSurface
 
         new("get",
             "Get one node and its properties by canonical path.",
-            "aioffice get <file> <path>",
+            "aioffice get <file> <path> [--max-cells N] [--stream]",
             [
                 new("file", true, "Document to inspect."),
                 new("path", true, "Canonical path, e.g. /body/p[3] or /Sheet1/A1."),
             ],
-            [],
+            [
+                new("max-cells", "N", "xlsx range get: cap the emitted cells (default: 1000). Raise it when the result_truncated warning fires."),
+                new("stream", null, "xlsx cell/range get: force the low-memory streaming path even on a small workbook (auto-enabled on large files)."),
+            ],
             "office_get"),
 
         new("edit",
@@ -122,6 +128,7 @@ public static class CommandSurface
                 new("scope", "<path>", "Render only the node at this path, e.g. /slide[2]."),
                 new("engine", "chromium|soffice|auto", "png/pdf engine (default chromium). soffice = true-fidelity via LibreOffice (needs it installed; png also needs pdftoppm/poppler); auto = soffice if present else chromium. svg/html/text fall back to chromium with an engine_fallback warning. See 'aioffice help render-engines'."),
                 new("o", "<file>", "Write the rendering to this file instead of inlining it in the envelope (png/pdf default: source path with .png/.pdf)."),
+                new("out", "<file>", "Alias for -o."),
             ],
             "office_render"),
 
@@ -140,6 +147,7 @@ public static class CommandSurface
                 new("data", "<json|@file>", "A JSON object of merge values fills ONE document; a JSON array of record objects runs a mail merge — one merge per record (v1.4)."),
                 new("o", "<file>", "Write the merged document here (default: in place). Single-object fill, or the combined mail-merge doc when --output is omitted for an array."),
                 new("output", "<pattern>", "Mail-merge (array --data): one output document per record. {n} = 1-based record index, {Field} = that record's value, e.g. --output \"letter-{n}.docx\" or \"letters/{Name}.docx\". Every expanded path is sandbox-resolved; an escaping pattern is denied. Omit for a single combined document (one next-page section per record). See 'aioffice help mail-merge'."),
+                new("out", "<file>", "Alias for -o (single-document fill)."),
             ],
             "office_template"),
 

@@ -39,6 +39,10 @@ public static class ArgParser
         "regex", "match-case", "whole-word",
         // preview mark/unmark flags.
         "tofix", "all",
+        // presence-only flags read via HasFlag: audit --fix, read/get --stream
+        // (1.27.1). Listed so a non-terminal --fix/--stream never consumes the
+        // following token as a value.
+        "fix", "stream",
     };
 
     public static ParsedArgs Parse(IReadOnlyList<string> argv)

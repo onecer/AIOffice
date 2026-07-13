@@ -31,6 +31,23 @@ public class ArgParserTests
     }
 
     [Fact]
+    public void Stream_and_fix_are_boolean_flags_and_never_eat_the_next_token()
+    {
+        // 1.27.1: read/get --stream and audit --fix are presence-only (read via
+        // HasFlag). Listed in BooleanFlags so a NON-terminal --stream/--fix never
+        // swallows the following token — the file/path positional stays intact.
+        var read = ArgParser.Parse(["read", "--stream", "book.xlsx", "--view", "stats"]);
+        Assert.True(read.HasFlag("stream"));
+        Assert.Equal("true", read.GetOption("stream"));
+        Assert.Equal(["book.xlsx"], read.Positionals);
+        Assert.Equal("stats", read.GetOption("view"));
+
+        var audit = ArgParser.Parse(["audit", "--fix", "report.docx"]);
+        Assert.True(audit.HasFlag("fix"));
+        Assert.Equal(["report.docx"], audit.Positionals);
+    }
+
+    [Fact]
     public void Supports_equals_syntax_and_short_flags()
     {
         var args = ArgParser.Parse(["render", "deck.pptx", "--to=svg", "-o", "out.svg"]);

@@ -70,6 +70,45 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.27.1 — patch: close CLI/MCP flag-forwarding parity gaps + a CLI integration test layer
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool/schema — this is a CLI-plumbing hardening patch, a
+follow-on to the v1.23.1 `read --delimiter` silent-drop fix. An audit of every CLI verb cross-referenced
+its `CommandSurface` declared options against the flags `FileVerbs` actually forwards into the handler
+`ctx` against the ctx keys the handlers read. The classic v1.23.1 direction (a *declared* flag never
+forwarded) was clean; the audit surfaced the **inverse** — knobs the docx/xlsx handlers already read and
+that MCP could already pass, but that the CLI had no declared, forwarded way to set (a CLI/MCP parity
+break). All five are now wired, and a new end-to-end test layer drives the real `FileVerbs` so this class
+of drop fails a test instead of shipping silent.
+
+### Fixed — CLI flag forwarding
+
+- **`create --delimiter comma|semicolon|tab`** — the `--from data.csv` importer read `ctx["delimiter"]`
+  (MCP `office_create.from` already passed it), but the CLI neither declared nor forwarded it, so a
+  locale CSV was always split by the sniffer. `create` now forwards it.
+- **`get --max-cells N`** — an xlsx range get caps at 1000 cells and the truncation warning literally says
+  "raise maxCells", yet the CLI had no flag to raise it (MCP could). `get` now declares/forwards it.
+- **`read --depth N`** — the docx `structure` view read `ctx["depth"]` (default 3) but the CLI was pinned
+  to 3; now settable.
+- **`read --stream` / `get --stream`** — force the low-memory SAX path even on a small workbook (previously
+  only the large-file auto-trigger could; MCP could force it). Now a declared flag on both.
+
+### Added — tests
+
+- **`CliIntegrationTests`** (30 cases) drive the real `FileVerbs` via `ArgParser.Parse([...])` and read the
+  returned envelope back, so a declared-but-unforwarded flag fails here even though the handler-level tests
+  (which inject the ctx directly) stay green — closing the blind spot that hid the v1.23.1 drop.
+
+### Improved — parser
+
+- The presence-only flags `--stream` (read/get) and `--fix` (audit) are now in `ArgParser`'s boolean-flag
+  set, so a non-terminal `--stream`/`--fix` never swallows the following token. Usage strings and the
+  `create --delimiter` help hint were corrected to match the accepted source matrix.
+- `render`/`template` now **declare** the `--out` alias for `-o` in `CommandSurface` so `schema`/`help`
+  match the parser. This is documentation only — `FileVerbs` already accepted `--out` (with `-o` taking
+  precedence when both are given); no behavior changes. (The `office_*` MCP tool schemas are unaffected —
+  `--out`/`-o` are CLI-only surface; `SchemaConsistencyTests` stays byte-identical.)
+
 ## 1.27.0 — prop discoverability: office_help serves the authoritative property references (additive)
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool/schema — this enriches the existing `office_help`
