@@ -20,26 +20,34 @@ public sealed partial class ExcelHandler
         using var workbook = OpenWorkbook(file);
         var sections = ResolveTextSections(workbook, ArgString(ctx, "scope"));
 
-        switch (to)
+        var content = to switch
         {
-            case "html":
-                return Envelope.Ok(
-                    new { format = "html", content = RenderHtml(sections) },
-                    MetaFor(file, sw));
+            "html" => RenderHtml(sections),
+            "text" => BuildText(workbook, ArgString(ctx, "scope"), int.MaxValue).Item1,
+            _ => throw new AiofficeException(
+                ErrorCodes.UnsupportedFeature,
+                $"xlsx render supports html and text in v0; '{to}' lands in M1.",
+                "Render --to html and open it in a browser (or screenshot it) as a workaround.",
+                candidates: ["html", "text"]),
+        };
 
-            case "text":
-            {
-                var (content, _) = BuildText(workbook, ArgString(ctx, "scope"), int.MaxValue);
-                return Envelope.Ok(new { format = "text", content }, MetaFor(file, sw));
-            }
-
-            default:
-                throw new AiofficeException(
-                    ErrorCodes.UnsupportedFeature,
-                    $"xlsx render supports html and text in v0; '{to}' lands in M1.",
-                    "Render --to html and open it in a browser (or screenshot it) as a workaround.",
-                    candidates: ["html", "text"]);
+        // Byte-safe -o parity with docx (WordHandler.Render) / pptx: with no
+        // --output the inline envelope is returned unchanged; with --output the
+        // rendered text is written to the resolved path and reported as 'written'.
+        var outputArg = ArgString(ctx, "output");
+        if (outputArg is null)
+        {
+            return Envelope.Ok(new { format = to, content }, MetaFor(file, sw));
         }
+
+        var outFile = ctx.Workspace.Resolve(outputArg);
+        if (Path.GetDirectoryName(outFile) is { Length: > 0 } dir)
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        File.WriteAllText(outFile, content);
+        return Envelope.Ok(new { format = to, content, written = outFile }, MetaFor(file, sw));
     });
 
     /// <summary>

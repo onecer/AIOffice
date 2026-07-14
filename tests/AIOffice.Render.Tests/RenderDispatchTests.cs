@@ -11,7 +11,13 @@ namespace AIOffice.Render.Tests;
 /// </summary>
 internal sealed class StubHandler : IFormatHandler
 {
-    public StubHandler(DocumentKind kind) => Kind = kind;
+    private readonly Func<CommandContext, Envelope>? _render;
+
+    public StubHandler(DocumentKind kind, Func<CommandContext, Envelope>? render = null)
+    {
+        Kind = kind;
+        _render = render;
+    }
 
     public DocumentKind Kind { get; }
 
@@ -30,7 +36,7 @@ internal sealed class StubHandler : IFormatHandler
     public Envelope Render(CommandContext ctx)
     {
         RenderCalls++;
-        return Envelope.Ok(new { content = "<p>native</p>" });
+        return _render?.Invoke(ctx) ?? Envelope.Ok(new { content = "<p>native</p>" });
     }
 
     public Envelope Validate(CommandContext ctx) => throw new NotSupportedException();
@@ -100,6 +106,23 @@ public sealed class RenderDispatchTests
 
         Assert.True(result.IsOk);
         Assert.Contains(result.Meta.Warnings!, w => w.Code == RenderDispatch.EngineFallbackCode);
+    }
+
+    [Fact]
+    public void Soffice_engine_on_html_also_falls_back_to_native_with_the_warning()
+    {
+        // html was untested for the fallback (only svg + text were). The soffice
+        // engine renders png+pdf only, so an html target must produce native html
+        // + an engine_fallback warning — and this fires on ANY runner because
+        // Parse("soffice")->Soffice and the native target never probes soffice.
+        var handler = new StubHandler(DocumentKind.Xlsx);
+        var result = RenderDispatch.Execute(handler, Ctx("html", engine: "soffice"), "html");
+
+        Assert.True(result.IsOk);
+        Assert.Equal(1, handler.RenderCalls); // native engine produced the html
+        var warning = Assert.Single(result.Meta.Warnings!);
+        Assert.Equal(RenderDispatch.EngineFallbackCode, warning.Code);
+        Assert.Contains("png+pdf", warning.Message, StringComparison.Ordinal);
     }
 
     [Fact]

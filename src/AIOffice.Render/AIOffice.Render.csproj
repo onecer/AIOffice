@@ -5,4 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="../AIOffice.Core/AIOffice.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AIOffice.Render.Tests" />
+  </ItemGroup>
 </Project>

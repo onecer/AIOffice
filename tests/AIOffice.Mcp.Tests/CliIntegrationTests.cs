@@ -390,11 +390,62 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void Render_o_writes_the_output_file_for_xlsx()
+    {
+        // Regression guard: xlsx render used to ignore -o (returned inline content,
+        // wrote nothing) while docx/pptx honored it. It must now write the file and
+        // report the resolved path under 'written', exactly like docx.
+        SeedXlsxColumn("grid.xlsx");
+        var data = Ok(Run(_verbs.Render, "render", "grid.xlsx", "--to", "html", "-o", "grid.html"));
+        var written = data["written"]!.GetValue<string>();
+        Assert.True(File.Exists(written), $"expected {written} on disk");
+        // The written file carries the same html the inline envelope returned.
+        Assert.Equal(data["content"]!.GetValue<string>(), File.ReadAllText(written));
+    }
+
+    [Fact]
+    public void Render_without_o_stays_inline_for_xlsx()
+    {
+        // Byte-safety: with no -o the xlsx envelope is unchanged — inline content,
+        // and no 'written' field is emitted.
+        SeedXlsxColumn("grid.xlsx");
+        var data = Ok(Run(_verbs.Render, "render", "grid.xlsx", "--to", "html"));
+        Assert.NotNull(data["content"]);
+        Assert.Null(data["written"]);
+    }
+
+    [Fact]
+    public void Render_o_writes_the_output_file_for_pptx()
+    {
+        // pptx reports the written path under 'output' (its existing WithOptionalOutput
+        // shape), not 'written'; the parity that matters is that -o actually writes a
+        // file for all three formats.
+        Assert.True(_verbs.Create(ArgParser.Parse(["create", "deck.pptx"])).IsOk);
+        var data = Ok(Run(_verbs.Render, "render", "deck.pptx", "--to", "html", "-o", "deck.html"));
+        var written = data["output"]!.GetValue<string>();
+        Assert.True(File.Exists(written), $"expected {written} on disk");
+    }
+
+    [Fact]
     public void Render_bad_engine_is_invalid_args()
     {
         SeedDocxParagraphs("doc.docx");
         Assert.Equal(ErrorCodes.InvalidArgs,
             RejectCode(_verbs.Render, "render", "doc.docx", "--to", "png", "--engine", "bogus"));
+    }
+
+    [Fact]
+    public void Render_svg_with_soffice_engine_surfaces_the_engine_fallback_warning()
+    {
+        // The soffice engine renders png+pdf only, so a native svg target falls
+        // back to the native engine with an engine_fallback warning — end-to-end
+        // through the real render dispatch. This needs NO LibreOffice on the box:
+        // Parse("soffice") and the native-target path never probe soffice, so the
+        // warning fires deterministically on every runner (incl. CI).
+        Assert.True(_verbs.Create(ArgParser.Parse(["create", "deck.pptx"])).IsOk);
+        var env = Run(_verbs.Render, "render", "deck.pptx", "--to", "svg", "--engine", "soffice");
+        Assert.True(env.IsOk, env.ToJson());
+        Assert.Contains("engine_fallback", WarningCodes(env));
     }
 
     // ===== diff ============================================================

@@ -114,6 +114,15 @@ public sealed class SofficeFactAttribute : FactAttribute
     /// <param name="needsPdftoppm">PNG tests also require pdftoppm (poppler).</param>
     public SofficeFactAttribute(bool needsPdftoppm = false)
     {
+        if (IsCi())
+        {
+            // Symmetric with BrowserFactAttribute: never spawn a real soffice
+            // subprocess on CI even if a runner happens to have LibreOffice —
+            // the deterministic non-soffice tests carry the plumbing.
+            Skip = "Real-soffice end-to-end render is skipped on CI; the non-soffice tests cover the logic.";
+            return;
+        }
+
         var info = SofficeLocator.Probe(refresh: true);
         if (!info.Found)
         {
@@ -124,4 +133,8 @@ public sealed class SofficeFactAttribute : FactAttribute
             Skip = "No pdftoppm (poppler) found on this machine; soffice PNG needs it.";
         }
     }
+
+    private static bool IsCi() =>
+        string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase);
 }

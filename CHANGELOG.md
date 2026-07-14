@@ -70,6 +70,39 @@ byte-identical (guarded by `SchemaConsistencyTests`).
 
 See [docs/MCP-SETUP.md](docs/MCP-SETUP.md#the-easy-way--aioffice-plugin-install) for the full recipe.
 
+## 1.27.2 — patch: render-fidelity hardening + fix xlsx `render -o`
+
+`surfaceVersion` stays **1.0**; no new op/verb/tool/schema — a test/fix-only render patch. It fixes one
+confirmed render bug and closes a real fidelity blind spot in the test suite: until now the only end-to-end
+png/pdf assertions were magic-bytes + a length floor, so a valid-but-**blank** white PNG, or a deck that
+silently collapsed to one page, passed every test — and CI rendered png/pdf zero times.
+
+### Fixed — render
+
+- **`render <sheet>.xlsx -o out.html` now writes the file** (and reports the `written` path), matching how
+  docx and pptx already honor `-o`. Previously the xlsx render path never read the output option, so `-o`
+  was silently ignored and only inline content came back. Byte-safe: with no `-o`, the xlsx render envelope
+  is unchanged (inline `content`, no `written`). A `CliIntegrationTests` case now pins `-o` → a file on disk
+  for all three formats.
+
+### Added — tests (CI-safe, no golden pixels)
+
+- A tiered render-fidelity layer that needs no committed reference images and stays 100% green + non-flaky on
+  CI (macos-14 + windows-latest):
+  - **Tier 1 (runs on CI):** `SvgPixelSize` pure-unit parsing/fallback/`Math.Ceiling`; verb-layer orchestration
+    driven through a stub browser (`pages == slideCount` for a deck, `scope_defaulted` warning, default `-o`
+    naming, non-ok pass-through); `engine_fallback` for the html+soffice target; the xlsx/docx/pptx `-o` parity.
+  - **Tier 2 (`[BrowserFact]`, skips on CI):** real-chromium structural/metric invariants — a **non-blank**
+    check (a text page's PNG is ≥1.5× a blank white page's, decode-free, so an all-white render fails), a
+    **dimension** invariant (decode-free IHDR read, integer-multiple + aspect, HiDPI-tolerant), a **PDF
+    page-count** scan (a two-page deck emits exactly two page objects), and same-machine PNG **determinism**
+    (two renders → byte-identical, with an IHDR+length fallback).
+  - **Tier 3 (`[SofficeFact]`, skips on CI):** a two-page LibreOffice PDF is structurally complete, plus a
+    coarse cross-engine agreement check (chromium vs soffice both produce a valid PDF — never pixel/byte
+    equality). Real-engine tests deliberately assert **structure/metrics/ordering**, never exact pixels, so
+    font/anti-aliasing/engine-version/HiDPI drift can't flake them; they run locally where a browser/soffice
+    exist and skip on CI.
+
 ## 1.27.1 — patch: close CLI/MCP flag-forwarding parity gaps + a CLI integration test layer
 
 `surfaceVersion` stays **1.0**; no new op/verb/tool/schema — this is a CLI-plumbing hardening patch, a

@@ -113,6 +113,28 @@ public sealed class SofficeRendererTests : IDisposable
         Assert.Equal(PngMagic, bytes[..PngMagic.Length]);
     }
 
+    [SofficeFact]
+    public void A_two_page_document_converts_to_a_structurally_complete_multipage_pdf()
+    {
+        // A hand-written .fodt with an explicit page break: two paragraphs, the
+        // second carrying fo:break-before="page". Reuses the .fodt seam (no binary
+        // fixture, no handler reference); auto-skips on CI (no LibreOffice there).
+        var src = WriteTwoPageFodt("Page one content", "Page two content");
+        var output = SofficeRenderer.DocumentToPdf(src, _tmp.PathOf("two.pdf"));
+
+        // Structure over pixels: a valid PDF (public IsCompletePdf) + a real byte
+        // floor. Page count is kept COARSE (>=1) to stay robust to soffice-version
+        // pagination; the leaf '/Type /Page' scan is only meaningful when soffice
+        // writes page objects uncompressed, so it is a lower-bound assertion.
+        Assert.True(PdfRenderer.IsCompletePdf(output), "soffice PDF is not structurally complete");
+        var bytes = File.ReadAllBytes(output);
+        Assert.True(bytes.Length > 1024, $"soffice PDF is implausibly small ({bytes.Length}B)");
+
+        var text = System.Text.Encoding.Latin1.GetString(bytes);
+        var leafPages = System.Text.RegularExpressions.Regex.Matches(text, @"/Type\s*/Page(?![s])").Count;
+        Assert.True(leafPages >= 1, $"expected at least one page object, found {leafPages}");
+    }
+
     /// <summary>
     /// A minimal Flat-ODF Text document (.fodt) — a single XML file LibreOffice
     /// opens and converts to PDF without needing the OpenXml SDK in this test
@@ -129,6 +151,31 @@ public sealed class SofficeRendererTests : IDisposable
             "office:version=\"1.2\" office:mimetype=\"application/vnd.oasis.opendocument.text\">" +
             "<office:body><office:text><text:p>" + text + "</text:p></office:text></office:body>" +
             "</office:document>");
+        return path;
+    }
+
+    /// <summary>
+    /// A two-page Flat-ODF Text document: the second paragraph carries a
+    /// <c>fo:break-before="page"</c> automatic style, so LibreOffice paginates it
+    /// onto a second page. Self-contained (no OpenXml SDK, no binary fixture).
+    /// </summary>
+    private string WriteTwoPageFodt(string pageOne, string pageTwo)
+    {
+        var path = _tmp.PathOf("two.fodt");
+        File.WriteAllText(
+            path,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+            "<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" " +
+            "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" " +
+            "xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" " +
+            "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" " +
+            "office:version=\"1.2\" office:mimetype=\"application/vnd.oasis.opendocument.text\">" +
+            "<office:automatic-styles><style:style style:name=\"Pbreak\" style:family=\"paragraph\">" +
+            "<style:paragraph-properties fo:break-before=\"page\"/></style:style></office:automatic-styles>" +
+            "<office:body><office:text>" +
+            "<text:p>" + pageOne + "</text:p>" +
+            "<text:p text:style-name=\"Pbreak\">" + pageTwo + "</text:p>" +
+            "</office:text></office:body></office:document>");
         return path;
     }
 }
